@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Lint
+        run: uv run ruff check src/ tests/
+
+      - name: Run unit tests
+        run: |
+          uv run pytest tests/test_utils.py tests/test_black_scholes.py \
+            tests/test_greeks.py tests/test_report.py \
+            tests/test_broker_account.py tests/test_broker_portfolio.py \
+            tests/test_broker_consolidate.py tests/test_broker_roll.py \
+            tests/test_broker_delta_exposure.py tests/test_broker_collar.py \
+            tests/test_ib_portfolio_action_report.py \
+            tests/test_fundamentals.py tests/test_earnings.py \
+            -v --tb=short
+
+      - name: Run integration tests
+        run: |
+          uv run pytest tests/ -v --tb=short \
+            --ignore=tests/test_broker_options.py \
+            --cov=trading_skills --cov-report=term-missing \
+            --cov-fail-under=65
