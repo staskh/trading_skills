@@ -33,6 +33,10 @@ htmlcov/
 .env
 .env.local
 
+# Sandbox outputs (keep directory, ignore contents)
+sandbox/*
+!sandbox/.gitkeep
+
 # Data files
 *.csv
 .claude/settings.local.json
