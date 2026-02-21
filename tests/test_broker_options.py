@@ -7,6 +7,8 @@ import pytest
 
 from trading_skills.broker.options import get_expiries, get_option_chain
 
+pytestmark = pytest.mark.manual
+
 
 def run(coro):
     """Run async function synchronously."""

@@ -1,6 +1,7 @@
 ---
 name: ib-create-consolidated-report
 description: Consolidate IBRK trade CSV files from a directory into a summary report. Groups trades by symbol, underlying, date, strike, buy/sell, and open/close. Outputs both markdown and CSV.
+dependencies: ["trading-skills"]
 ---
 
 # IB Create Consolidated Report

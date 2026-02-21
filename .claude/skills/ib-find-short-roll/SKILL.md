@@ -1,6 +1,7 @@
 ---
 name: ib-find-short-roll
 description: Find roll options for existing short positions OR find best covered call/put to open against long stock. Use when user asks about rolling shorts, finding roll candidates, writing covered calls, or managing option positions. Requires TWS or IB Gateway running locally.
+dependencies: ["trading-skills"]
 ---
 
 # IB Find Short Roll

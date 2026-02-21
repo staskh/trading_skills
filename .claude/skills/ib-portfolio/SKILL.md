@@ -1,6 +1,7 @@
 ---
 name: ib-portfolio
 description: Get portfolio positions from Interactive Brokers. Use when user asks about their portfolio, positions, holdings, or what stocks they own. Requires TWS or IB Gateway running locally.
+dependencies: ["trading-skills"]
 ---
 
 # IB Portfolio

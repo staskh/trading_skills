@@ -1,6 +1,7 @@
 ---
 name: risk-assessment
 description: Assess risk metrics for a stock or position including volatility, beta, VaR, and drawdown analysis. Use when user asks about risk, volatility, beta, VaR, value at risk, drawdown, or position sizing.
+dependencies: ["trading-skills"]
 ---
 
 # Risk Assessment

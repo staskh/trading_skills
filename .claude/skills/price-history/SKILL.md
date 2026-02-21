@@ -1,6 +1,7 @@
 ---
 name: price-history
 description: Get historical price data (OHLCV) for a stock. Use when user asks about price history, historical data, past performance, price over time, or needs data for chart analysis.
+dependencies: ["trading-skills"]
 ---
 
 # Price History

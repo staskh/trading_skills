@@ -1,6 +1,7 @@
 ---
 name: technical-analysis
 description: Compute technical indicators like RSI, MACD, Bollinger Bands, SMA, EMA for a stock. Use when user asks about technical analysis, indicators, RSI, MACD, moving averages, overbought/oversold, or chart analysis.
+dependencies: ["trading-skills"]
 ---
 
 # Technical Analysis

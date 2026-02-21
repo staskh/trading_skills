@@ -1,3 +1,9 @@
+---
+name: ib-collar
+description: Generate tactical collar strategy reports for protecting PMCC positions through earnings or high-risk events. Requires TWS or IB Gateway running locally.
+dependencies: ["trading-skills"]
+---
+
 # IB Tactical Collar
 
 Generate a tactical collar strategy report for protecting PMCC positions through earnings or high-risk events.

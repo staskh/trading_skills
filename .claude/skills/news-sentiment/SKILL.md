@@ -1,6 +1,7 @@
 ---
 name: news-sentiment
 description: Get recent news and sentiment for a stock. Use when user asks about news, headlines, sentiment, what's happening with a stock, or recent developments.
+dependencies: ["trading-skills"]
 ---
 
 # News Sentiment

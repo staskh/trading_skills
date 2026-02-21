@@ -1,6 +1,7 @@
 ---
 name: option-chain
 description: Get option chain data including calls and puts with strikes, bids, asks, volume, open interest, and implied volatility. Use when user asks about options, option prices, calls, puts, or option chain for a specific expiration date.
+dependencies: ["trading-skills"]
 ---
 
 # Option Chain

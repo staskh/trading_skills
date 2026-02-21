@@ -1,6 +1,7 @@
 ---
 name: ib-account
 description: Get account summary from Interactive Brokers including cash balance, buying power, and account value. Use when user asks about their account, balance, buying power, or available cash. Requires TWS or IB Gateway running locally.
+dependencies: ["trading-skills"]
 ---
 
 # IB Account

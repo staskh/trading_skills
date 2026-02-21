@@ -1,6 +1,7 @@
 ---
 name: ib-report-delta-adjusted-notional-exposure
 description: Report delta-adjusted notional exposure across all IBKR accounts. Calculates option deltas using Black-Scholes and reports long/short exposure by account and underlying. Use when user asks about delta exposure, portfolio risk, or directional exposure.
+dependencies: ["trading-skills"]
 ---
 
 # IB Delta-Adjusted Notional Exposure Report

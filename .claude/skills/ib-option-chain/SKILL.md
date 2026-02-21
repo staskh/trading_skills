@@ -1,6 +1,7 @@
 ---
 name: ib-option-chain
 description: Get option chain data from Interactive Brokers including calls and puts with strikes, bids, asks, volume, and implied volatility. Use when user asks about options using IBKR data, or needs real-time option quotes from their broker. Requires TWS or IB Gateway running locally.
+dependencies: ["trading-skills"]
 ---
 
 # IB Option Chain

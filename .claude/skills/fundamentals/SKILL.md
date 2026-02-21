@@ -1,6 +1,7 @@
 ---
 name: fundamentals
 description: Get fundamental financial data including financials, earnings, and key metrics. Use when user asks about financials, earnings, revenue, profit, balance sheet, income statement, or company fundamentals.
+dependencies: ["trading-skills"]
 ---
 
 # Fundamentals

@@ -1,6 +1,7 @@
 ---
 name: scanner-bullish
 description: Scan stocks for bullish trends using technical indicators (SMA, RSI, MACD, ADX). Use when user asks to scan for bullish stocks, find trending stocks, or rank symbols by momentum.
+dependencies: ["trading-skills"]
 ---
 
 # Bullish Scanner

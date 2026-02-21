@@ -1,6 +1,7 @@
 ---
 name: spread-analysis
 description: Analyze option spread strategies like vertical spreads, iron condors, straddles, strangles. Use when user asks about spreads, multi-leg strategies, vertical spread, iron condor, straddle, strangle, or strategy analysis.
+dependencies: ["trading-skills"]
 ---
 
 # Spread Analysis

@@ -1,6 +1,7 @@
 ---
 name: scanner-pmcc
 description: Scan stocks for Poor Man's Covered Call (PMCC) suitability. Analyzes LEAPS and short call options for delta, liquidity, spread, IV, and yield. Use when user asks about PMCC candidates, diagonal spreads, or LEAPS strategies.
+dependencies: ["trading-skills"]
 ---
 
 # PMCC Scanner

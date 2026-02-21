@@ -1,6 +1,7 @@
 ---
 name: earnings-calendar
 description: Get upcoming earnings dates with timing (before/after market) and EPS estimates. Use when user asks about earnings dates, earnings calendar, when a company reports, or upcoming earnings.
+dependencies: ["trading-skills"]
 ---
 
 # Earnings Calendar

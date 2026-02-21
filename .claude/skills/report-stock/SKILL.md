@@ -6,6 +6,7 @@ arguments:
   - name: symbols
     description: Stock ticker symbol(s) - single or space-separated list (e.g., AAPL or "AAPL MSFT GOOGL")
     required: true
+dependencies: ["trading-skills"]
 ---
 
 # Stock Analysis Report Generator

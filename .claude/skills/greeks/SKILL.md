@@ -1,6 +1,7 @@
 ---
 name: greeks
 description: Calculate option Greeks (delta, gamma, theta, vega) and implied volatility for specific options. Use when user asks about Greeks, delta, gamma, theta, vega, IV, or option sensitivity analysis.
+dependencies: ["trading-skills"]
 ---
 
 # Option Greeks

@@ -38,6 +38,8 @@ select = ["E", "F", "I", "W"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["manual: requires live broker connection (deselected by default)"]
+addopts = "-m 'not manual'"
 
 [dependency-groups]
 dev = [

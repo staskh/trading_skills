@@ -1,6 +1,7 @@
 ---
 name: ib-portfolio-action-report
 description: Generate a comprehensive portfolio action report with earnings dates and risk assessment. Use when user asks for portfolio review, action items, earnings risk, or position management across IB accounts. Requires TWS or IB Gateway running locally.
+dependencies: ["trading-skills"]
 ---
 
 # IB Portfolio Action Report
