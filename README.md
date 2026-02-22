@@ -69,15 +69,29 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
    ```
 
 2. Find the full path to the installed command:
+
+   **macOS / Linux:**
    ```bash
    which trading-skills-mcp
    ```
+
+   **Windows:**
+   ```cmd
+   where trading-skills-mcp
+   ```
+   If `where` doesn't find it, locate it manually:
+   ```cmd
+   python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+   ```
+   The script will be `trading-skills-mcp.exe` in that directory.
 
 3. Open Claude Desktop, go to **Settings** → **Developer** → **Edit Config**:
 
    ![Claude Desktop Settings → Developer](assets/ClaudeDesktop-Settings-Developer.png)
 
    Add the following to `claude_desktop_config.json`:
+
+   **macOS / Linux:**
    ```json
    {
      "mcpServers": {
@@ -87,7 +101,18 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
      }
    }
    ```
-   Replace `/full/path/to/trading-skills-mcp` with the output from step 2.
+
+   **Windows:**
+   ```json
+   {
+     "mcpServers": {
+       "trading-skills": {
+         "command": "C:\\full\\path\\to\\trading-skills-mcp.exe"
+       }
+     }
+   }
+   ```
+   Replace the path with the output from step 2.
 
 4. Restart Claude Desktop. Don't worry if you see an MCP error message — it will disappear once you try some of the examples below.
 
