@@ -37,7 +37,7 @@ Claude: NVDA is the standout diversifier — near-zero correlation with everythi
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.12+
 - [uv](https://docs.astral.sh/uv/) package manager
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Claude Desktop](https://claude.ai/download), or [Cursor](https://cursor.com/) with third-party skills enabled (fully installed and authenticated)
 - Optional: TWS or IB Gateway for portfolio features
@@ -63,7 +63,7 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 
 #### Installation
 
-1. Install the package (requires Python 3.11+):
+1. Install the package (requires Python 3.12+):
    ```bash
    pip install trading-skills
    ```
