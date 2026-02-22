@@ -61,17 +61,31 @@ Run Claude Code or Cursor in the repository root. All skills are available as in
 
 The MCP server is a lightweight alternative for use with Claude Desktop (including the free tier). It exposes 23 trading analysis tools directly to Claude Desktop without needing Claude Code.
 
-Configure Claude Desktop (`claude_desktop_config.json`):
-```json
-{
-  "mcpServers": {
-    "trading-skills": {
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/staskh/trading_skills.git", "trading-skills"]
-    }
-  }
-}
-```
+#### Installation
+
+1. Install the package (requires Python 3.12+):
+   ```bash
+   pip install trading-skills
+   ```
+
+2. Find the full path to the installed command:
+   ```bash
+   which trading-skills-mcp
+   ```
+
+3. Add to Claude Desktop config (`claude_desktop_config.json`):
+   ```json
+   {
+     "mcpServers": {
+       "trading-skills": {
+         "command": "/full/path/to/trading-skills-mcp"
+       }
+     }
+   }
+   ```
+   Replace `/full/path/to/trading-skills-mcp` with the output from step 2.
+
+4. Restart Claude Desktop.
 
 > **Note:** The MCP server provides core analysis tools but does not include all the interactive features of Claude Code skills (e.g., multi-step workflows, report generation). It's ideal for quick lookups and analysis within Claude Desktop.
 

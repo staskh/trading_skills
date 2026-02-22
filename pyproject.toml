@@ -3,7 +3,7 @@
 
 [project]
 name = "trading-skills"
-version = "0.1.0"
+version = "0.1.1"
 description = "AI-powered market analysis skills and MCP server for stock and options traders"
 requires-python = ">=3.12"
 
@@ -16,10 +16,11 @@ dependencies = [
     "scipy>=1.14",
     "fpdf2>=2.8.5",
     "mcp>=1.25.0",
+    "lxml>=6.0.2",
 ]
 
 [project.scripts]
-trading-skills = "mcp_server.server:main"
+trading-skills-mcp = "mcp_server.server:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -11,18 +11,29 @@ MCP server providing trading analysis tools for stock quotes, technical analysis
 
 ## Claude Desktop Configuration
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+1. Install (requires Python 3.12+):
+   ```bash
+   pip install trading-skills
+   ```
 
-```json
-{
-  "mcpServers": {
-    "trading-skills": {
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/staskh/trading_skills.git", "trading-skills"]
-    }
-  }
-}
-```
+2. Find the full path:
+   ```bash
+   which trading-skills-mcp
+   ```
+
+3. Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+   ```json
+   {
+     "mcpServers": {
+       "trading-skills": {
+         "command": "/full/path/to/trading-skills-mcp"
+       }
+     }
+   }
+   ```
+   Replace `/full/path/to/trading-skills-mcp` with the output from step 2.
+
+4. Restart Claude Desktop.
 
 ## Available Tools (23)
 
