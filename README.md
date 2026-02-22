@@ -73,7 +73,11 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
    which trading-skills-mcp
    ```
 
-3. Add to Claude Desktop config (`claude_desktop_config.json`):
+3. Open Claude Desktop, go to **Settings** → **Developer** → **Edit Config**:
+
+   ![Claude Desktop Settings → Developer](assets/ClaudeDesktop-Settings-Developer.png)
+
+   Add the following to `claude_desktop_config.json`:
    ```json
    {
      "mcpServers": {
@@ -85,7 +89,7 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
    ```
    Replace `/full/path/to/trading-skills-mcp` with the output from step 2.
 
-4. Restart Claude Desktop.
+4. Restart Claude Desktop. Don't worry if you see an MCP error message — it will disappear once you try some of the examples below.
 
 > **Note:** The MCP server provides core analysis tools but does not include all the interactive features of Claude Code skills (e.g., multi-step workflows, report generation). It's ideal for quick lookups and analysis within Claude Desktop.
 
