@@ -8,7 +8,7 @@ from ib_async import IB, Stock
 from trading_skills.utils import fetch_with_timeout
 
 
-async def get_portfolio(port: int = 7497, account: str = None, all_accounts: bool = False) -> dict:
+async def get_portfolio(port: int = 7496, account: str = None, all_accounts: bool = False) -> dict:
     """Fetch portfolio positions from IB."""
     ib = IB()
 

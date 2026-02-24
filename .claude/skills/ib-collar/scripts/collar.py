@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
 # ABOUTME: CLI wrapper for tactical collar strategy analysis.
-# ABOUTME: Analyzes PMCC positions and generates collar recommendations.
+# ABOUTME: Returns JSON with collar scenarios and recommendations for PMCC positions.
 
 import argparse
 import asyncio
+import json
+import sys
 from datetime import datetime
-from pathlib import Path
 
 import yfinance as yf
 
 from trading_skills.broker.collar import (
     analyze_collar,
-    generate_markdown_report,
-    generate_pdf_report,
     get_earnings_date,
     get_portfolio_positions,
 )
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Generate tactical collar report")
+async def main():
+    parser = argparse.ArgumentParser(description="Generate tactical collar analysis")
     parser.add_argument("symbol", help="Stock symbol to analyze")
     parser.add_argument("--port", type=int, default=7496, help="IB port (default: 7496)")
     parser.add_argument("--account", type=str, default=None, help="IB account ID")
@@ -28,32 +27,37 @@ def main():
     symbol = args.symbol.upper()
 
     # Fetch portfolio
-    print(f"Connecting to IB on port {args.port}...")
-    connected, positions, error = asyncio.run(get_portfolio_positions(args.port, args.account))
+    print(f"Connecting to IB on port {args.port}...", file=sys.stderr)
+    connected, positions, error = await get_portfolio_positions(args.port, args.account)
 
     if not connected:
-        print(f"Error: {error}")
+        print(json.dumps({"error": error}))
         return
 
     if error:
-        print(f"Error: {error}")
+        print(json.dumps({"error": error}))
         return
 
     # Filter for the symbol
     symbol_positions = [p for p in positions if p["symbol"] == symbol]
 
     if not symbol_positions:
-        print(f"Error: {symbol} not found in portfolio.")
-        print("Available symbols:", sorted(set(p["symbol"] for p in positions)))
+        available = sorted(set(p["symbol"] for p in positions))
+        print(json.dumps({"error": f"{symbol} not found in portfolio. Available: {available}"}))
         return
 
     # Separate long and short calls
-    long_calls = [p for p in symbol_positions if p["sec_type"] == "OPT" and p["right"] == "C" and p["quantity"] > 0]
-    short_calls = [p for p in symbol_positions if p["sec_type"] == "OPT" and p["right"] == "C" and p["quantity"] < 0]
+    long_calls = [
+        p for p in symbol_positions
+        if p["sec_type"] == "OPT" and p["right"] == "C" and p["quantity"] > 0
+    ]
+    short_calls = [
+        p for p in symbol_positions
+        if p["sec_type"] == "OPT" and p["right"] == "C" and p["quantity"] < 0
+    ]
 
     if not long_calls:
-        print(f"Error: No long call positions found for {symbol}.")
-        print("Tactical collar requires a long call (PMCC) position.")
+        print(json.dumps({"error": f"No long call positions found for {symbol}. Requires a PMCC position."}))
         return
 
     # Use the longest-dated long call as the LEAPS
@@ -63,13 +67,12 @@ def main():
     # Get current price
     current_price = main_long.get("underlying_price")
     if not current_price:
-        # Fallback to yfinance
         ticker = yf.Ticker(symbol)
         info = ticker.info
         current_price = info.get("regularMarketPrice") or info.get("previousClose")
 
     if not current_price:
-        print(f"Error: Could not get current price for {symbol}")
+        print(json.dumps({"error": f"Could not get current price for {symbol}"}))
         return
 
     # Get earnings date
@@ -83,7 +86,7 @@ def main():
     } for p in short_calls]
 
     # Run analysis
-    print(f"Analyzing {symbol} position...")
+    print(f"Analyzing {symbol} position...", file=sys.stderr)
     analysis = analyze_collar(
         symbol=symbol,
         current_price=current_price,
@@ -95,21 +98,12 @@ def main():
         earnings_date=earnings_date,
     )
 
-    # Generate reports
-    project_root = Path(__file__).parent.parent.parent.parent.parent
-    sandbox = project_root / "sandbox"
-    sandbox.mkdir(exist_ok=True)
+    # Serialize datetime for JSON
+    if analysis.get("earnings_date"):
+        analysis["earnings_date"] = analysis["earnings_date"].strftime("%Y-%m-%d")
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # Generate PDF report
-    pdf_path = sandbox / f"{timestamp}_{symbol}_Tactical_Collar_Report.pdf"
-    generate_pdf_report(analysis, pdf_path)
-
-    # Generate Markdown report
-    md_path = sandbox / f"{timestamp}_{symbol}_Tactical_Collar_Report.md"
-    generate_markdown_report(analysis, md_path)
+    print(json.dumps(analysis, indent=2, default=str))
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

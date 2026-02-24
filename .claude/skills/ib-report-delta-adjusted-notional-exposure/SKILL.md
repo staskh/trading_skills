@@ -36,7 +36,7 @@ Present the summary table (total long, short, net) and top exposures to the user
 
 ## Arguments
 
-- `--port` - IB port (default: 7497 for paper trading, use 7496 for production)
+- `--port` - IB port (default: 7496 for live trading, use 7497 for paper)
 
 ## JSON Output
 
@@ -61,9 +61,9 @@ Delta-adjusted notional = delta x spot price x quantity x multiplier
 ## Examples
 
 ```bash
-# Paper trading (default port 7497)
+# Live trading (default port 7496)
 uv run python scripts/delta_exposure.py
 
-# Production/Live trading (port 7496)
-uv run python scripts/delta_exposure.py --port 7496
+# Paper trading (port 7497)
+uv run python scripts/delta_exposure.py --port 7497
 ```

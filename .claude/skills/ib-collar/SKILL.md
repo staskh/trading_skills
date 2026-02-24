@@ -16,9 +16,21 @@ User must have TWS or IB Gateway running locally with API enabled:
 
 ## Instructions
 
+### Step 1: Gather Data
+
 ```bash
 uv run python scripts/collar.py SYMBOL [--port PORT] [--account ACCOUNT]
 ```
+
+The script returns JSON to stdout with all position and scenario data.
+
+### Step 2: Format Report
+
+Read `templates/markdown-template.md` for formatting instructions. Generate a markdown report from the JSON data and save to `sandbox/`.
+
+### Step 3: Report Results
+
+Present key findings to the user: recommended put protection, cost/benefit, and the saved report path.
 
 ## Arguments
 
@@ -26,11 +38,17 @@ uv run python scripts/collar.py SYMBOL [--port PORT] [--account ACCOUNT]
 - `--port` - IB port (default: 7496 for live trading)
 - `--account` - Specific account ID (optional, searches all accounts)
 
-## Output
+## JSON Output
 
-Generates reports saved to `sandbox/`:
-- `YYYYMMDD_HHMMSS_SYMBOL_Tactical_Collar_Report.pdf` - PDF report
-- `YYYYMMDD_HHMMSS_SYMBOL_Tactical_Collar_Report.md` - Markdown report
+The script returns JSON with these key fields:
+- `symbol`, `current_price` - Basic info
+- `long_strike`, `long_expiry`, `long_qty`, `long_cost` - LEAPS position
+- `short_positions` - List of short calls
+- `is_proper_pmcc`, `short_above_long` - PMCC health flags
+- `earnings_date`, `days_to_earnings` - Earnings timing
+- `put_analysis` - List of put scenarios with costs and P&L under gap up/flat/down
+- `unprotected_loss_10`, `unprotected_loss_15`, `unprotected_gain_10` - LEAPS risk without collar
+- `volatility` - Historical volatility data
 
 ### Report Sections
 

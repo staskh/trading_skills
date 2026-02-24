@@ -10,7 +10,7 @@ from trading_skills.black_scholes import black_scholes_delta, estimate_iv
 from trading_skills.utils import fetch_with_timeout
 
 
-async def get_delta_exposure(port: int = 7497):
+async def get_delta_exposure(port: int = 7496):
     """Fetch portfolio and calculate delta-adjusted notional."""
     ib = IB()
 

@@ -46,7 +46,6 @@ class TestMCPServerImport:
             "ib_option_chain",
             "ib_delta_exposure",
             "ib_collar",
-            "ib_consolidated_trades",
         ]
         for tool_name in expected_tools:
             assert tool_name in tools, f"Missing tool: {tool_name}"
@@ -171,12 +170,10 @@ class TestIBTools:
     def test_ib_portfolio_action_report_handles_no_connection(self):
         """ib_portfolio_action_report returns error when IB not connected."""
         import asyncio
-        import tempfile
 
         from mcp_server.server import ib_portfolio_action_report
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = asyncio.run(ib_portfolio_action_report(output_dir=tmpdir, port=7497))
+        result = asyncio.run(ib_portfolio_action_report(port=7497))
         # Should return error when IB not running
         assert "error" in result
 
@@ -219,25 +216,6 @@ class TestIBTools:
         result = asyncio.run(ib_collar("AAPL", port=7497))
         assert "error" in result
 
-    def test_ib_consolidated_trades_invalid_directory(self):
-        """ib_consolidated_trades returns error for non-existent directory."""
-        import asyncio
-
-        from mcp_server.server import ib_consolidated_trades
-
-        result = asyncio.run(ib_consolidated_trades("/nonexistent/path"))
-        assert "error" in result
-
-    def test_ib_consolidated_trades_empty_directory(self):
-        """ib_consolidated_trades returns error when no CSV files found."""
-        import asyncio
-        import tempfile
-
-        from mcp_server.server import ib_consolidated_trades
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = asyncio.run(ib_consolidated_trades(tmpdir))
-        assert "error" in result
 
 
 class TestReportTools:

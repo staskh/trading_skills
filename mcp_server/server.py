@@ -18,17 +18,8 @@ from mcp.server.fastmcp import FastMCP
 from trading_skills.broker.account import get_account_summary
 from trading_skills.broker.collar import (
     analyze_collar,
-    generate_markdown_report as generate_collar_md,
-    generate_pdf_report as generate_collar_pdf,
     get_earnings_date as get_collar_earnings_date,
     get_portfolio_positions,
-)
-from trading_skills.broker.consolidate import (
-    consolidate_rows,
-    fetch_unrealized_pnl,
-    generate_csv as generate_consolidate_csv,
-    generate_markdown as generate_consolidate_md,
-    read_csv_files,
 )
 from trading_skills.broker.delta_exposure import get_delta_exposure
 from trading_skills.broker.options import (
@@ -37,18 +28,10 @@ from trading_skills.broker.options import (
 )
 from trading_skills.broker.portfolio import get_portfolio
 from trading_skills.broker.portfolio_action import (
-    generate_report as generate_action_report,
+    analyze_portfolio,
     get_portfolio_data,
 )
-from trading_skills.broker.roll import (
-    calculate_roll_options,
-    fetch_earnings_date,
-    generate_report as generate_roll_report,
-    get_current_position,
-    get_option_chain_params,
-    get_option_quotes,
-    get_underlying_price,
-)
+from trading_skills.broker.roll import find_roll_candidates
 from trading_skills.correlation import compute_correlation
 from trading_skills.earnings import get_earnings_info, get_multiple_earnings
 from trading_skills.fundamentals import get_fundamentals
@@ -502,27 +485,27 @@ def report_stock(symbol: str) -> dict:
 
 
 @mcp.tool()
-async def ib_account(port: int = 7497) -> dict:
+async def ib_account(port: int = 7496) -> dict:
     """Get account summary from Interactive Brokers.
 
     Returns cash balance, buying power, net liquidation value, and margin info.
     Requires TWS or IB Gateway running locally.
 
     Args:
-        port: IB port (7497 for paper trading, 7496 for live)
+        port: IB port (7496 for live, 7497 for paper)
     """
     return await get_account_summary(port)
 
 
 @mcp.tool()
-async def ib_portfolio(port: int = 7497, account: str | None = None) -> dict:
+async def ib_portfolio(port: int = 7496, account: str | None = None) -> dict:
     """Get portfolio positions from Interactive Brokers.
 
     Returns all positions including stocks and options with market prices.
     Requires TWS or IB Gateway running locally.
 
     Args:
-        port: IB port (7497 for paper trading, 7496 for live)
+        port: IB port (7496 for live, 7497 for paper)
         account: Specific account ID (optional, uses first if not specified)
     """
     return await get_portfolio(port, account)
@@ -540,7 +523,7 @@ async def ib_find_short_roll(
     """Find roll options for a short position using real-time IB data.
 
     Analyzes current short option position and finds roll candidates with
-    credit/debit analysis. Generates a markdown report.
+    credit/debit analysis.
     Requires TWS or IB Gateway running locally.
 
     Args:
@@ -551,171 +534,32 @@ async def ib_find_short_roll(
         expiry: Current expiry YYYYMMDD (optional, auto-detects from portfolio)
         right: 'C' for call or 'P' for put (default: C)
     """
-    from datetime import datetime
-
-    from ib_async import IB
-
-    ib = IB()
-    try:
-        await ib.connectAsync("127.0.0.1", port, clientId=30)
-    except Exception as e:
-        return {"error": f"Could not connect to IB on port {port}: {e}"}
-
-    try:
-        # Get position or use provided params
-        if strike and expiry:
-            current_position = {
-                "quantity": -1,
-                "strike": strike,
-                "expiry": expiry,
-                "right": right,
-                "account": account or "N/A",
-            }
-        else:
-            current_position = await get_current_position(ib, symbol.upper(), account)
-            if not current_position:
-                return {
-                    "error": f"No short option position found for {symbol}. "
-                    "Use strike and expiry params to specify manually."
-                }
-
-        # Get underlying price
-        underlying_price = await get_underlying_price(ib, symbol.upper())
-
-        # Get option chain parameters
-        chain_params = await get_option_chain_params(ib, symbol.upper())
-
-        # Get current option quote
-        current_quotes = await get_option_quotes(
-            ib,
-            symbol.upper(),
-            current_position["expiry"],
-            [current_position["strike"]],
-            current_position["right"],
-        )
-
-        if not current_quotes:
-            return {"error": "Could not get quote for current position"}
-
-        current_quote = current_quotes[0]
-        buy_price = current_quote["ask"]
-
-        # Get future expirations
-        current_exp = current_position["expiry"]
-        future_exps = [e for e in chain_params["expirations"] if e > current_exp][:5]
-
-        if not future_exps:
-            return {"error": "No future expirations available"}
-
-        # Determine strike range
-        current_strike = current_position["strike"]
-        all_strikes = chain_params["strikes"]
-
-        if current_position["right"] == "C":
-            target_strikes = [
-                s
-                for s in all_strikes
-                if current_strike - 10 <= s <= current_strike + 50 and s % 5 == 0
-            ]
-        else:
-            target_strikes = [
-                s
-                for s in all_strikes
-                if current_strike - 50 <= s <= current_strike + 10 and s % 5 == 0
-            ]
-
-        target_strikes = sorted(target_strikes)[:10]
-
-        # Fetch quotes for each target expiration
-        roll_data = {}
-        for exp in future_exps:
-            quotes = await get_option_quotes(
-                ib, symbol.upper(), exp, target_strikes, current_position["right"]
-            )
-            roll_data[exp] = calculate_roll_options(current_position, quotes, buy_price)
-
-        # Fetch earnings date
-        earnings_date = fetch_earnings_date(symbol.upper())
-
-        # Generate report
-        report = generate_roll_report(
-            symbol.upper(),
-            underlying_price,
-            current_position,
-            current_quote,
-            roll_data,
-            earnings_date,
-        )
-
-        # Save report
-        sandbox_dir = Path(__file__).parent.parent / "sandbox"
-        sandbox_dir.mkdir(exist_ok=True)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-        report_path = sandbox_dir / f"ib_short_report_{symbol.upper()}_{timestamp}.md"
-        report_path.write_text(report, encoding="utf-8")
-
-        return {
-            "success": True,
-            "symbol": symbol.upper(),
-            "current_position": {
-                "strike": current_position["strike"],
-                "expiry": current_position["expiry"],
-                "right": current_position["right"],
-                "quantity": current_position["quantity"],
-            },
-            "underlying_price": underlying_price,
-            "buy_to_close": buy_price,
-            "report_path": str(report_path),
-            "expirations_analyzed": future_exps,
-        }
-
-    finally:
-        ib.disconnect()
+    return await find_roll_candidates(
+        symbol=symbol, port=port, account=account, strike=strike, expiry=expiry, right=right
+    )
 
 
 @mcp.tool()
 async def ib_portfolio_action_report(
-    output_dir: str,
-    port: int = 7497,
+    port: int = 7496,
     account: str | None = None,
 ) -> dict:
-    """Generate comprehensive portfolio action report with earnings and risk assessment.
+    """Analyze portfolio positions with earnings dates and risk assessment.
 
-    Analyzes all positions, categorizes by urgency/risk, and generates
-    a markdown report with recommendations.
+    Fetches positions, groups into spreads, categorizes by urgency,
+    and returns structured analysis with recommendations.
     Requires TWS or IB Gateway running locally.
 
     Args:
-        output_dir: Directory to store report
-        port: IB port (7497 for paper trading, 7496 for live)
+        port: IB port (7496 for live, 7497 for paper)
         account: Specific account ID (optional)
     """
-    from datetime import datetime
-
-    # Fetch portfolio data
     data = await get_portfolio_data(port, account)
 
     if "error" in data:
         return {"error": data["error"]}
 
-    # Create output directory
-    report_dir = Path(output_dir)
-    report_dir.mkdir(parents=True, exist_ok=True)
-
-    # Generate report
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-    accounts = data.get("accounts", [])
-    account_suffix = accounts[0] if len(accounts) == 1 else "multi" if accounts else "unknown"
-    md_path = report_dir / f"ib_portfolio_action_report_{account_suffix}_{timestamp}.md"
-
-    generate_action_report(data, md_path)
-
-    return {
-        "success": True,
-        "markdown_path": str(md_path),
-        "accounts": data.get("accounts", []),
-        "total_positions": sum(len(p) for p in data.get("positions", {}).values()),
-    }
+    return analyze_portfolio(data)
 
 
 @mcp.tool()
@@ -747,7 +591,7 @@ async def ib_option_chain(symbol: str, expiry: str, port: int = 7496) -> dict:
 
 
 @mcp.tool()
-async def ib_delta_exposure(port: int = 7497) -> dict:
+async def ib_delta_exposure(port: int = 7496) -> dict:
     """Calculate delta-adjusted notional exposure across all IBKR accounts.
 
     Computes option deltas using Black-Scholes and reports long/short exposure
@@ -755,7 +599,7 @@ async def ib_delta_exposure(port: int = 7497) -> dict:
     Requires TWS or IB Gateway running locally.
 
     Args:
-        port: IB port (7497 for paper trading, 7496 for live)
+        port: IB port (7496 for live, 7497 for paper)
     """
     return await get_delta_exposure(port)
 
@@ -852,97 +696,12 @@ async def ib_collar(
         earnings_date=earnings_date,
     )
 
-    # Generate reports
-    sandbox_dir = Path(__file__).parent.parent / "sandbox"
-    sandbox_dir.mkdir(exist_ok=True)
+    # Serialize datetime for JSON
+    if analysis.get("earnings_date"):
+        analysis["earnings_date"] = analysis["earnings_date"].strftime("%Y-%m-%d")
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return analysis
 
-    pdf_path = sandbox_dir / f"{timestamp}_{symbol}_Tactical_Collar_Report.pdf"
-    generate_collar_pdf(analysis, pdf_path)
-
-    md_path = sandbox_dir / f"{timestamp}_{symbol}_Tactical_Collar_Report.md"
-    generate_collar_md(analysis, md_path)
-
-    return {
-        "success": True,
-        "symbol": symbol,
-        "pdf_path": str(pdf_path),
-        "markdown_path": str(md_path),
-        "current_price": current_price,
-        "long_call": {
-            "strike": main_long["strike"],
-            "expiry": main_long["expiry"],
-            "qty": int(main_long["quantity"]),
-        },
-        "short_calls_count": len(short_calls),
-        "earnings_date": earnings_date.strftime("%Y-%m-%d") if earnings_date else None,
-    }
-
-
-@mcp.tool()
-async def ib_consolidated_trades(
-    directory: str,
-    output_dir: str | None = None,
-    port: int | None = None,
-) -> dict:
-    """Consolidate IBRK trade CSV files into summary reports.
-
-    Groups trades by symbol, underlying, date, strike, buy/sell, and open/close.
-    Outputs both markdown and CSV reports.
-    Optionally fetches unrealized P&L from IB if connected.
-
-    Args:
-        directory: Directory containing CSV trade files
-        output_dir: Output directory for reports (default: sandbox/)
-        port: IB port for unrealized P&L (7497=paper, 7496=live, omit to auto-probe)
-    """
-    from datetime import datetime
-
-    input_dir = Path(directory)
-
-    if not input_dir.is_dir():
-        return {"error": f"{input_dir} is not a directory"}
-
-    if output_dir:
-        report_dir = Path(output_dir)
-    else:
-        report_dir = Path(__file__).parent.parent / "sandbox"
-
-    report_dir.mkdir(parents=True, exist_ok=True)
-
-    # Read and consolidate
-    rows, processed_files = read_csv_files(input_dir)
-
-    if not rows:
-        return {"error": "No data found to consolidate"}
-
-    consolidated = consolidate_rows(rows)
-
-    # Fetch unrealized P&L from IB
-    unrealized_pnl, account_id = await fetch_unrealized_pnl(port)
-
-    # Generate outputs
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-    if account_id:
-        md_path = report_dir / f"{account_id}_consolidated_trades_{timestamp}.md"
-        csv_path = report_dir / f"{account_id}_consolidated_trades_{timestamp}.csv"
-    else:
-        md_path = report_dir / f"consolidated_trades_{timestamp}.md"
-        csv_path = report_dir / f"consolidated_trades_{timestamp}.csv"
-
-    generate_consolidate_md(consolidated, unrealized_pnl, processed_files, md_path)
-    generate_consolidate_csv(consolidated, csv_path)
-
-    return {
-        "success": True,
-        "input_directory": str(input_dir),
-        "rows_read": len(rows),
-        "rows_consolidated": len(consolidated),
-        "has_unrealized_pnl": bool(unrealized_pnl),
-        "markdown_report": str(md_path),
-        "csv_report": str(csv_path),
-    }
 
 
 def main():

@@ -6,7 +6,7 @@ import asyncio
 from ib_async import IB
 
 
-async def get_account_summary(port: int = 7497) -> dict:
+async def get_account_summary(port: int = 7496) -> dict:
     """Fetch account summary from IB."""
     ib = IB()
 

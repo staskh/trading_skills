@@ -24,7 +24,7 @@ uv run python scripts/portfolio.py [--port PORT]
 
 ## Arguments
 
-- `--port` - IB port (default: 7497 for paper trading)
+- `--port` - IB port (default: 7496 for live trading)
 - `--account` - Specific IB account ID (optional, defaults to first account)
 
 ## Output
