@@ -16,6 +16,25 @@ if hasattr(sys.stderr, "reconfigure"):
 from mcp.server.fastmcp import FastMCP
 
 from trading_skills.broker.account import get_account_summary
+from trading_skills.broker.collar import (
+    analyze_collar,
+    generate_markdown_report as generate_collar_md,
+    generate_pdf_report as generate_collar_pdf,
+    get_earnings_date as get_collar_earnings_date,
+    get_portfolio_positions,
+)
+from trading_skills.broker.consolidate import (
+    consolidate_rows,
+    fetch_unrealized_pnl,
+    generate_csv as generate_consolidate_csv,
+    generate_markdown as generate_consolidate_md,
+    read_csv_files,
+)
+from trading_skills.broker.delta_exposure import get_delta_exposure
+from trading_skills.broker.options import (
+    get_expiries as ib_get_expiries,
+    get_option_chain as ib_get_option_chain,
+)
 from trading_skills.broker.portfolio import get_portfolio
 from trading_skills.broker.portfolio_action import (
     generate_report as generate_action_report,
@@ -39,6 +58,7 @@ from trading_skills.news import get_news
 from trading_skills.options import get_expiries, get_option_chain
 from trading_skills.piotroski import calculate_piotroski_score
 from trading_skills.quote import get_quote
+from trading_skills.report import generate_report_data
 from trading_skills.risk import calculate_risk_metrics
 from trading_skills.scanner_bullish import compute_bullish_score, scan_symbols
 from trading_skills.scanner_pmcc import analyze_pmcc
@@ -459,6 +479,24 @@ def scan_pmcc(
 
 
 # ============================================================================
+# REPORT TOOLS
+# ============================================================================
+
+
+@mcp.tool()
+def report_stock(symbol: str) -> dict:
+    """Generate comprehensive stock analysis data with trend, PMCC, and fundamental analysis.
+
+    Returns detailed data including bullish score, PMCC viability, fundamentals,
+    Piotroski F-Score, spread strategies, and an overall recommendation.
+
+    Args:
+        symbol: Ticker symbol (e.g., AAPL, MSFT)
+    """
+    return generate_report_data(symbol.upper())
+
+
+# ============================================================================
 # INTERACTIVE BROKERS TOOLS (Requires TWS/Gateway)
 # ============================================================================
 
@@ -677,6 +715,233 @@ async def ib_portfolio_action_report(
         "markdown_path": str(md_path),
         "accounts": data.get("accounts", []),
         "total_positions": sum(len(p) for p in data.get("positions", {}).values()),
+    }
+
+
+@mcp.tool()
+async def ib_option_expiries(symbol: str, port: int = 7496) -> dict:
+    """List available option expiration dates from Interactive Brokers.
+
+    Requires TWS or IB Gateway running locally.
+
+    Args:
+        symbol: Ticker symbol
+        port: IB port (7496 for live, 7497 for paper)
+    """
+    return await ib_get_expiries(symbol.upper(), port=port)
+
+
+@mcp.tool()
+async def ib_option_chain(symbol: str, expiry: str, port: int = 7496) -> dict:
+    """Get option chain data from Interactive Brokers with real-time quotes.
+
+    Returns calls and puts with strikes, bids, asks, volume, and implied volatility.
+    Requires TWS or IB Gateway running locally.
+
+    Args:
+        symbol: Ticker symbol
+        expiry: Expiration date (YYYYMMDD)
+        port: IB port (7496 for live, 7497 for paper)
+    """
+    return await ib_get_option_chain(symbol.upper(), expiry, port=port)
+
+
+@mcp.tool()
+async def ib_delta_exposure(port: int = 7497) -> dict:
+    """Calculate delta-adjusted notional exposure across all IBKR accounts.
+
+    Computes option deltas using Black-Scholes and reports long/short exposure
+    by account and underlying symbol.
+    Requires TWS or IB Gateway running locally.
+
+    Args:
+        port: IB port (7497 for paper trading, 7496 for live)
+    """
+    return await get_delta_exposure(port)
+
+
+@mcp.tool()
+async def ib_collar(
+    symbol: str,
+    port: int = 7496,
+    account: str | None = None,
+) -> dict:
+    """Generate tactical collar strategy report for protecting PMCC positions.
+
+    Analyzes existing long call (PMCC) positions and recommends put protection
+    through earnings or high-risk events.
+    Requires TWS or IB Gateway running locally.
+
+    Args:
+        symbol: Ticker symbol (e.g., AAPL)
+        port: IB port (7496 for live, 7497 for paper)
+        account: Account ID (optional)
+    """
+    from datetime import datetime
+
+    import yfinance as yf
+
+    # Fetch portfolio
+    connected, positions, error = await get_portfolio_positions(port, account)
+
+    if not connected:
+        return {"error": error}
+
+    if error:
+        return {"error": error}
+
+    # Filter for the symbol
+    symbol = symbol.upper()
+    symbol_positions = [p for p in positions if p["symbol"] == symbol]
+
+    if not symbol_positions:
+        available = sorted(set(p["symbol"] for p in positions))
+        return {"error": f"{symbol} not found in portfolio. Available: {available}"}
+
+    # Separate long and short calls
+    long_calls = [
+        p
+        for p in symbol_positions
+        if p["sec_type"] == "OPT" and p["right"] == "C" and p["quantity"] > 0
+    ]
+    short_calls = [
+        p
+        for p in symbol_positions
+        if p["sec_type"] == "OPT" and p["right"] == "C" and p["quantity"] < 0
+    ]
+
+    if not long_calls:
+        return {"error": f"No long call positions found for {symbol}. Requires a PMCC position."}
+
+    # Use the longest-dated long call as the LEAPS
+    long_calls.sort(key=lambda x: x["expiry"], reverse=True)
+    main_long = long_calls[0]
+
+    # Get current price
+    current_price = main_long.get("underlying_price")
+    if not current_price:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        current_price = info.get("regularMarketPrice") or info.get("previousClose")
+
+    if not current_price:
+        return {"error": f"Could not get current price for {symbol}"}
+
+    # Get earnings date
+    earnings_date, _ = get_collar_earnings_date(symbol)
+
+    # Format short positions
+    short_positions = [
+        {
+            "strike": p["strike"],
+            "expiry": p["expiry"],
+            "qty": abs(p["quantity"]),
+        }
+        for p in short_calls
+    ]
+
+    # Run analysis
+    analysis = analyze_collar(
+        symbol=symbol,
+        current_price=current_price,
+        long_strike=main_long["strike"],
+        long_expiry=main_long["expiry"],
+        long_qty=int(main_long["quantity"]),
+        long_cost=main_long["avg_cost"],
+        short_positions=short_positions,
+        earnings_date=earnings_date,
+    )
+
+    # Generate reports
+    sandbox_dir = Path(__file__).parent.parent / "sandbox"
+    sandbox_dir.mkdir(exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    pdf_path = sandbox_dir / f"{timestamp}_{symbol}_Tactical_Collar_Report.pdf"
+    generate_collar_pdf(analysis, pdf_path)
+
+    md_path = sandbox_dir / f"{timestamp}_{symbol}_Tactical_Collar_Report.md"
+    generate_collar_md(analysis, md_path)
+
+    return {
+        "success": True,
+        "symbol": symbol,
+        "pdf_path": str(pdf_path),
+        "markdown_path": str(md_path),
+        "current_price": current_price,
+        "long_call": {
+            "strike": main_long["strike"],
+            "expiry": main_long["expiry"],
+            "qty": int(main_long["quantity"]),
+        },
+        "short_calls_count": len(short_calls),
+        "earnings_date": earnings_date.strftime("%Y-%m-%d") if earnings_date else None,
+    }
+
+
+@mcp.tool()
+async def ib_consolidated_trades(
+    directory: str,
+    output_dir: str | None = None,
+    port: int | None = None,
+) -> dict:
+    """Consolidate IBRK trade CSV files into summary reports.
+
+    Groups trades by symbol, underlying, date, strike, buy/sell, and open/close.
+    Outputs both markdown and CSV reports.
+    Optionally fetches unrealized P&L from IB if connected.
+
+    Args:
+        directory: Directory containing CSV trade files
+        output_dir: Output directory for reports (default: sandbox/)
+        port: IB port for unrealized P&L (7497=paper, 7496=live, omit to auto-probe)
+    """
+    from datetime import datetime
+
+    input_dir = Path(directory)
+
+    if not input_dir.is_dir():
+        return {"error": f"{input_dir} is not a directory"}
+
+    if output_dir:
+        report_dir = Path(output_dir)
+    else:
+        report_dir = Path(__file__).parent.parent / "sandbox"
+
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    # Read and consolidate
+    rows, processed_files = read_csv_files(input_dir)
+
+    if not rows:
+        return {"error": "No data found to consolidate"}
+
+    consolidated = consolidate_rows(rows)
+
+    # Fetch unrealized P&L from IB
+    unrealized_pnl, account_id = await fetch_unrealized_pnl(port)
+
+    # Generate outputs
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+    if account_id:
+        md_path = report_dir / f"{account_id}_consolidated_trades_{timestamp}.md"
+        csv_path = report_dir / f"{account_id}_consolidated_trades_{timestamp}.csv"
+    else:
+        md_path = report_dir / f"consolidated_trades_{timestamp}.md"
+        csv_path = report_dir / f"consolidated_trades_{timestamp}.csv"
+
+    generate_consolidate_md(consolidated, unrealized_pnl, processed_files, md_path)
+    generate_consolidate_csv(consolidated, csv_path)
+
+    return {
+        "success": True,
+        "input_directory": str(input_dir),
+        "rows_read": len(rows),
+        "rows_consolidated": len(consolidated),
+        "has_unrealized_pnl": bool(unrealized_pnl),
+        "markdown_report": str(md_path),
+        "csv_report": str(csv_path),
     }
 
 
