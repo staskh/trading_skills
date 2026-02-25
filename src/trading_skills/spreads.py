@@ -13,12 +13,18 @@ def get_option_price(chain_calls, chain_puts, strike: float, option_type: str) -
     if match.empty:
         return None
     row = match.iloc[0]
+    bid = row.get("bid", 0) or 0
+    ask = row.get("ask", 0) or 0
+    mid = (bid + ask) / 2
+    # Fall back to lastPrice when bid/ask are zero (e.g. outside market hours)
+    if mid == 0:
+        mid = row.get("lastPrice", 0) or 0
     return {
         "strike": strike,
         "type": option_type,
-        "bid": row.get("bid"),
-        "ask": row.get("ask"),
-        "mid": (row.get("bid", 0) + row.get("ask", 0)) / 2,
+        "bid": bid,
+        "ask": ask,
+        "mid": mid,
         "iv": row.get("impliedVolatility"),
     }
 
