@@ -81,6 +81,16 @@ def normalize_positions(raw_positions: list) -> list[dict]:
     return result
 
 
+def best_option_chain(chains: list):
+    """Pick the chain with the most expirations, preferring SMART exchange.
+
+    IB may return multiple SMART entries with different sizes; we want the richest one.
+    """
+    smart_chains = [c for c in chains if c.exchange == "SMART"]
+    pool = smart_chains or chains
+    return max(pool, key=lambda c: len(c.expirations))
+
+
 async def fetch_spot_prices(
     ib: IB, symbols: list[str], timeout: float = 15.0
 ) -> dict[str, float]:

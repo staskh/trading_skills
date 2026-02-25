@@ -1,8 +1,6 @@
 # ABOUTME: Fetches account summary from Interactive Brokers.
 # ABOUTME: Requires TWS or IB Gateway running locally.
 
-import asyncio
-
 from trading_skills.broker.connection import CLIENT_IDS, ib_connection
 
 
@@ -16,12 +14,7 @@ async def get_account_summary(port: int = 7496) -> dict:
 
             account_id = accounts[0]
 
-            # Request account summary
-            summary = ib.accountSummary(account_id)
-
-            # Wait for data to populate
-            await asyncio.sleep(1)
-            summary = ib.accountSummary(account_id)
+            summary = await ib.accountSummaryAsync(account_id)
 
             # Convert to dict
             summary_dict = {}

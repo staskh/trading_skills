@@ -58,7 +58,7 @@ class TestGetAccountSummary:
             item3.value = "200000.00"
             item3.currency = "USD"
 
-            mock_ib.accountSummary.return_value = [item1, item2, item3]
+            mock_ib.accountSummaryAsync = AsyncMock(return_value=[item1, item2, item3])
             MockIB.return_value = mock_ib
 
             result = asyncio.run(get_account_summary(port=7497))

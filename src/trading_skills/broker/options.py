@@ -7,7 +7,7 @@ import math
 
 from ib_async import IB, Option, Stock
 
-from trading_skills.broker.connection import CLIENT_IDS, ib_connection
+from trading_skills.broker.connection import CLIENT_IDS, best_option_chain, ib_connection
 
 
 async def get_expiries(symbol: str, port: int = 7496) -> dict:
@@ -23,8 +23,7 @@ async def get_expiries(symbol: str, port: int = 7496) -> dict:
             if not chains:
                 return {"success": False, "error": f"No options found for {symbol}"}
 
-            # Prefer SMART exchange
-            chain = next((c for c in chains if c.exchange == "SMART"), chains[0])
+            chain = best_option_chain(chains)
             return {
                 "success": True,
                 "symbol": symbol.upper(),
@@ -57,7 +56,7 @@ async def get_option_chain(symbol: str, expiry: str, port: int = 7496) -> dict:
             if not chains:
                 return {"success": False, "error": f"No options found for {symbol}"}
 
-            chain = next((c for c in chains if c.exchange == "SMART"), chains[0])
+            chain = best_option_chain(chains)
 
             if expiry not in chain.expirations:
                 return {"success": False, "error": f"Expiry {expiry} not available for {symbol}"}
