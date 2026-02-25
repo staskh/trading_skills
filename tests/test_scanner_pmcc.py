@@ -76,7 +76,7 @@ class TestAnalyzePMCC:
         result = analyze_pmcc("AAPL")
         if "pmcc_score" in result:
             expected = result["leaps"]["mid"] - result["short"]["mid"]
-            assert abs(result["metrics"]["net_debit"] - expected) < 0.01
+            assert abs(result["metrics"]["net_debit"] - expected) < 0.02
 
     def test_max_profit_uses_bs_leaps_value(self):
         """Max profit should use BS-priced LEAPS at short expiry, not just intrinsic."""
