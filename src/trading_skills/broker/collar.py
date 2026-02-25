@@ -1,26 +1,22 @@
-# ABOUTME: Generates tactical collar strategy reports for PMCC positions.
-# ABOUTME: Analyzes earnings risk and recommends optimal put protection.
+# ABOUTME: Analyzes tactical collar strategies for PMCC positions.
+# ABOUTME: Evaluates earnings risk and recommends optimal put protection.
 
-import asyncio
 import math
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime
 
 import yfinance as yf
-from ib_async import IB, Stock
 
 from trading_skills.black_scholes import black_scholes_price
+from trading_skills.broker.connection import (
+    CLIENT_IDS,
+    fetch_positions,
+    fetch_spot_prices,
+    ib_connection,
+    normalize_positions,
+)
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.options import get_expiries
-from trading_skills.utils import annualized_volatility
-
-
-def format_pnl(value: float) -> str:
-    """Format a P&L value as 'gains $X' or 'loses $X'."""
-    if value >= 0:
-        return f"gains ${value:,.0f}"
-    else:
-        return f"loses ${abs(value):,.0f}"
+from trading_skills.utils import annualized_volatility, format_expiry_iso
 
 
 def get_earnings_date(symbol: str) -> tuple[datetime | None, str]:
@@ -108,9 +104,6 @@ def get_put_chain(symbol: str, target_expiry: str) -> list[dict]:
         return []
 
 
-get_available_expiries = get_expiries
-
-
 def get_call_market_price(symbol: str, strike: float, expiry: str) -> float | None:
     """Get actual market price for a call option.
 
@@ -126,10 +119,7 @@ def get_call_market_price(symbol: str, strike: float, expiry: str) -> float | No
         ticker = yf.Ticker(symbol)
 
         # Convert YYYYMMDD to YYYY-MM-DD if needed
-        if len(expiry) == 8 and "-" not in expiry:
-            expiry_formatted = f"{expiry[:4]}-{expiry[4:6]}-{expiry[6:]}"
-        else:
-            expiry_formatted = expiry
+        expiry_formatted = format_expiry_iso(expiry)
 
         # Get available expiries and find closest match
         available = ticker.options
@@ -203,7 +193,7 @@ def analyze_collar(
     days_to_earnings = (earnings_date - today).days if earnings_date else None
 
     # Get available expiries
-    expiries = get_available_expiries(symbol)
+    expiries = get_expiries(symbol)
 
     # Find suitable put expiries (after earnings if applicable)
     put_expiries = []
@@ -384,784 +374,100 @@ def analyze_collar(
     }
 
 
-def generate_pdf_report(analysis: dict, output_path: Path) -> None:
-    """Generate PDF report for the collar analysis."""
+async def find_collar_candidates(
+    symbol: str,
+    port: int = 7496,
+    account: str | None = None,
+) -> dict:
+    """Fetch portfolio and run collar analysis for a PMCC position.
+
+    Connects to IB, finds the long call (LEAPS) and short calls,
+    fetches current price and earnings date, then runs collar analysis.
+    """
     try:
-        from fpdf import FPDF
-    except ImportError:
-        print("Warning: fpdf2 not installed. Generating markdown only.")
-        generate_markdown_report(analysis, output_path.with_suffix(".md"))
-        return
-
-    pdf = FPDF(orientation="L", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-
-    # Title
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.cell(0, 10, f"{analysis['symbol']} Tactical Collar Strategy Report", ln=True, align="C")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 6, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
-    pdf.ln(5)
-
-    # Position Summary
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "Position Summary", ln=True)
-    pdf.set_font("Helvetica", "", 10)
-
-    pdf.cell(60, 6, f"Symbol: {analysis['symbol']}", ln=False)
-    pdf.cell(60, 6, f"Current Price: ${analysis['current_price']:.2f}", ln=False)
-    pdf.cell(60, 6, f"Long Qty: {analysis['long_qty']} contracts", ln=True)
-
-    pdf.cell(60, 6, f"Long Strike: ${analysis['long_strike']:.0f}", ln=False)
-    pdf.cell(60, 6, f"Long Expiry: {analysis['long_expiry']}", ln=False)
-    pdf.cell(60, 6, f"Long Cost: ${analysis['long_cost']:.2f}/contract", ln=True)
-
-    total_investment = analysis["long_cost"] * analysis["long_qty"] * 100
-    current_value = analysis["long_value_now"] * analysis["long_qty"] * 100
-    pdf.cell(60, 6, f"Total Investment: ${total_investment:,.0f}", ln=False)
-    pdf.cell(60, 6, f"Current Value: ${current_value:,.0f}", ln=True)
-    pdf.ln(3)
-
-    # PMCC Health Check
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "PMCC Health Check", ln=True)
-    pdf.set_font("Helvetica", "", 10)
-
-    if analysis["is_proper_pmcc"] and analysis["short_above_long"]:
-        status = "[OK] Proper PMCC - Long is near/ITM, shorts above long strike"
-    elif analysis["short_above_long"]:
-        status = "[!] Long is OTM but shorts are above long strike - monitor closely"
-    else:
-        status = "[!!] BROKEN PMCC - Shorts below long strike require margin"
-    pdf.cell(0, 6, status, ln=True)
-
-    if analysis["short_positions"]:
-        pdf.cell(0, 6, "Short Positions:", ln=True)
-        for sp in analysis["short_positions"]:
-            pdf.cell(
-                0, 5, f"  - {sp['qty']}x ${sp['strike']:.0f} calls exp {sp['expiry']}", ln=True
-            )
-    pdf.ln(3)
-
-    # Earnings Risk
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "Earnings Risk Assessment", ln=True)
-    pdf.set_font("Helvetica", "", 10)
-
-    if analysis["earnings_date"]:
-        pdf.cell(0, 6, f"Next Earnings: {analysis['earnings_date'].strftime('%Y-%m-%d')}", ln=True)
-        pdf.cell(0, 6, f"Days Until Earnings: {analysis['days_to_earnings']}", ln=True)
-
-        if analysis["days_to_earnings"] <= 7:
-            risk_level = "[!!] CRITICAL - Earnings within 1 week"
-        elif analysis["days_to_earnings"] <= 14:
-            risk_level = "[!] WARNING - Earnings within 2 weeks"
-        elif analysis["days_to_earnings"] <= 30:
-            risk_level = "[?] MONITOR - Earnings within 1 month"
-        else:
-            risk_level = "[OK] Earnings more than 30 days out"
-        pdf.cell(0, 6, risk_level, ln=True)
-    else:
-        pdf.cell(0, 6, "No upcoming earnings date found", ln=True)
-
-    pdf.cell(
-        0, 6, f"Unprotected Gain (10% gap up): ${analysis['unprotected_gain_10']:,.0f}", ln=True
-    )
-    pdf.cell(
-        0, 6, f"Unprotected Loss (10% gap down): ${analysis['unprotected_loss_10']:,.0f}", ln=True
-    )
-    pdf.cell(
-        0, 6, f"Unprotected Loss (15% gap down): ${analysis['unprotected_loss_15']:,.0f}", ln=True
-    )
-    pdf.ln(3)
-
-    # Put Duration Analysis
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "Put Protection Analysis", ln=True)
-    pdf.set_font("Helvetica", "", 10)
-
-    if not analysis["put_analysis"]:
-        pdf.cell(0, 6, "No suitable put options found for analysis", ln=True)
-    else:
-        expiries_shown = set()
-        for pa in analysis["put_analysis"]:
-            if pa["expiry"] in expiries_shown:
-                continue
-            expiries_shown.add(pa["expiry"])
-
-            pdf.set_font("Helvetica", "B", 11)
-            days_after = (
-                f" ({pa['days_after_earnings']} days after earnings)"
-                if pa["days_after_earnings"]
-                else ""
-            )
-            pdf.cell(
-                0, 7, f"Expiry: {pa['expiry']} - {pa['days_out']} days out{days_after}", ln=True
-            )
-            pdf.set_font("Helvetica", "", 9)
-
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.cell(25, 5, "Strike", border=1, align="C")
-            pdf.cell(20, 5, "OTM %", border=1, align="C")
-            pdf.cell(25, 5, "Cost", border=1, align="C")
-            pdf.cell(30, 5, "Gap Up 10%", border=1, align="C")
-            pdf.cell(30, 5, "Flat", border=1, align="C")
-            pdf.cell(30, 5, "Gap Dn 10%", border=1, align="C")
-            pdf.cell(30, 5, "Gap Dn 15%", border=1, align="C")
-            pdf.ln()
-
-            pdf.set_font("Helvetica", "", 9)
-            for pa2 in analysis["put_analysis"]:
-                if pa2["expiry"] != pa["expiry"]:
-                    continue
-                pdf.cell(25, 5, f"${pa2['strike']:.0f}", border=1, align="C")
-                pdf.cell(20, 5, f"{pa2['otm_pct']:.0f}%", border=1, align="C")
-                pdf.cell(25, 5, f"${pa2['total_cost']:,.0f}", border=1, align="C")
-                pdf.cell(
-                    30, 5, f"${pa2['scenarios']['gap_up_10']['put_pnl']:+,.0f}", border=1, align="C"
-                )
-                pdf.cell(
-                    30, 5, f"${pa2['scenarios']['flat']['put_pnl']:+,.0f}", border=1, align="C"
-                )
-                pdf.cell(
-                    30,
-                    5,
-                    f"${pa2['scenarios']['gap_down_10']['put_pnl']:+,.0f}",
-                    border=1,
-                    align="C",
-                )
-                pdf.cell(
-                    30,
-                    5,
-                    f"${pa2['scenarios']['gap_down_15']['put_pnl']:+,.0f}",
-                    border=1,
-                    align="C",
-                )
-                pdf.ln()
-            pdf.ln(2)
-
-    # Recommendation
-    pdf.add_page()
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "Recommendation", ln=True)
-    pdf.set_font("Helvetica", "", 10)
-
-    best_put = None
-    for pa in analysis["put_analysis"]:
-        if pa["days_after_earnings"] and 5 <= pa["days_after_earnings"] <= 25:
-            gap_15_pnl = pa["scenarios"]["gap_down_15"]["put_pnl"]
-            if best_put is None:
-                best_put = pa
-            elif gap_15_pnl > best_put["scenarios"]["gap_down_15"]["put_pnl"]:
-                best_put = pa
-
-    if not best_put and analysis["put_analysis"]:
-        best_put = max(
-            analysis["put_analysis"], key=lambda p: p["scenarios"]["gap_down_15"]["put_pnl"]
-        )
-
-    if best_put:
-        pdf.cell(
-            0, 6, f"Recommended Put: {best_put['expiry']} ${best_put['strike']:.0f} put", ln=True
-        )
-        pdf.cell(
-            0,
-            6,
-            f"  - Cost: ${best_put['total_cost']:,.0f} ({best_put['otm_pct']:.0f}% OTM)",
-            ln=True,
-        )
-        dn10 = format_pnl(best_put['scenarios']['gap_down_10']['put_pnl'])
-        dn15 = format_pnl(best_put['scenarios']['gap_down_15']['put_pnl'])
-        up10 = format_pnl(best_put['scenarios']['gap_up_10']['put_pnl'])
-        pdf.cell(0, 6, f"  - If gap down 10%: Put {dn10}", ln=True)
-        pdf.cell(0, 6, f"  - If gap down 15%: Put {dn15}", ln=True)
-        pdf.cell(0, 6, f"  - If gap up 10%: Put {up10}", ln=True)
-        pdf.ln(3)
-
-        pdf.set_font("Helvetica", "B", 11)
-        pdf.cell(0, 6, "Net Position with Protection:", ln=True)
-        pdf.set_font("Helvetica", "", 10)
-
-        for scenario, label in [
-            ("gap_down_15", "Gap Down 15%"),
-            ("gap_down_10", "Gap Down 10%"),
-            ("gap_up_10", "Gap Up 10%"),
-        ]:
-            if scenario.startswith("gap_down"):
-                pct = scenario.split('_')[-1]
-                long_loss = analysis[f"unprotected_loss_{pct}"]
-                put_gain = best_put["scenarios"][scenario]["put_pnl"]
-                net = -long_loss + put_gain
-                text = (
-                    f"  {label}: Long loses ${long_loss:,.0f},"
-                    f" Put gains ${put_gain:+,.0f},"
-                    f" Net: ${net:+,.0f}"
-                )
-                pdf.cell(0, 5, text, ln=True)
+        async with ib_connection(port, CLIENT_IDS["collar"]) as ib:
+            managed = ib.managedAccounts()
+            if account:
+                if account not in managed:
+                    return {"error": f"Account {account} not found. Available: {managed}"}
+                accounts = [account]
             else:
-                long_gain = analysis["unprotected_gain_10"]
-                put_pnl = best_put["scenarios"][scenario]["put_pnl"]
-                net = long_gain + put_pnl
-                pnl_str = format_pnl(put_pnl)
-                text = (
-                    f"  {label}: Long gains ${long_gain:,.0f},"
-                    f" Put {pnl_str},"
-                    f" Net: ${net:+,.0f}"
-                )
-                pdf.cell(0, 5, text, ln=True)
+                accounts = managed
 
-    pdf.ln(5)
+            # Fetch and normalize positions
+            raw = []
+            for acct in accounts:
+                raw.extend(await fetch_positions(ib, account=acct))
+            positions = normalize_positions(raw)
 
-    # Implementation Timeline
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "Implementation Timeline", ln=True)
-    pdf.set_font("Helvetica", "", 10)
+            # Fetch underlying prices for option positions
+            opt_symbols = {p["symbol"] for p in positions if p["sec_type"] == "OPT"}
+            prices = await fetch_spot_prices(ib, list(opt_symbols))
+            for pos in positions:
+                if pos["symbol"] in prices:
+                    pos["underlying_price"] = prices[pos["symbol"]]
 
-    if analysis["earnings_date"] and analysis["days_to_earnings"]:
-        earnings = analysis["earnings_date"]
-        buy_puts_date = earnings - timedelta(days=min(14, analysis["days_to_earnings"] - 1))
-        close_shorts_date = earnings - timedelta(days=2)
+    except ConnectionError as e:
+        return {"error": str(e)}
 
-        pdf.cell(0, 6, f"[ ] {buy_puts_date.strftime('%Y-%m-%d')}: Buy protective puts", ln=True)
+    # Filter for the symbol
+    symbol = symbol.upper()
+    symbol_positions = [p for p in positions if p["symbol"] == symbol]
 
-        for sp in analysis["short_positions"]:
-            sp_expiry = datetime.strptime(sp["expiry"], "%Y%m%d")
-            if sp_expiry > earnings:
-                close_date = close_shorts_date.strftime('%Y-%m-%d')
-                qty = sp['qty']
-                strike = sp['strike']
-                text = (
-                    f"[ ] {close_date}: Close/roll"
-                    f" {qty}x ${strike:.0f} shorts"
-                    f" (expire after earnings)"
-                )
-                pdf.cell(0, 6, text, ln=True)
+    if not symbol_positions:
+        available = sorted(set(p["symbol"] for p in positions))
+        return {"error": f"{symbol} not found in portfolio. Available: {available}"}
 
-        earn_date = earnings.strftime('%Y-%m-%d')
-        day1 = (earnings + timedelta(days=1)).strftime('%Y-%m-%d')
-        day2 = (earnings + timedelta(days=2)).strftime('%Y-%m-%d')
-        pdf.cell(
-            0, 6,
-            f"[ ] {earn_date}: EARNINGS - Position protected",
-            ln=True,
-        )
-        pdf.cell(
-            0, 6,
-            f"[ ] {day1}: Evaluate position, sell puts if gap up",
-            ln=True,
-        )
-        pdf.cell(
-            0, 6,
-            f"[ ] {day2}: Resume normal PMCC (sell new short calls)",
-            ln=True,
-        )
-    else:
-        pdf.cell(0, 6, "No specific timeline - no earnings date found", ln=True)
-
-    pdf.ln(5)
-
-    # Key Insights
-    pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, "Key Insights", ln=True)
-    pdf.set_font("Helvetica", "", 10)
-
-    insights = [
-        "Short-dated puts (weekly): Cheaper, more gamma on crash, but zero salvage on gap up",
-        "Medium-dated puts (2-4 weeks after event): Best balance of cost, gamma, and salvage value",
-        "Long-dated puts (60+ days): Preserves value on gap up, but expensive and less gamma",
-        "Recommendation: Buy puts 1-2 weeks before earnings, choose expiry 1-3 weeks after",
-        "After earnings: Sell puts immediately (take profit or accept IV crush loss)",
+    # Separate long and short calls
+    long_calls = [
+        p for p in symbol_positions
+        if p["sec_type"] == "OPT" and p["right"] == "C" and p["quantity"] > 0
+    ]
+    short_calls = [
+        p for p in symbol_positions
+        if p["sec_type"] == "OPT" and p["right"] == "C" and p["quantity"] < 0
     ]
 
-    for insight in insights:
-        pdf.cell(0, 5, f"* {insight}", ln=True)
+    if not long_calls:
+        return {"error": f"No long call positions found for {symbol}. Requires a PMCC position."}
 
-    pdf.output(str(output_path))
-    print(f"Report saved to: {output_path}")
+    # Use the longest-dated long call as the LEAPS
+    long_calls.sort(key=lambda x: x["expiry"], reverse=True)
+    main_long = long_calls[0]
 
+    # Get current price from IB data, fall back to yfinance
+    current_price = main_long.get("underlying_price")
+    if not current_price:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        current_price = info.get("regularMarketPrice") or info.get("previousClose")
 
-def generate_markdown_report(analysis: dict, output_path: Path) -> None:
-    """Generate comprehensive markdown report."""
-    lines = [
-        f"# {analysis['symbol']} Tactical Collar Strategy Report",
-        f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        "",
-        "---",
-        "",
-        "## Position Summary",
-        "",
-        "| Field | Value |",
-        "|-------|-------|",
-        f"| Symbol | {analysis['symbol']} |",
-        f"| Current Price | ${analysis['current_price']:.2f} |",
-        f"| Long Position | {analysis['long_qty']}x ${analysis['long_strike']:.0f} calls |",
-        f"| Long Expiry | {analysis['long_expiry']} |",
-        f"| Long Cost | ${analysis['long_cost']:.2f}/contract |",
-        f"| Total Investment | ${analysis['long_cost'] * analysis['long_qty'] * 100:,.0f} |",
-        f"| Current Value | ${analysis['long_value_now'] * analysis['long_qty'] * 100:,.0f} |",
-        "",
-        "## PMCC Health Check",
-        "",
+    if not current_price:
+        return {"error": f"Could not get current price for {symbol}"}
+
+    # Get earnings date
+    earnings_date, _ = get_earnings_date(symbol)
+
+    # Format short positions
+    short_positions = [
+        {"strike": p["strike"], "expiry": p["expiry"], "qty": abs(p["quantity"])}
+        for p in short_calls
     ]
 
-    if analysis["is_proper_pmcc"] and analysis["short_above_long"]:
-        lines.append("**[OK]** Proper PMCC - Long is near/ITM, shorts above long strike")
-    elif analysis["short_above_long"]:
-        lines.append("**[!]** Long is OTM but shorts are above long strike - monitor closely")
-    else:
-        lines.append("**[!!]** BROKEN PMCC - Shorts below long strike require margin")
-
-    lines.append("")
-
-    if analysis["short_positions"]:
-        lines.append("**Short Positions:**")
-        for sp in analysis["short_positions"]:
-            lines.append(f"- {sp['qty']}x ${sp['strike']:.0f} calls exp {sp['expiry']}")
-        lines.append("")
-
-    # Earnings Risk
-    lines.extend(
-        [
-            "## Earnings Risk Assessment",
-            "",
-        ]
+    # Run analysis
+    analysis = analyze_collar(
+        symbol=symbol,
+        current_price=current_price,
+        long_strike=main_long["strike"],
+        long_expiry=main_long["expiry"],
+        long_qty=int(main_long["quantity"]),
+        long_cost=main_long["avg_cost"],
+        short_positions=short_positions,
+        earnings_date=earnings_date,
     )
 
-    if analysis["earnings_date"]:
-        lines.append("| Field | Value |")
-        lines.append("|-------|-------|")
-        lines.append(f"| Next Earnings | {analysis['earnings_date'].strftime('%Y-%m-%d')} |")
-        lines.append(f"| Days Until Earnings | {analysis['days_to_earnings']} |")
+    # Serialize datetime for JSON
+    if analysis.get("earnings_date"):
+        analysis["earnings_date"] = analysis["earnings_date"].strftime("%Y-%m-%d")
 
-        if analysis["days_to_earnings"] <= 7:
-            risk_level = "**[!!] CRITICAL** - Earnings within 1 week"
-        elif analysis["days_to_earnings"] <= 14:
-            risk_level = "**[!] WARNING** - Earnings within 2 weeks"
-        elif analysis["days_to_earnings"] <= 30:
-            risk_level = "**[?] MONITOR** - Earnings within 1 month"
-        else:
-            risk_level = "**[OK]** - Earnings more than 30 days out"
-        lines.append(f"| Risk Level | {risk_level} |")
-        lines.append(f"| Unprotected Gain (10% gap up) | ${analysis['unprotected_gain_10']:,.0f} |")
-        lines.append(
-            f"| Unprotected Loss (10% gap down) | ${analysis['unprotected_loss_10']:,.0f} |"
-        )
-        lines.append(
-            f"| Unprotected Loss (15% gap down) | ${analysis['unprotected_loss_15']:,.0f} |"
-        )
-    else:
-        lines.append("No upcoming earnings date found.")
-
-    lines.extend(["", "## Put Protection Analysis", ""])
-
-    if not analysis["put_analysis"]:
-        lines.append("No suitable put options found for analysis.")
-    else:
-        expiries_shown = set()
-        for pa in analysis["put_analysis"]:
-            if pa["expiry"] in expiries_shown:
-                continue
-            expiries_shown.add(pa["expiry"])
-
-            days_after = (
-                f" ({pa['days_after_earnings']} days after earnings)"
-                if pa["days_after_earnings"]
-                else ""
-            )
-            lines.extend(
-                [
-                    f"### Expiry: {pa['expiry']} - {pa['days_out']} days out{days_after}",
-                    "",
-                    "| Strike | OTM % | Cost | Gap Up 10% | Flat | Gap Dn 10% | Gap Dn 15% |",
-                    "|--------|-------|------|------------|------|------------|------------|",
-                ]
-            )
-
-            for pa2 in analysis["put_analysis"]:
-                if pa2["expiry"] != pa["expiry"]:
-                    continue
-                lines.append(
-                    f"| ${pa2['strike']:.0f} | {pa2['otm_pct']:.0f}% | ${pa2['total_cost']:,.0f} | "
-                    f"${pa2['scenarios']['gap_up_10']['put_pnl']:+,.0f} | "
-                    f"${pa2['scenarios']['flat']['put_pnl']:+,.0f} | "
-                    f"${pa2['scenarios']['gap_down_10']['put_pnl']:+,.0f} | "
-                    f"${pa2['scenarios']['gap_down_15']['put_pnl']:+,.0f} |"
-                )
-            lines.append("")
-
-    # Net Position Summary Table
-    if analysis["put_analysis"]:
-        unprotected_10 = analysis["unprotected_loss_10"]
-        unprotected_15 = analysis["unprotected_loss_15"]
-        unprotected_gain = analysis["unprotected_gain_10"]
-
-        lines.extend(
-            [
-                "## Net Position Summary",
-                "",
-                "Combined long call + put P&L for each scenario:",
-                "",
-                "| Expiry | Strike | Cost | Gap Up 10% |"
-                " Flat | Gap Dn 10% | Gap Dn 15% |",
-                "|--------|--------|------|------------|"
-                "------|------------|------------|",
-                f"| **No Protection** | - | $0 |"
-                f" **${unprotected_gain:+,.0f}** | $0 |"
-                f" **${-unprotected_10:,.0f}** |"
-                f" **${-unprotected_15:,.0f}** |",
-            ]
-        )
-
-        for pa in analysis["put_analysis"]:
-            net_up = unprotected_gain + pa["scenarios"]["gap_up_10"]["put_pnl"]
-            net_flat = pa["scenarios"]["flat"]["put_pnl"]
-            net_dn_10 = -unprotected_10 + pa["scenarios"]["gap_down_10"]["put_pnl"]
-            net_dn_15 = -unprotected_15 + pa["scenarios"]["gap_down_15"]["put_pnl"]
-
-            lines.append(
-                f"| {pa['expiry']} | ${pa['strike']:.0f} | ${pa['total_cost']:,.0f} | "
-                f"${net_up:+,.0f} | ${net_flat:+,.0f} | ${net_dn_10:+,.0f} | ${net_dn_15:+,.0f} |"
-            )
-
-        best_15 = max(
-            analysis["put_analysis"],
-            key=lambda p: -unprotected_15 + p["scenarios"]["gap_down_15"]["put_pnl"],
-        )
-        best_net_15 = -unprotected_15 + best_15["scenarios"]["gap_down_15"]["put_pnl"]
-        savings = unprotected_15 - abs(best_net_15)
-
-        lines.extend(
-            [
-                "",
-                f"**Best protection on 15% gap:**"
-                f" {best_15['expiry']}"
-                f" ${best_15['strike']:.0f} put -"
-                f" saves ${savings:,.0f} vs unprotected"
-                f" (${best_net_15:,.0f}"
-                f" vs ${-unprotected_15:,.0f})",
-                "",
-            ]
-        )
-
-    # Volatility and Timing Analysis
-    vol = analysis.get("volatility", {})
-    if vol and "error" not in vol:
-        current_price = analysis["current_price"]
-
-        lines.extend(
-            [
-                "## Volatility & Timing Analysis",
-                "",
-                f"**Stock Volatility:** {vol['vol_class']}"
-                f" ({vol['annual_vol_pct']:.0f}% annualized)",
-                "",
-                "### Expected Price Movement Before Earnings",
-                "",
-                "| Time Period | Expected Move (1 SD)"
-                " | Price Range |",
-                "|-------------|---------------------"
-                "|-------------|",
-            ]
-        )
-
-        m1w = vol['move_1_week']
-        m2w = vol['move_2_weeks']
-        m3w = vol['move_3_weeks']
-        lines.extend(
-            [
-                f"| 1 Week | +/-${m1w:.2f}"
-                f" ({vol['move_1_week_pct']:.1f}%)"
-                f" | ${current_price - m1w:.2f}"
-                f" - ${current_price + m1w:.2f} |",
-                f"| 2 Weeks | +/-${m2w:.2f}"
-                f" ({vol['move_2_weeks_pct']:.1f}%)"
-                f" | ${current_price - m2w:.2f}"
-                f" - ${current_price + m2w:.2f} |",
-                f"| 3 Weeks | +/-${m3w:.2f}"
-                f" ({vol['move_3_weeks_pct']:.1f}%)"
-                f" | ${current_price - m3w:.2f}"
-                f" - ${current_price + m3w:.2f} |",
-                "",
-            ]
-        )
-
-        if vol["vol_class"] in ["EXTREME", "VERY HIGH"]:
-            timing_rec = "**BUY DAY BEFORE EARNINGS** - Stock moves too much to buy early"
-            move_pct = vol['move_2_weeks_pct']
-            timing_reason = (
-                f"With {vol['vol_class']} volatility,"
-                f" stock could move {move_pct:.0f}%"
-                f" before earnings. Buying early risks:\n"
-                f"- Put strike becoming wrong (too far OTM if stock rallies)\n"
-                f"- Significant theta + delta decay\n"
-                f"- Having to buy a second put at the right strike"
-            )
-            lines.extend(
-                [
-                    f"### Timing Recommendation: {timing_rec}",
-                    "",
-                    timing_reason,
-                    "",
-                    "### Day-Before Strike Selection Guide",
-                    "",
-                    "On the day before earnings, select put strike"
-                    " based on where stock is trading:",
-                    "",
-                    "| If Stock Price Is | Recommended Strike (5-7% OTM) |",
-                    "|-------------------|-------------------------------|",
-                ]
-            )
-            for pct in [-15, -10, -5, 0, 5, 10, 15]:
-                future_price = current_price * (1 + pct / 100)
-                strike_5 = round(future_price * 0.95 / 5) * 5
-                strike_7 = round(future_price * 0.93 / 5) * 5
-                lines.append(
-                    f"| ${future_price:.0f} ({pct:+d}% from today)"
-                    f" | ${strike_7:.0f} - ${strike_5:.0f} |"
-                )
-            lines.append("")
-
-        elif vol["vol_class"] == "HIGH":
-            timing_rec = "**BUY 3-5 DAYS BEFORE** - Balance timing vs. cost"
-            lines.extend(
-                [
-                    f"### Timing Recommendation: {timing_rec}",
-                    "",
-                    f"With HIGH volatility"
-                    f" ({vol['annual_vol_pct']:.0f}%),"
-                    f" buying too early risks"
-                    f" {vol['move_2_weeks_pct']:.0f}% move"
-                    f" before earnings."
-                    f" Wait until closer to the event.",
-                    "",
-                ]
-            )
-        else:
-            timing_rec = "**BUY 1-2 WEEKS BEFORE** - Lower volatility allows early purchase"
-            lines.extend(
-                [
-                    f"### Timing Recommendation: {timing_rec}",
-                    "",
-                    f"With {vol['vol_class']} volatility ({vol['annual_vol_pct']:.0f}%), "
-                    f"stock is unlikely to move significantly before earnings. "
-                    f"Buying early locks in lower IV premium.",
-                    "",
-                ]
-            )
-
-        lines.extend(
-            [
-                "### IV Premium Warning",
-                "",
-                "Puts bought day before earnings will cost ~30-50% more due to elevated IV.",
-                "However, for high-volatility stocks, this is often worth it to:",
-                "- Know exact strike needed",
-                "- Avoid theta decay",
-                "- Avoid delta loss if stock moves against you",
-                "",
-            ]
-        )
-
-    # Recommendation
-    lines.extend(["## Recommendation", ""])
-
-    best_put = None
-    for pa in analysis["put_analysis"]:
-        if pa["days_after_earnings"] and 5 <= pa["days_after_earnings"] <= 25:
-            gap_15_pnl = pa["scenarios"]["gap_down_15"]["put_pnl"]
-            if best_put is None:
-                best_put = pa
-            elif gap_15_pnl > best_put["scenarios"]["gap_down_15"]["put_pnl"]:
-                best_put = pa
-
-    if not best_put and analysis["put_analysis"]:
-        best_put = max(
-            analysis["put_analysis"], key=lambda p: p["scenarios"]["gap_down_15"]["put_pnl"]
-        )
-
-    if best_put:
-        lines.extend(
-            [
-                f"**Recommended Put:** {best_put['expiry']} ${best_put['strike']:.0f} put",
-                "",
-                "| Scenario | Outcome |",
-                "|----------|---------|",
-                f"| Cost | ${best_put['total_cost']:,.0f}"
-                f" ({best_put['otm_pct']:.0f}% OTM) |",
-                f"| Gap Down 10% | Put"
-                f" {format_pnl(best_put['scenarios']['gap_down_10']['put_pnl'])}"
-                f" |",
-                f"| Gap Down 15% | Put"
-                f" {format_pnl(best_put['scenarios']['gap_down_15']['put_pnl'])}"
-                f" |",
-                f"| Gap Up 10% | Put"
-                f" {format_pnl(best_put['scenarios']['gap_up_10']['put_pnl'])}"
-                f" |",
-                "",
-                "### Net Position with Protection",
-                "",
-            ]
-        )
-
-        for scenario, label in [
-            ("gap_down_15", "Gap Down 15%"),
-            ("gap_down_10", "Gap Down 10%"),
-            ("gap_up_10", "Gap Up 10%"),
-        ]:
-            if scenario.startswith("gap_down"):
-                pct = "15" if "15" in scenario else "10"
-                long_loss = analysis[f"unprotected_loss_{pct}"]
-                put_pnl = best_put["scenarios"][scenario]["put_pnl"]
-                net = -long_loss + put_pnl
-                pnl_str = format_pnl(put_pnl)
-                lines.append(
-                    f"- **{label}:** Long loses"
-                    f" ${long_loss:,.0f},"
-                    f" Put {pnl_str},"
-                    f" **Net: ${net:+,.0f}**"
-                )
-            else:
-                long_gain = analysis["unprotected_gain_10"]
-                put_pnl = best_put["scenarios"][scenario]["put_pnl"]
-                net = long_gain + put_pnl
-                pnl_str = format_pnl(put_pnl)
-                lines.append(
-                    f"- **{label}:** Long gains"
-                    f" ${long_gain:,.0f},"
-                    f" Put {pnl_str},"
-                    f" **Net: ${net:+,.0f}**"
-                )
-
-        lines.append("")
-
-    # Implementation Timeline
-    lines.extend(["## Implementation Timeline", ""])
-
-    if analysis["earnings_date"] and analysis["days_to_earnings"]:
-        earnings = analysis["earnings_date"]
-        buy_puts_date = earnings - timedelta(days=min(14, analysis["days_to_earnings"] - 1))
-        close_shorts_date = earnings - timedelta(days=2)
-
-        lines.append(f"- [ ] **{buy_puts_date.strftime('%Y-%m-%d')}:** Buy protective puts")
-
-        for sp in analysis["short_positions"]:
-            sp_expiry = datetime.strptime(sp["expiry"], "%Y%m%d")
-            if sp_expiry > earnings:
-                close_date = close_shorts_date.strftime('%Y-%m-%d')
-                qty = sp['qty']
-                strike = sp['strike']
-                lines.append(
-                    f"- [ ] **{close_date}:** Close/roll"
-                    f" {qty}x ${strike:.0f} shorts"
-                    f" (expire after earnings)"
-                )
-
-        earn_date = earnings.strftime('%Y-%m-%d')
-        day1 = (earnings + timedelta(days=1)).strftime('%Y-%m-%d')
-        day2 = (earnings + timedelta(days=2)).strftime('%Y-%m-%d')
-        lines.extend(
-            [
-                f"- [ ] **{earn_date}:** EARNINGS"
-                f" - Position protected",
-                f"- [ ] **{day1}:** Evaluate"
-                f" position, sell puts if gap up",
-                f"- [ ] **{day2}:** Resume normal"
-                f" PMCC (sell new short calls)",
-            ]
-        )
-    else:
-        lines.append("No specific timeline - no earnings date found.")
-
-    lines.extend(
-        [
-            "",
-            "## Key Insights",
-            "",
-            "- **Short-dated puts (weekly):** Cheaper, more gamma on crash,"
-            " but zero salvage on gap up",
-            "- **Medium-dated puts (2-4 weeks):**"
-            " Best balance of cost, gamma, and salvage value",
-            "- **Long-dated puts (60+ days):** Preserves value on gap up,"
-            " but expensive and less gamma",
-            "- **Recommendation:** Buy puts 1-2 weeks before earnings,"
-            " choose expiry 1-3 weeks after",
-            "- **After earnings:** Sell puts immediately (take profit or accept IV crush loss)",
-            "",
-        ]
-    )
-
-    output_path.write_text("\n".join(lines))
-    print(f"Markdown report saved to: {output_path}")
-
-
-async def get_portfolio_positions(
-    port: int, account: str | None
-) -> tuple[bool, list[dict], str | None]:
-    """Fetch portfolio positions from IB."""
-    ib = IB()
-
-    try:
-        await ib.connectAsync(host="127.0.0.1", port=port, clientId=1)
-    except Exception as e:
-        return False, [], f"Could not connect to IB on port {port}: {e}"
-
-    try:
-        await asyncio.sleep(2)
-
-        managed = ib.managedAccounts()
-        if account:
-            if account not in managed:
-                return True, [], f"Account {account} not found. Available: {managed}"
-            accounts = [account]
-        else:
-            accounts = managed
-
-        positions = []
-        for acct in accounts:
-            for pos in ib.positions(account=acct):
-                contract = pos.contract
-                entry = {
-                    "account": pos.account,
-                    "symbol": contract.symbol,
-                    "sec_type": contract.secType,
-                    "quantity": pos.position,
-                    "avg_cost": pos.avgCost,
-                }
-                if contract.secType == "OPT":
-                    multiplier = int(contract.multiplier) if contract.multiplier else 100
-                    entry.update(
-                        {
-                            "strike": contract.strike,
-                            "expiry": contract.lastTradeDateOrContractMonth,
-                            "right": contract.right,
-                            "avg_cost": pos.avgCost / multiplier,
-                        }
-                    )
-                positions.append(entry)
-
-        # Get current prices for underlyings
-        symbols = {p["symbol"] for p in positions if p["sec_type"] == "OPT"}
-        prices = {}
-
-        if symbols:
-            contracts = [Stock(sym, "SMART", "USD") for sym in symbols]
-            try:
-                qualified = await asyncio.wait_for(ib.qualifyContractsAsync(*contracts), timeout=15)
-                tickers = await asyncio.wait_for(ib.reqTickersAsync(*qualified), timeout=15)
-                for t in tickers:
-                    p = t.marketPrice()
-                    if p and p > 0:
-                        prices[t.contract.symbol] = p
-            except asyncio.TimeoutError:
-                pass
-
-        # Add prices to positions
-        for pos in positions:
-            if pos["symbol"] in prices:
-                pos["underlying_price"] = prices[pos["symbol"]]
-
-        return True, positions, None
-
-    finally:
-        ib.disconnect()
+    return analysis

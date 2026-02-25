@@ -6,9 +6,9 @@ import yfinance as yf
 from trading_skills.utils import safe_value
 
 
-def get_fundamentals(symbol: str, data_type: str = "all") -> dict:
+def get_fundamentals(symbol: str, data_type: str = "all", ticker=None) -> dict:
     """Fetch fundamental data for a symbol."""
-    ticker = yf.Ticker(symbol)
+    ticker = ticker or yf.Ticker(symbol)
     result = {"symbol": symbol.upper()}
 
     # Handle each data type separately to avoid one failure blocking others

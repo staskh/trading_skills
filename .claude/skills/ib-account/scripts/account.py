@@ -11,7 +11,7 @@ from trading_skills.broker.account import get_account_summary
 
 def main():
     parser = argparse.ArgumentParser(description="Fetch IB account summary")
-    parser.add_argument("--port", type=int, default=7497, help="IB port (7497=paper, 7496=live)")
+    parser.add_argument("--port", type=int, default=7496, help="IB port (7496=live, 7497=paper)")
 
     args = parser.parse_args()
     result = asyncio.run(get_account_summary(args.port))

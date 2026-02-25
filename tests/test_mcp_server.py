@@ -37,10 +37,15 @@ class TestMCPServerImport:
             "spread_iron_condor",
             "scan_bullish",
             "scan_pmcc",
+            "report_stock",
             "ib_account",
             "ib_portfolio",
             "ib_find_short_roll",
             "ib_portfolio_action_report",
+            "ib_option_expiries",
+            "ib_option_chain",
+            "ib_delta_exposure",
+            "ib_collar",
         ]
         for tool_name in expected_tools:
             assert tool_name in tools, f"Missing tool: {tool_name}"
@@ -165,11 +170,87 @@ class TestIBTools:
     def test_ib_portfolio_action_report_handles_no_connection(self):
         """ib_portfolio_action_report returns error when IB not connected."""
         import asyncio
-        import tempfile
 
         from mcp_server.server import ib_portfolio_action_report
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = asyncio.run(ib_portfolio_action_report(output_dir=tmpdir, port=7497))
+        result = asyncio.run(ib_portfolio_action_report(port=7497))
         # Should return error when IB not running
         assert "error" in result
+
+    def test_ib_option_expiries_handles_no_connection(self):
+        """ib_option_expiries returns error when IB not connected."""
+        import asyncio
+
+        from mcp_server.server import ib_option_expiries
+
+        result = asyncio.run(ib_option_expiries("AAPL", port=7497))
+        assert result["success"] is False
+        assert "error" in result
+
+    def test_ib_option_chain_handles_no_connection(self):
+        """ib_option_chain returns error when IB not connected."""
+        import asyncio
+
+        from mcp_server.server import ib_option_chain
+
+        result = asyncio.run(ib_option_chain("AAPL", "20260320", port=7497))
+        assert result["success"] is False
+        assert "error" in result
+
+    def test_ib_delta_exposure_handles_no_connection(self):
+        """ib_delta_exposure returns error when IB not connected."""
+        import asyncio
+
+        from mcp_server.server import ib_delta_exposure
+
+        result = asyncio.run(ib_delta_exposure(port=7497))
+        assert result["connected"] is False
+        assert "error" in result
+
+    def test_ib_collar_handles_no_connection(self):
+        """ib_collar returns error when IB not connected."""
+        import asyncio
+
+        from mcp_server.server import ib_collar
+
+        result = asyncio.run(ib_collar("AAPL", port=7497))
+        assert "error" in result
+
+
+
+class TestReportTools:
+    """Test report generation tools."""
+
+    def test_report_stock_returns_data(self):
+        """report_stock returns comprehensive analysis data."""
+        from mcp_server.server import report_stock
+
+        result = report_stock("AAPL")
+        assert "symbol" in result
+        assert result["symbol"] == "AAPL"
+        assert "recommendation" in result
+        assert "trend_analysis" in result
+        assert "pmcc_analysis" in result
+        assert "fundamentals" in result
+        assert "piotroski" in result
+
+    def test_report_stock_recommendation_fields(self):
+        """report_stock recommendation has expected fields."""
+        from mcp_server.server import report_stock
+
+        result = report_stock("MSFT")
+        rec = result["recommendation"]
+        assert "recommendation" in rec
+        assert "strengths" in rec
+        assert "risks" in rec
+        assert isinstance(rec["strengths"], list)
+        assert isinstance(rec["risks"], list)
+
+    def test_report_stock_invalid_symbol(self):
+        """report_stock returns result with empty data for invalid symbol."""
+        from mcp_server.server import report_stock
+
+        result = report_stock("ZZZZZZZ123")
+        # Invalid symbols return a result structure but with null/empty data
+        assert result["trend_analysis"]["bullish_score"] is None
+        assert result["piotroski"]["score"] == 0

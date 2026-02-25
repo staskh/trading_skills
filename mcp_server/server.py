@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # ABOUTME: MCP server providing trading analysis tools.
-# ABOUTME: Exposes quote, technicals, options, fundamentals, and scanner tools.
+# ABOUTME: Exposes market data, options, IB broker, portfolio, and report tools.
 
 import os
 import sys
-from pathlib import Path
 
 # Ensure unbuffered output for MCP protocol (equivalent to python -u)
 os.environ["PYTHONUNBUFFERED"] = "1"
@@ -16,20 +15,20 @@ if hasattr(sys.stderr, "reconfigure"):
 from mcp.server.fastmcp import FastMCP
 
 from trading_skills.broker.account import get_account_summary
+from trading_skills.broker.collar import find_collar_candidates
+from trading_skills.broker.delta_exposure import get_delta_exposure
+from trading_skills.broker.options import (
+    get_expiries as ib_get_expiries,
+)
+from trading_skills.broker.options import (
+    get_option_chain as ib_get_option_chain,
+)
 from trading_skills.broker.portfolio import get_portfolio
 from trading_skills.broker.portfolio_action import (
-    generate_report as generate_action_report,
+    analyze_portfolio,
     get_portfolio_data,
 )
-from trading_skills.broker.roll import (
-    calculate_roll_options,
-    fetch_earnings_date,
-    generate_report as generate_roll_report,
-    get_current_position,
-    get_option_chain_params,
-    get_option_quotes,
-    get_underlying_price,
-)
+from trading_skills.broker.roll import find_roll_candidates
 from trading_skills.correlation import compute_correlation
 from trading_skills.earnings import get_earnings_info, get_multiple_earnings
 from trading_skills.fundamentals import get_fundamentals
@@ -39,9 +38,10 @@ from trading_skills.news import get_news
 from trading_skills.options import get_expiries, get_option_chain
 from trading_skills.piotroski import calculate_piotroski_score
 from trading_skills.quote import get_quote
+from trading_skills.report import generate_report_data
 from trading_skills.risk import calculate_risk_metrics
 from trading_skills.scanner_bullish import compute_bullish_score, scan_symbols
-from trading_skills.scanner_pmcc import analyze_pmcc
+from trading_skills.scanner_pmcc import analyze_pmcc, format_scan_results
 from trading_skills.spreads import (
     analyze_diagonal,
     analyze_iron_condor,
@@ -423,8 +423,6 @@ def scan_pmcc(
         leaps_delta: Target delta for LEAPS (default 0.80)
         short_delta: Target delta for short call (default 0.20)
     """
-    from datetime import datetime
-
     symbol_list = [s.strip().upper() for s in symbols.split(",")]
 
     results = []
@@ -438,24 +436,31 @@ def scan_pmcc(
         if result:
             results.append(result)
 
-    # Sort by score
-    valid_results = [r for r in results if "pmcc_score" in r]
-    valid_results.sort(
-        key=lambda x: (x["pmcc_score"], x.get("metrics", {}).get("annual_yield_est_pct", 0)),
-        reverse=True,
-    )
-
-    return {
-        "scan_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "criteria": {
-            "leaps_min_days": min_leaps_days,
-            "leaps_target_delta": leaps_delta,
-            "short_target_delta": short_delta,
-        },
-        "count": len(valid_results),
-        "results": valid_results,
-        "errors": [r for r in results if "error" in r],
+    output = format_scan_results(results)
+    output["criteria"] = {
+        "leaps_min_days": min_leaps_days,
+        "leaps_target_delta": leaps_delta,
+        "short_target_delta": short_delta,
     }
+    return output
+
+
+# ============================================================================
+# REPORT TOOLS
+# ============================================================================
+
+
+@mcp.tool()
+def report_stock(symbol: str) -> dict:
+    """Generate comprehensive stock analysis data with trend, PMCC, and fundamental analysis.
+
+    Returns detailed data including bullish score, PMCC viability, fundamentals,
+    Piotroski F-Score, spread strategies, and an overall recommendation.
+
+    Args:
+        symbol: Ticker symbol (e.g., AAPL, MSFT)
+    """
+    return generate_report_data(symbol.upper())
 
 
 # ============================================================================
@@ -464,27 +469,27 @@ def scan_pmcc(
 
 
 @mcp.tool()
-async def ib_account(port: int = 7497) -> dict:
+async def ib_account(port: int = 7496) -> dict:
     """Get account summary from Interactive Brokers.
 
     Returns cash balance, buying power, net liquidation value, and margin info.
     Requires TWS or IB Gateway running locally.
 
     Args:
-        port: IB port (7497 for paper trading, 7496 for live)
+        port: IB port (7496 for live, 7497 for paper)
     """
     return await get_account_summary(port)
 
 
 @mcp.tool()
-async def ib_portfolio(port: int = 7497, account: str | None = None) -> dict:
+async def ib_portfolio(port: int = 7496, account: str | None = None) -> dict:
     """Get portfolio positions from Interactive Brokers.
 
     Returns all positions including stocks and options with market prices.
     Requires TWS or IB Gateway running locally.
 
     Args:
-        port: IB port (7497 for paper trading, 7496 for live)
+        port: IB port (7496 for live, 7497 for paper)
         account: Specific account ID (optional, uses first if not specified)
     """
     return await get_portfolio(port, account)
@@ -499,10 +504,12 @@ async def ib_find_short_roll(
     expiry: str | None = None,
     right: str = "C",
 ) -> dict:
-    """Find roll options for a short position using real-time IB data.
+    """Find roll, spread, or covered call/put candidates using real-time IB data.
 
-    Analyzes current short option position and finds roll candidates with
-    credit/debit analysis. Generates a markdown report.
+    Auto-detects mode based on existing positions:
+    - Short option found: roll candidates with credit/debit analysis
+    - Long option found: short candidates to create a vertical spread
+    - Long stock found: covered call/put candidates
     Requires TWS or IB Gateway running locally.
 
     Args:
@@ -513,171 +520,94 @@ async def ib_find_short_roll(
         expiry: Current expiry YYYYMMDD (optional, auto-detects from portfolio)
         right: 'C' for call or 'P' for put (default: C)
     """
-    from datetime import datetime
-
-    from ib_async import IB
-
-    ib = IB()
-    try:
-        await ib.connectAsync("127.0.0.1", port, clientId=30)
-    except Exception as e:
-        return {"error": f"Could not connect to IB on port {port}: {e}"}
-
-    try:
-        # Get position or use provided params
-        if strike and expiry:
-            current_position = {
-                "quantity": -1,
-                "strike": strike,
-                "expiry": expiry,
-                "right": right,
-                "account": account or "N/A",
-            }
-        else:
-            current_position = await get_current_position(ib, symbol.upper(), account)
-            if not current_position:
-                return {
-                    "error": f"No short option position found for {symbol}. "
-                    "Use strike and expiry params to specify manually."
-                }
-
-        # Get underlying price
-        underlying_price = await get_underlying_price(ib, symbol.upper())
-
-        # Get option chain parameters
-        chain_params = await get_option_chain_params(ib, symbol.upper())
-
-        # Get current option quote
-        current_quotes = await get_option_quotes(
-            ib,
-            symbol.upper(),
-            current_position["expiry"],
-            [current_position["strike"]],
-            current_position["right"],
-        )
-
-        if not current_quotes:
-            return {"error": "Could not get quote for current position"}
-
-        current_quote = current_quotes[0]
-        buy_price = current_quote["ask"]
-
-        # Get future expirations
-        current_exp = current_position["expiry"]
-        future_exps = [e for e in chain_params["expirations"] if e > current_exp][:5]
-
-        if not future_exps:
-            return {"error": "No future expirations available"}
-
-        # Determine strike range
-        current_strike = current_position["strike"]
-        all_strikes = chain_params["strikes"]
-
-        if current_position["right"] == "C":
-            target_strikes = [
-                s
-                for s in all_strikes
-                if current_strike - 10 <= s <= current_strike + 50 and s % 5 == 0
-            ]
-        else:
-            target_strikes = [
-                s
-                for s in all_strikes
-                if current_strike - 50 <= s <= current_strike + 10 and s % 5 == 0
-            ]
-
-        target_strikes = sorted(target_strikes)[:10]
-
-        # Fetch quotes for each target expiration
-        roll_data = {}
-        for exp in future_exps:
-            quotes = await get_option_quotes(
-                ib, symbol.upper(), exp, target_strikes, current_position["right"]
-            )
-            roll_data[exp] = calculate_roll_options(current_position, quotes, buy_price)
-
-        # Fetch earnings date
-        earnings_date = fetch_earnings_date(symbol.upper())
-
-        # Generate report
-        report = generate_roll_report(
-            symbol.upper(),
-            underlying_price,
-            current_position,
-            current_quote,
-            roll_data,
-            earnings_date,
-        )
-
-        # Save report
-        sandbox_dir = Path(__file__).parent.parent / "sandbox"
-        sandbox_dir.mkdir(exist_ok=True)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-        report_path = sandbox_dir / f"ib_short_report_{symbol.upper()}_{timestamp}.md"
-        report_path.write_text(report, encoding="utf-8")
-
-        return {
-            "success": True,
-            "symbol": symbol.upper(),
-            "current_position": {
-                "strike": current_position["strike"],
-                "expiry": current_position["expiry"],
-                "right": current_position["right"],
-                "quantity": current_position["quantity"],
-            },
-            "underlying_price": underlying_price,
-            "buy_to_close": buy_price,
-            "report_path": str(report_path),
-            "expirations_analyzed": future_exps,
-        }
-
-    finally:
-        ib.disconnect()
+    return await find_roll_candidates(
+        symbol=symbol, port=port, account=account, strike=strike, expiry=expiry, right=right
+    )
 
 
 @mcp.tool()
 async def ib_portfolio_action_report(
-    output_dir: str,
-    port: int = 7497,
+    port: int = 7496,
     account: str | None = None,
 ) -> dict:
-    """Generate comprehensive portfolio action report with earnings and risk assessment.
+    """Analyze portfolio positions with earnings dates and risk assessment.
 
-    Analyzes all positions, categorizes by urgency/risk, and generates
-    a markdown report with recommendations.
+    Fetches positions, groups into spreads, categorizes by urgency,
+    and returns structured analysis with recommendations.
     Requires TWS or IB Gateway running locally.
 
     Args:
-        output_dir: Directory to store report
-        port: IB port (7497 for paper trading, 7496 for live)
+        port: IB port (7496 for live, 7497 for paper)
         account: Specific account ID (optional)
     """
-    from datetime import datetime
-
-    # Fetch portfolio data
     data = await get_portfolio_data(port, account)
 
     if "error" in data:
         return {"error": data["error"]}
 
-    # Create output directory
-    report_dir = Path(output_dir)
-    report_dir.mkdir(parents=True, exist_ok=True)
+    return analyze_portfolio(data)
 
-    # Generate report
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-    accounts = data.get("accounts", [])
-    account_suffix = accounts[0] if len(accounts) == 1 else "multi" if accounts else "unknown"
-    md_path = report_dir / f"ib_portfolio_action_report_{account_suffix}_{timestamp}.md"
 
-    generate_action_report(data, md_path)
+@mcp.tool()
+async def ib_option_expiries(symbol: str, port: int = 7496) -> dict:
+    """List available option expiration dates from Interactive Brokers.
 
-    return {
-        "success": True,
-        "markdown_path": str(md_path),
-        "accounts": data.get("accounts", []),
-        "total_positions": sum(len(p) for p in data.get("positions", {}).values()),
-    }
+    Requires TWS or IB Gateway running locally.
+
+    Args:
+        symbol: Ticker symbol
+        port: IB port (7496 for live, 7497 for paper)
+    """
+    return await ib_get_expiries(symbol.upper(), port=port)
+
+
+@mcp.tool()
+async def ib_option_chain(symbol: str, expiry: str, port: int = 7496) -> dict:
+    """Get option chain data from Interactive Brokers with real-time quotes.
+
+    Returns calls and puts with strikes, bids, asks, volume, and implied volatility.
+    Requires TWS or IB Gateway running locally.
+
+    Args:
+        symbol: Ticker symbol
+        expiry: Expiration date (YYYYMMDD)
+        port: IB port (7496 for live, 7497 for paper)
+    """
+    return await ib_get_option_chain(symbol.upper(), expiry, port=port)
+
+
+@mcp.tool()
+async def ib_delta_exposure(port: int = 7496) -> dict:
+    """Calculate delta-adjusted notional exposure across all IBKR accounts.
+
+    Computes option deltas using Black-Scholes and reports long/short exposure
+    by account and underlying symbol.
+    Requires TWS or IB Gateway running locally.
+
+    Args:
+        port: IB port (7496 for live, 7497 for paper)
+    """
+    return await get_delta_exposure(port)
+
+
+@mcp.tool()
+async def ib_collar(
+    symbol: str,
+    port: int = 7496,
+    account: str | None = None,
+) -> dict:
+    """Generate tactical collar strategy report for protecting PMCC positions.
+
+    Analyzes existing long call (PMCC) positions and recommends put protection
+    through earnings or high-risk events.
+    Requires TWS or IB Gateway running locally.
+
+    Args:
+        symbol: Ticker symbol (e.g., AAPL)
+        port: IB port (7496 for live, 7497 for paper)
+        account: Account ID (optional)
+    """
+    return await find_collar_candidates(symbol, port, account)
 
 
 def main():

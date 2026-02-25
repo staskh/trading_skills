@@ -6,6 +6,14 @@ import math
 from scipy.stats import norm
 
 
+def _d1_d2(S: float, K: float, T: float, r: float, sigma: float) -> tuple[float, float]:
+    """Calculate d1 and d2 for Black-Scholes formula."""
+    sqrt_T = math.sqrt(T)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * sqrt_T)
+    d2 = d1 - sigma * sqrt_T
+    return d1, d2
+
+
 def black_scholes_price(
     S: float, K: float, T: float, r: float, sigma: float, option_type: str
 ) -> float:
@@ -24,9 +32,7 @@ def black_scholes_price(
             return max(0, S - K)
         return max(0, K - S)
 
-    sqrt_T = math.sqrt(T)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * sqrt_T)
-    d2 = d1 - sigma * sqrt_T
+    d1, d2 = _d1_d2(S, K, T, r, sigma)
 
     if option_type == "call":
         return S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
@@ -39,9 +45,8 @@ def black_scholes_vega(S: float, K: float, T: float, r: float, sigma: float) -> 
     if T <= 0 or sigma <= 0:
         return 0.0
 
-    sqrt_T = math.sqrt(T)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * sqrt_T)
-    return S * norm.pdf(d1) * sqrt_T
+    d1, _ = _d1_d2(S, K, T, r, sigma)
+    return S * norm.pdf(d1) * math.sqrt(T)
 
 
 def black_scholes_delta(
@@ -63,7 +68,7 @@ def black_scholes_delta(
         else:
             return -1.0 if S < K else 0.0
 
-    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+    d1, _ = _d1_d2(S, K, T, r, sigma)
 
     if option_type == "call":
         return norm.cdf(d1)
@@ -81,9 +86,8 @@ def black_scholes_greeks(
     if sigma <= 0:
         return {"error": "Invalid volatility"}
 
+    d1, d2 = _d1_d2(S, K, T, r, sigma)
     sqrt_T = math.sqrt(T)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * sqrt_T)
-    d2 = d1 - sigma * sqrt_T
 
     N_d1 = norm.cdf(d1)
     N_d2 = norm.cdf(d2)

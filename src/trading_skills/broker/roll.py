@@ -1,14 +1,16 @@
 # ABOUTME: Finds roll options for short positions using real-time IBKR data.
-# ABOUTME: Generates markdown reports with credit/debit analysis and recommendations.
+# ABOUTME: Evaluates candidates, calculates roll credits/debits, and returns structured data.
 
 import asyncio
+import math
 import sys
 from datetime import datetime
 
 from ib_async import IB, Option, Stock
 
+from trading_skills.broker.connection import CLIENT_IDS, ib_connection
 from trading_skills.earnings import get_next_earnings_date
-from trading_skills.utils import days_to_expiry, format_expiry_long
+from trading_skills.utils import days_to_expiry
 
 
 async def get_current_position(ib: IB, symbol: str, account: str = None) -> dict | None:
@@ -264,574 +266,238 @@ def calculate_roll_options(current: dict, target_quotes: list, buy_price: float)
     return rolls
 
 
-# format_expiry_long and days_to_expiry are imported from trading_skills.utils
-format_expiry = format_expiry_long
+async def _find_roll(ib, symbol, current_position, chain_params):
+    """Find roll candidates for an existing short position."""
+    underlying_price = await get_underlying_price(ib, symbol)
 
+    # Get current option quote for buy-to-close cost
+    current_quotes = await get_option_quotes(
+        ib,
+        symbol,
+        current_position["expiry"],
+        [current_position["strike"]],
+        current_position["right"],
+    )
 
-fetch_earnings_date = get_next_earnings_date
+    if not current_quotes:
+        return {"error": "Could not get quote for current position"}
 
+    buy_price = current_quotes[0]["ask"]
 
-def generate_report(
-    symbol: str,
-    underlying_price: float,
-    current_position: dict,
-    current_quote: dict,
-    roll_data: dict,
-    earnings_date: str = None,
-) -> str:
-    """Generate markdown roll analysis report."""
-    now = datetime.now()
-    date_str = now.strftime("%B %d, %Y at %H:%M")
+    # Get future expirations after current
+    current_exp = current_position["expiry"]
+    future_exps = [e for e in chain_params["expirations"] if e > current_exp][:5]
 
+    if not future_exps:
+        return {"error": "No future expirations available"}
+
+    # Determine strike range
     current_strike = current_position["strike"]
-    current_expiry = current_position["expiry"]
-    current_right = current_position["right"]
-    quantity = abs(current_position["quantity"])
-    buy_price = current_quote["ask"]  # Cost to close
+    all_strikes = chain_params["strikes"]
 
-    current_otm_pct = ((current_strike - underlying_price) / underlying_price) * 100
-    if current_right == "P":
-        current_otm_pct = ((underlying_price - current_strike) / underlying_price) * 100
-
-    lines = [
-        f"# Roll Analysis Report: {symbol}",
-        f"**Generated:** {date_str}",
-        "",
-        "---",
-        "",
-        "## Current Short Position",
-        "",
-        "| Field | Value |",
-        "|-------|-------|",
-        f"| **Symbol** | {symbol} |",
-        f"| **Position** | -{quantity} "
-        f"{'Call' if current_right == 'C' else 'Put'}"
-        f"{'s' if quantity > 1 else ''} |",
-        f"| **Strike** | ${current_strike:.2f} |",
-        f"| **Expiration** | {format_expiry(current_expiry)} "
-        f"({days_to_expiry(current_expiry)} days) |",
-        f"| **Underlying Price** | ${underlying_price:.2f} |",
-        f"| **OTM %** | {current_otm_pct:.1f}% |",
-        f"| **Buy to Close** | ${buy_price:.2f} |",
-        f"| **Total Cost to Close** | ${buy_price * quantity * 100:,.0f} |",
-    ]
-
-    if earnings_date:
-        lines.append(f"| **Earnings Date** | {earnings_date} |")
-
-    lines.extend(["", "---", ""])
-
-    # Roll candidates by expiration
-    lines.extend(
-        [
-            "## Roll Candidates",
-            "",
+    if current_position["right"] == "C":
+        target_strikes = [
+            s for s in all_strikes
+            if current_strike - 10 <= s <= current_strike + 50 and s % 5 == 0
         ]
-    )
-
-    best_rolls = []
-
-    for expiry, rolls in sorted(roll_data.items()):
-        if not rolls:
-            continue
-
-        exp_days = days_to_expiry(expiry)
-        lines.extend(
-            [
-                f"### {format_expiry(expiry)} ({exp_days} days)",
-                "",
-                "| Strike | OTM% | Sell @ | Net | Total ({0} contracts) | Rating |".format(
-                    quantity
-                ),
-                "|--------|------|--------|-----|----------------------|--------|",
-            ]
-        )
-
-        for roll in rolls:
-            strike = roll["strike"]
-            otm_pct = ((strike - underlying_price) / underlying_price) * 100
-            if current_right == "P":
-                otm_pct = ((underlying_price - strike) / underlying_price) * 100
-
-            net = roll["net"]
-            net_str = f"+${net:.2f}" if net > 0 else f"-${abs(net):.2f}"
-            net_type = "credit" if net > 0 else "debit"
-
-            total = net * quantity * 100
-            total_str = f"+${total:,.0f}" if total > 0 else f"-${abs(total):,.0f}"
-
-            # Rating based on credit and OTM%
-            if net > 0 and otm_pct >= 5:
-                rating = "Excellent" if net > 2 else "Good"
-            elif net > 0:
-                rating = "OK"
-            elif net > -1:
-                rating = "Fair"
-            else:
-                rating = "Poor"
-
-            lines.append(
-                f"| ${strike:.1f} | {otm_pct:.1f}% | ${roll['sell_price']:.2f} | "
-                f"**{net_str}** {net_type} | {total_str} | {rating} |"
-            )
-
-            # Track best rolls for recommendations
-            if net > 0:
-                best_rolls.append(
-                    {
-                        "expiry": expiry,
-                        "expiry_str": format_expiry(expiry),
-                        "strike": strike,
-                        "otm_pct": otm_pct,
-                        "net": net,
-                        "total": total,
-                        "days": exp_days,
-                    }
-                )
-
-        lines.extend(["", ""])
-
-    # Recommendations
-    lines.extend(
-        [
-            "---",
-            "",
-            "## Recommendations",
-            "",
-        ]
-    )
-
-    if not best_rolls:
-        lines.extend(
-            [
-                "No credit rolls available. Consider:",
-                "- Accepting a debit to move strike higher",
-                "- Waiting for better pricing",
-                "- Closing position outright",
-                "",
-            ]
-        )
     else:
-
-        def roll_score(r):
-            otm_improvement = r["otm_pct"] - current_otm_pct
-            safety_score = r["otm_pct"] * 0.5 + max(0, otm_improvement) * 2
-            credit_score = min(r["net"], 10) * 0.3
-            time_score = min(r["days"] / 60, 3) * 0.2
-            return safety_score + credit_score + time_score
-
-        best_rolls.sort(key=roll_score, reverse=True)
-
-        lines.extend(
-            [
-                "### Top Roll Candidates (Safety + Credit)",
-                "",
-            ]
-        )
-
-        for i, roll in enumerate(best_rolls[:5], 1):
-            emoji = ["1.", "2.", "3.", "4.", "5."][i - 1]
-            lines.extend(
-                [
-                    f"**{emoji} {roll['expiry_str']} ${roll['strike']:.1f}**",
-                    f"   - Net credit: **+${roll['net']:.2f}** "
-                    f"per contract (+${roll['total']:,.0f} total)",
-                    f"   - Strike {roll['otm_pct']:.1f}% OTM",
-                    f"   - {roll['days']} days to expiration",
-                    "",
-                ]
-            )
-
-        balanced = max(best_rolls, key=roll_score)
-
-        lines.extend(
-            [
-                "---",
-                "",
-                "### Recommended Roll",
-                "",
-                f"**Roll to {balanced['expiry_str']} ${balanced['strike']:.1f}**",
-                "",
-                f"- Collect **+${balanced['net']:.2f}** credit per contract",
-                f"- Total credit: **+${balanced['total']:,.0f}** for {quantity} contracts",
-                f"- New strike {balanced['otm_pct']:.1f}% out of the money",
-                f"- {balanced['days']} days to new expiration",
-                "",
-                "**Order:**",
-                "```",
-                f"BUY TO CLOSE  {quantity} {symbol} "
-                f"{format_expiry(current_expiry)} "
-                f"${current_strike:.1f} "
-                f"{'CALL' if current_right == 'C' else 'PUT'} "
-                f"@ ${buy_price:.2f}",
-                f"SELL TO OPEN  {quantity} {symbol} "
-                f"{balanced['expiry_str']} "
-                f"${balanced['strike']:.1f} "
-                f"{'CALL' if current_right == 'C' else 'PUT'} "
-                f"@ ${balanced['net'] + buy_price:.2f}",
-                "```",
-                "",
-            ]
-        )
-
-    lines.extend(
-        [
-            "---",
-            "",
-            f"*Report generated by Trading Skills on {now.strftime('%Y-%m-%d %H:%M')}*",
+        target_strikes = [
+            s for s in all_strikes
+            if current_strike - 50 <= s <= current_strike + 10 and s % 5 == 0
         ]
-    )
 
-    return "\n".join(lines)
+    target_strikes = sorted(target_strikes)[:10]
+
+    # Fetch quotes for each target expiration
+    roll_data = {}
+    for exp in future_exps:
+        quotes = await get_option_quotes(
+            ib, symbol, exp, target_strikes, current_position["right"]
+        )
+        roll_data[exp] = calculate_roll_options(current_position, quotes, buy_price)
+
+    earnings_date = get_next_earnings_date(symbol)
+
+    return {
+        "success": True,
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "mode": "roll",
+        "symbol": symbol,
+        "underlying_price": underlying_price,
+        "current_position": {
+            "strike": current_position["strike"],
+            "expiry": current_position["expiry"],
+            "right": current_position["right"],
+            "quantity": current_position["quantity"],
+        },
+        "buy_to_close": buy_price,
+        "roll_candidates": roll_data,
+        "earnings_date": earnings_date,
+        "expirations_analyzed": future_exps,
+    }
 
 
-def generate_spread_short_report(
-    symbol: str,
-    underlying_price: float,
-    long_option: dict,
-    candidates_by_expiry: dict,
-    right: str,
-    earnings_date: str = None,
-) -> str:
-    """Generate markdown report for selling short call/put against long option (vertical spread)."""
-    now = datetime.now()
-    date_str = now.strftime("%B %d, %Y at %H:%M")
+async def _find_spread(ib, symbol, long_option, right, chain_params):
+    """Find short candidates to create a vertical spread against a long option."""
+    underlying_price = await get_underlying_price(ib, symbol)
+    if math.isnan(underlying_price):
+        underlying_price = long_option["strike"]
+        print(
+            f"{symbol} price unavailable, using long strike ${underlying_price:.2f}",
+            file=sys.stderr,
+        )
 
-    quantity = long_option["quantity"]
-    long_strike = long_option["strike"]
     long_expiry = long_option["expiry"]
-    avg_cost = long_option["avg_cost"]
+    long_strike = long_option["strike"]
 
-    option_type = "Call" if right == "C" else "Put"
+    # Check expirations at or after long option expiry
+    target_exps = [e for e in chain_params["expirations"] if e >= long_expiry][:3]
 
-    lines = [
-        f"# Vertical Spread Analysis: {symbol}",
-        f"**Generated:** {date_str}",
-        "",
-        "---",
-        "",
-        f"## Current Long {option_type} Position",
-        "",
-        "| Field | Value |",
-        "|-------|-------|",
-        f"| **Symbol** | {symbol} |",
-        f"| **Position** | +{quantity} {option_type}{'s' if quantity > 1 else ''} |",
-        f"| **Strike** | ${long_strike:.2f} |",
-        f"| **Expiration** | {format_expiry(long_expiry)} ({days_to_expiry(long_expiry)} days) |",
-        f"| **Avg Cost** | ${avg_cost:.2f} |",
-        f"| **Underlying Price** | ${underlying_price:.2f} |",
-    ]
+    if not target_exps:
+        return {"error": "No valid expirations available"}
 
-    if earnings_date:
-        lines.append(f"| **Earnings Date** | {earnings_date} |")
-
-    lines.extend(["", "---", ""])
-
-    # Short candidates by expiration
-    lines.extend(
-        [
-            f"## Short {option_type} Candidates (Create Vertical Spread)",
-            "",
-            f"Selling a higher strike {option_type.lower()} creates a "
-            f"**{'bull' if right == 'C' else 'bear'} "
-            f"{option_type.lower()} spread**.",
-            "",
-        ]
-    )
-
-    all_candidates = []
-
-    for expiry, candidates in sorted(candidates_by_expiry.items()):
-        if not candidates:
-            continue
-
-        exp_days = days_to_expiry(expiry)
-        lines.extend(
-            [
-                f"### {format_expiry(expiry)} ({exp_days} days)",
-                "",
-                "| Strike | OTM% | Bid | Width | Max Profit | Max Loss | Score |",
-                "|--------|------|-----|-------|------------|----------|-------|",
-            ]
-        )
-
-        for c in candidates[:8]:  # Top 8 per expiry
-            width = abs(c["strike"] - long_strike)
-            premium = c["bid"]
-            max_profit = premium * 100  # Premium received per contract
-            net_debit = avg_cost - premium
-            max_loss = max(net_debit, 0) * 100  # Net debit per contract
-
-            lines.append(
-                f"| ${c['strike']:.1f} | {c['otm_pct']:.1f}% | ${c['bid']:.2f} | "
-                f"${width:.1f} | ${max_profit:.0f} | ${max_loss:.0f} | {c['score']:.0f} |"
-            )
-            c["width"] = width
-            c["max_profit"] = max_profit
-            c["max_loss"] = max_loss
-            all_candidates.append(c)
-
-        lines.extend(["", ""])
-
-    # Recommendations
-    lines.extend(
-        [
-            "---",
-            "",
-            "## Recommendations",
-            "",
-        ]
-    )
-
-    if not all_candidates:
-        lines.extend(
-            [
-                "No suitable short options found. Consider:",
-                "- Waiting for higher implied volatility",
-                "- Looking at different expirations",
-                "",
-            ]
-        )
+    # Determine strike range (OTM relative to long strike)
+    all_strikes = chain_params["strikes"]
+    if right == "C":
+        target_strikes = [s for s in all_strikes if long_strike < s <= underlying_price * 2.0]
     else:
-        all_candidates.sort(key=lambda x: x["score"], reverse=True)
+        target_strikes = [s for s in all_strikes if underlying_price * 0.5 <= s < long_strike]
 
-        lines.extend(
-            [
-                "### Top Candidates (Ranked by Score)",
-                "",
-            ]
-        )
+    target_strikes = sorted(target_strikes)[:15]
 
-        for i, c in enumerate(all_candidates[:5], 1):
-            total_premium = c["bid"] * quantity * 100
-            lines.extend(
-                [
-                    f"**{i}. {format_expiry(c['expiry'])} ${c['strike']:.1f} {option_type}**",
-                    f"   - Premium: **${c['bid']:.2f}** per share "
-                    f"(${c['bid'] * 100:.0f} per contract)",
-                    f"   - Total for {quantity} contracts: "
-                    f"**${total_premium:,.0f}**",
-                    f"   - Strike {c['otm_pct']:.1f}% out of the money",
-                    f"   - Spread width: ${c['width']:.1f}",
-                    f"   - {c['days']} days to expiration",
-                    "",
-                ]
-            )
+    # Fetch quotes and evaluate candidates
+    candidates_by_expiry = {}
+    for exp in target_exps:
+        quotes = await get_option_quotes(ib, symbol, exp, target_strikes, right)
+        dte = days_to_expiry(exp)
+        candidates = evaluate_short_candidates(quotes, underlying_price, right, dte)
+        if candidates:
+            candidates_by_expiry[exp] = candidates
 
-        best = all_candidates[0]
-        best_premium = best["bid"] * quantity * 100
-        spread_width = abs(best["strike"] - long_strike)
-        best_exp = format_expiry(best['expiry'])
-        spread_type = "debit" if avg_cost > best["bid"] else "credit"
-        net_cost = abs(avg_cost - best["bid"])
+    earnings_date = get_next_earnings_date(symbol)
 
-        lines.extend(
-            [
-                "---",
-                "",
-                "### Recommended Position",
-                "",
-                f"**SELL {quantity} {symbol} {best_exp} "
-                f"${best['strike']:.1f} {option_type.upper()}**",
-                "",
-                f"This creates a **{option_type.lower()} "
-                f"{spread_type} spread**:",
-                f"- Long ${long_strike:.1f} "
-                f"{option_type.lower()} @ ${avg_cost:.2f}",
-                f"- Short ${best['strike']:.1f} "
-                f"{option_type.lower()} @ ${best['bid']:.2f}",
-                f"- Spread width: **${spread_width:.1f}**",
-                f"- Net {spread_type}: "
-                f"**${net_cost:.2f}** per share",
-                f"- Premium collected: **${best_premium:,.0f}** total",
-                "",
-                "**Order:**",
-                "```",
-                f"SELL TO OPEN  {quantity} {symbol} "
-                f"{best_exp} ${best['strike']:.1f} "
-                f"{option_type.upper()} @ ${best['bid']:.2f}",
-                "```",
-                "",
-            ]
-        )
+    return {
+        "success": True,
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "mode": "spread",
+        "symbol": symbol,
+        "underlying_price": underlying_price,
+        "right": right,
+        "earnings_date": earnings_date,
+        "long_option": {
+            "strike": long_option["strike"],
+            "expiry": long_option["expiry"],
+            "right": long_option["right"],
+            "quantity": long_option["quantity"],
+            "avg_cost": long_option.get("avg_cost"),
+        },
+        "candidates_by_expiry": candidates_by_expiry,
+        "expirations_analyzed": target_exps,
+    }
 
-    lines.extend(
-        [
-            "---",
-            "",
-            f"*Report generated by Trading Skills on {now.strftime('%Y-%m-%d %H:%M')}*",
+
+async def _find_new_short(ib, symbol, long_position, right, chain_params):
+    """Find covered call/put candidates against a long stock position."""
+    underlying_price = await get_underlying_price(ib, symbol)
+
+    # Future expirations from today
+    today_str = datetime.now().strftime("%Y%m%d")
+    future_exps = [e for e in chain_params["expirations"] if e > today_str][:6]
+
+    if not future_exps:
+        return {"error": "No future expirations available"}
+
+    # Determine OTM strike range
+    all_strikes = chain_params["strikes"]
+    if right == "C":
+        target_strikes = [
+            s for s in all_strikes if underlying_price <= s <= underlying_price * 1.20
         ]
-    )
+    else:
+        target_strikes = [
+            s for s in all_strikes if underlying_price * 0.80 <= s <= underlying_price
+        ]
 
-    return "\n".join(lines)
+    target_strikes = sorted(target_strikes)[:15]
+
+    # Fetch quotes and evaluate candidates
+    candidates_by_expiry = {}
+    for exp in future_exps:
+        quotes = await get_option_quotes(ib, symbol, exp, target_strikes, right)
+        dte = days_to_expiry(exp)
+        candidates = evaluate_short_candidates(quotes, underlying_price, right, dte)
+        if candidates:
+            candidates_by_expiry[exp] = candidates
+
+    earnings_date = get_next_earnings_date(symbol)
+
+    return {
+        "success": True,
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "mode": "new_short",
+        "symbol": symbol,
+        "underlying_price": underlying_price,
+        "right": right,
+        "earnings_date": earnings_date,
+        "long_position": {
+            "shares": long_position["quantity"],
+            "avg_cost": long_position["avg_cost"],
+        },
+        "candidates_by_expiry": candidates_by_expiry,
+        "expirations_analyzed": future_exps,
+    }
 
 
-def generate_new_short_report(
+async def find_roll_candidates(
     symbol: str,
-    underlying_price: float,
-    long_position: dict,
-    candidates_by_expiry: dict,
-    right: str,
-    earnings_date: str = None,
-) -> str:
-    """Generate markdown report for opening a new short position."""
-    now = datetime.now()
-    date_str = now.strftime("%B %d, %Y at %H:%M")
+    port: int = 7496,
+    account: str | None = None,
+    strike: float | None = None,
+    expiry: str | None = None,
+    right: str = "C",
+) -> dict:
+    """Find roll, spread, or covered call/put candidates.
 
-    quantity = long_position["quantity"]
-    contracts = quantity // 100  # Number of covered calls possible
-    avg_cost = long_position["avg_cost"]
+    Connects to IB and auto-detects the mode based on existing positions:
+    - Short option found → roll mode (find roll candidates)
+    - Long option found → spread mode (find short to create vertical spread)
+    - Long stock found → new_short mode (find covered call/put candidates)
+    """
+    symbol = symbol.upper()
+    try:
+        async with ib_connection(port, CLIENT_IDS["roll"]) as ib:
+            chain_params = await get_option_chain_params(ib, symbol)
 
-    lines = [
-        f"# New Short Position Analysis: {symbol}",
-        f"**Generated:** {date_str}",
-        "",
-        "---",
-        "",
-        "## Current Long Stock Position",
-        "",
-        "| Field | Value |",
-        "|-------|-------|",
-        f"| **Symbol** | {symbol} |",
-        f"| **Shares** | {quantity:,} |",
-        f"| **Avg Cost** | ${avg_cost:.2f} |",
-        f"| **Current Price** | ${underlying_price:.2f} |",
-        f"| **P&L** | "
-        f"${(underlying_price - avg_cost) * quantity:,.2f} "
-        f"({((underlying_price - avg_cost) / avg_cost * 100):.1f}%) |",
-        f"| **Contracts Available** | {contracts} (100 shares each) |",
-    ]
+            # Explicit strike/expiry → roll mode
+            if strike and expiry:
+                current_position = {
+                    "quantity": -1,
+                    "strike": strike,
+                    "expiry": expiry,
+                    "right": right,
+                    "account": account or "N/A",
+                }
+                return await _find_roll(ib, symbol, current_position, chain_params)
 
-    if earnings_date:
-        lines.append(f"| **Earnings Date** | {earnings_date} |")
+            # Auto-detect: try short position first
+            current_position = await get_current_position(ib, symbol, account)
+            if current_position:
+                return await _find_roll(ib, symbol, current_position, chain_params)
 
-    lines.extend(["", "---", ""])
+            # No short → try long option for spread
+            long_option = await get_long_option_position(ib, symbol, right, account)
+            if long_option:
+                return await _find_spread(ib, symbol, long_option, right, chain_params)
 
-    # Short candidates by expiration
-    lines.extend(
-        [
-            f"## {'Covered Call' if right == 'C' else 'Protective Put'} Candidates",
-            "",
-        ]
-    )
+            # No long option → try long stock for covered call/put
+            long_stock = await get_long_stock_position(ib, symbol, account)
+            if long_stock:
+                return await _find_new_short(ib, symbol, long_stock, right, chain_params)
 
-    all_candidates = []
+            return {
+                "error": f"No positions found for {symbol}. "
+                "Use strike and expiry params to specify a short position manually."
+            }
 
-    for expiry, candidates in sorted(candidates_by_expiry.items()):
-        if not candidates:
-            continue
-
-        exp_days = days_to_expiry(expiry)
-        lines.extend(
-            [
-                f"### {format_expiry(expiry)} ({exp_days} days)",
-                "",
-                "| Strike | OTM% | Bid | Premium/Contract | Ann. Return | Score |",
-                "|--------|------|-----|------------------|-------------|-------|",
-            ]
-        )
-
-        for c in candidates[:8]:  # Top 8 per expiry
-            total_premium = c["bid"] * contracts * 100
-            lines.append(
-                f"| ${c['strike']:.1f} | {c['otm_pct']:.1f}% | ${c['bid']:.2f} | "
-                f"${c['bid'] * 100:.0f} | {c['annual_return']:.1f}% | {c['score']:.0f} |"
-            )
-            all_candidates.append(c)
-
-        lines.extend(["", ""])
-
-    # Recommendations
-    lines.extend(
-        [
-            "---",
-            "",
-            "## Recommendations",
-            "",
-        ]
-    )
-
-    if not all_candidates:
-        lines.extend(
-            [
-                "No suitable short options found. Consider:",
-                "- Waiting for higher implied volatility",
-                "- Looking at different expirations",
-                "",
-            ]
-        )
-    else:
-        all_candidates.sort(key=lambda x: x["score"], reverse=True)
-
-        lines.extend(
-            [
-                "### Top Candidates (Ranked by Score)",
-                "",
-            ]
-        )
-
-        for i, c in enumerate(all_candidates[:5], 1):
-            total_premium = c["bid"] * contracts * 100
-            lines.extend(
-                [
-                    f"**{i}. {format_expiry(c['expiry'])} "
-                    f"${c['strike']:.1f} "
-                    f"{'Call' if right == 'C' else 'Put'}**",
-                    f"   - Premium: **${c['bid']:.2f}** per share "
-                    f"(${c['bid'] * 100:.0f} per contract)",
-                    f"   - Total for {contracts} contracts: **${total_premium:,.0f}**",
-                    f"   - Strike {c['otm_pct']:.1f}% out of the money",
-                    f"   - Annualized return: {c['annual_return']:.1f}%",
-                    f"   - {c['days']} days to expiration",
-                    "",
-                ]
-            )
-
-        best = all_candidates[0]
-        best_premium = best["bid"] * contracts * 100
-
-        lines.extend(
-            [
-                "---",
-                "",
-                "### Recommended Position",
-                "",
-                f"**SELL {contracts} {symbol} "
-                f"{format_expiry(best['expiry'])} "
-                f"${best['strike']:.1f} "
-                f"{'CALL' if right == 'C' else 'PUT'}**",
-                "",
-                f"- Collect **${best['bid']:.2f}** per share",
-                f"- Total premium: **${best_premium:,.0f}**",
-                f"- Strike {best['otm_pct']:.1f}% above current price"
-                if right == "C"
-                else f"- Strike {best['otm_pct']:.1f}% below current price",
-                (
-                    f"- Max profit if called away: "
-                    f"${(best['strike'] - avg_cost) * quantity + best_premium:,.0f}"
-                    if right == "C"
-                    else ""
-                ),
-                f"- {best['days']} days to expiration",
-                "",
-                "**Order:**",
-                "```",
-                f"SELL TO OPEN  {contracts} {symbol} "
-                f"{format_expiry(best['expiry'])} "
-                f"${best['strike']:.1f} "
-                f"{'CALL' if right == 'C' else 'PUT'} "
-                f"@ ${best['bid']:.2f}",
-                "```",
-                "",
-            ]
-        )
-
-    lines.extend(
-        [
-            "---",
-            "",
-            f"*Report generated by Trading Skills on {now.strftime('%Y-%m-%d %H:%M')}*",
-        ]
-    )
-
-    return "\n".join(lines)
+    except ConnectionError as e:
+        return {"error": str(e)}

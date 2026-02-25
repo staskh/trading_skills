@@ -38,7 +38,7 @@ Present critical findings to the user: red/yellow items requiring attention, top
 
 ## Arguments
 
-- `--port` - IB port (default: 7497 for paper trading)
+- `--port` - IB port (default: 7496 for live trading)
 - `--account` - Specific account ID to analyze (optional, defaults to all accounts)
 
 ## JSON Output

@@ -4,43 +4,13 @@
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import pandas as pd
 import yfinance as yf
 
-from trading_skills.earnings import get_next_earnings_date
+from trading_skills.earnings import get_earnings_info
 from trading_skills.technicals import compute_raw_indicators
 
 
-def get_next_earnings(ticker: yf.Ticker) -> tuple[str | None, str | None]:
-    """Get next earnings date and timing (BMO/AMC) from a yfinance Ticker."""
-    try:
-        date_str = get_next_earnings_date(ticker.ticker)
-        if not date_str:
-            return None, None
-
-        # Determine timing from earnings_dates index
-        timing = None
-        try:
-            earnings_dates = ticker.earnings_dates
-            if earnings_dates is not None and not earnings_dates.empty:
-                now = pd.Timestamp.now(tz="America/New_York")
-                future_dates = earnings_dates[earnings_dates.index >= now]
-                if not future_dates.empty:
-                    next_date = future_dates.index[-1]
-                    if hasattr(next_date, "hour"):
-                        if next_date.hour < 12:
-                            timing = "BMO"
-                        elif next_date.hour >= 16:
-                            timing = "AMC"
-        except Exception:
-            pass
-
-        return date_str, timing
-    except Exception:
-        return None, None
-
-
-def compute_bullish_score(symbol: str, period: str = "3mo") -> dict | None:
+def compute_bullish_score(symbol: str, period: str = "3mo", ticker=None) -> dict | None:
     """Compute bullish trend score for a symbol.
 
     Score components (higher = more bullish):
@@ -51,13 +21,15 @@ def compute_bullish_score(symbol: str, period: str = "3mo") -> dict | None:
     - Price momentum (% change over period): weighted contribution
     """
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = ticker or yf.Ticker(symbol)
         df = ticker.history(period=period)
 
         if df.empty or len(df) < 50:
             return None
 
-        next_earnings, earnings_timing = get_next_earnings(ticker)
+        earnings_info = get_earnings_info(symbol)
+        next_earnings = earnings_info.get("earnings_date")
+        earnings_timing = earnings_info.get("timing")
 
         score = 0.0
         signals = []

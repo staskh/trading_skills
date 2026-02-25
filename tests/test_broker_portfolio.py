@@ -12,7 +12,7 @@ class TestGetPortfolio:
 
     def test_connection_failure(self):
         """Handles connection failure gracefully."""
-        with patch("trading_skills.broker.portfolio.IB") as MockIB:
+        with patch("trading_skills.broker.connection.IB") as MockIB:
             mock_ib = MagicMock()
             mock_ib.connectAsync = AsyncMock(side_effect=ConnectionRefusedError("refused"))
             MockIB.return_value = mock_ib
@@ -23,7 +23,7 @@ class TestGetPortfolio:
 
     def test_invalid_account(self):
         """Handles invalid account selection."""
-        with patch("trading_skills.broker.portfolio.IB") as MockIB:
+        with patch("trading_skills.broker.connection.IB") as MockIB:
             mock_ib = MagicMock()
             mock_ib.connectAsync = AsyncMock()
             mock_ib.managedAccounts.return_value = ["U123456"]
@@ -36,7 +36,7 @@ class TestGetPortfolio:
 
     def test_empty_portfolio(self):
         """Handles empty portfolio."""
-        with patch("trading_skills.broker.portfolio.IB") as MockIB:
+        with patch("trading_skills.broker.connection.IB") as MockIB:
             mock_ib = MagicMock()
             mock_ib.connectAsync = AsyncMock()
             mock_ib.managedAccounts.return_value = ["U123456"]
@@ -51,7 +51,7 @@ class TestGetPortfolio:
 
     def test_stock_position(self):
         """Formats stock position correctly."""
-        with patch("trading_skills.broker.portfolio.IB") as MockIB:
+        with patch("trading_skills.broker.connection.IB") as MockIB:
             mock_ib = MagicMock()
             mock_ib.connectAsync = AsyncMock()
             mock_ib.managedAccounts.return_value = ["U123456"]
@@ -77,7 +77,7 @@ class TestGetPortfolio:
 
     def test_all_accounts(self):
         """Fetches positions from all accounts."""
-        with patch("trading_skills.broker.portfolio.IB") as MockIB:
+        with patch("trading_skills.broker.connection.IB") as MockIB:
             mock_ib = MagicMock()
             mock_ib.connectAsync = AsyncMock()
             mock_ib.managedAccounts.return_value = ["U123456", "U789012"]
@@ -92,8 +92,9 @@ class TestGetPortfolio:
     def test_option_position(self):
         """Formats option position with underlying price."""
         with (
-            patch("trading_skills.broker.portfolio.IB") as MockIB,
-            patch("trading_skills.broker.portfolio.fetch_with_timeout") as mock_fetch,
+            patch("trading_skills.broker.connection.IB") as MockIB,
+            patch("trading_skills.broker.connection.fetch_with_timeout") as mock_conn_fetch,
+            patch("trading_skills.broker.portfolio.fetch_with_timeout") as mock_port_fetch,
         ):
             mock_ib = MagicMock()
             mock_ib.connectAsync = AsyncMock()
@@ -114,20 +115,20 @@ class TestGetPortfolio:
             pos.avgCost = 250.0  # $2.50 per share * 100
             mock_ib.positions.return_value = [pos]
 
-            # Mock spot price fetch
+            # Mock spot price fetch (via connection.fetch_spot_prices)
             mock_ticker = MagicMock()
             mock_ticker.contract.symbol = "AAPL"
             mock_ticker.marketPrice.return_value = 195.0
+            mock_conn_fetch.side_effect = [
+                [pos.contract],  # qualifyContracts for stocks
+                [mock_ticker],  # reqTickers for stocks
+            ]
 
-            # Mock option price fetch
+            # Mock option price fetch (via portfolio's direct fetch_with_timeout)
             mock_opt_ticker = MagicMock()
             mock_opt_ticker.contract = pos.contract
             mock_opt_ticker.marketPrice.return_value = 3.50
-
-            # fetch_with_timeout returns different results on different calls
-            mock_fetch.side_effect = [
-                [pos.contract],  # qualifyContracts for stocks
-                [mock_ticker],  # reqTickers for stocks
+            mock_port_fetch.side_effect = [
                 [pos.contract],  # qualifyContracts for options
                 [mock_opt_ticker],  # reqTickers for options
             ]

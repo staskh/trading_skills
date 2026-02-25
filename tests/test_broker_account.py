@@ -12,7 +12,7 @@ class TestGetAccountSummary:
 
     def test_connection_failure(self):
         """Handles connection failure gracefully."""
-        with patch("trading_skills.broker.account.IB") as MockIB:
+        with patch("trading_skills.broker.connection.IB") as MockIB:
             mock_ib = MagicMock()
             mock_ib.connectAsync = AsyncMock(side_effect=ConnectionRefusedError("refused"))
             MockIB.return_value = mock_ib
@@ -23,7 +23,7 @@ class TestGetAccountSummary:
 
     def test_no_managed_accounts(self):
         """Handles no managed accounts."""
-        with patch("trading_skills.broker.account.IB") as MockIB:
+        with patch("trading_skills.broker.connection.IB") as MockIB:
             mock_ib = MagicMock()
             mock_ib.connectAsync = AsyncMock()
             mock_ib.managedAccounts.return_value = []
@@ -36,7 +36,7 @@ class TestGetAccountSummary:
 
     def test_successful_summary(self):
         """Successful account summary fetch."""
-        with patch("trading_skills.broker.account.IB") as MockIB:
+        with patch("trading_skills.broker.connection.IB") as MockIB:
             mock_ib = MagicMock()
             mock_ib.connectAsync = AsyncMock()
             mock_ib.managedAccounts.return_value = ["U123456"]
