@@ -3,7 +3,7 @@
 
 
 from trading_skills.black_scholes import black_scholes_price
-from trading_skills.scanner_pmcc import analyze_pmcc
+from trading_skills.scanner_pmcc import analyze_pmcc, format_scan_results
 
 
 class TestAnalyzePMCC:
@@ -115,3 +115,53 @@ class TestAnalyzePMCC:
         result = analyze_pmcc("BRK.A")
         # May return None or dict with error
         assert result is None or "error" in result
+
+
+class TestFormatScanResults:
+    """Tests for format_scan_results."""
+
+    def test_sorts_by_score_descending(self):
+        results = [
+            {"symbol": "A", "pmcc_score": 3, "metrics": {"annual_yield_est_pct": 10}},
+            {"symbol": "B", "pmcc_score": 7, "metrics": {"annual_yield_est_pct": 20}},
+            {"symbol": "C", "pmcc_score": 5, "metrics": {"annual_yield_est_pct": 15}},
+        ]
+        output = format_scan_results(results)
+        scores = [r["pmcc_score"] for r in output["results"]]
+        assert scores == [7, 5, 3]
+
+    def test_filters_errors(self):
+        results = [
+            {"symbol": "A", "pmcc_score": 5, "metrics": {"annual_yield_est_pct": 10}},
+            {"symbol": "B", "error": "No options"},
+        ]
+        output = format_scan_results(results)
+        assert output["count"] == 1
+        assert len(output["errors"]) == 1
+        assert output["errors"][0]["symbol"] == "B"
+
+    def test_secondary_sort_by_yield(self):
+        results = [
+            {"symbol": "A", "pmcc_score": 5, "metrics": {"annual_yield_est_pct": 10}},
+            {"symbol": "B", "pmcc_score": 5, "metrics": {"annual_yield_est_pct": 30}},
+        ]
+        output = format_scan_results(results)
+        symbols = [r["symbol"] for r in output["results"]]
+        assert symbols == ["B", "A"]
+
+    def test_handles_missing_metrics(self):
+        results = [
+            {"symbol": "A", "pmcc_score": 5},
+        ]
+        output = format_scan_results(results)
+        assert output["count"] == 1
+
+    def test_includes_scan_date(self):
+        output = format_scan_results([])
+        assert "scan_date" in output
+
+    def test_empty_results(self):
+        output = format_scan_results([])
+        assert output["count"] == 0
+        assert output["results"] == []
+        assert output["errors"] == []

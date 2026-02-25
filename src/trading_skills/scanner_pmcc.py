@@ -10,6 +10,29 @@ from trading_skills.black_scholes import black_scholes_delta, black_scholes_pric
 from trading_skills.utils import get_current_price
 
 
+def format_scan_results(results: list[dict]) -> dict:
+    """Sort and wrap PMCC scan results into output dict.
+
+    Filters valid results (with pmcc_score), sorts by score then yield,
+    and separates errors.
+    """
+    valid_results = [r for r in results if "pmcc_score" in r]
+    valid_results.sort(
+        key=lambda x: (
+            x["pmcc_score"],
+            x.get("metrics", {}).get("annual_yield_est_pct", 0),
+        ),
+        reverse=True,
+    )
+
+    return {
+        "scan_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "count": len(valid_results),
+        "results": valid_results,
+        "errors": [r for r in results if "error" in r],
+    }
+
+
 def find_strike_by_delta(
     chain, current_price, target_delta, expiry_days, iv, r=0.05, min_strike=None, max_strike=None
 ):

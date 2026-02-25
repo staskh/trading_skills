@@ -41,7 +41,7 @@ from trading_skills.quote import get_quote
 from trading_skills.report import generate_report_data
 from trading_skills.risk import calculate_risk_metrics
 from trading_skills.scanner_bullish import compute_bullish_score, scan_symbols
-from trading_skills.scanner_pmcc import analyze_pmcc
+from trading_skills.scanner_pmcc import analyze_pmcc, format_scan_results
 from trading_skills.spreads import (
     analyze_diagonal,
     analyze_iron_condor,
@@ -423,8 +423,6 @@ def scan_pmcc(
         leaps_delta: Target delta for LEAPS (default 0.80)
         short_delta: Target delta for short call (default 0.20)
     """
-    from datetime import datetime
-
     symbol_list = [s.strip().upper() for s in symbols.split(",")]
 
     results = []
@@ -438,24 +436,13 @@ def scan_pmcc(
         if result:
             results.append(result)
 
-    # Sort by score
-    valid_results = [r for r in results if "pmcc_score" in r]
-    valid_results.sort(
-        key=lambda x: (x["pmcc_score"], x.get("metrics", {}).get("annual_yield_est_pct", 0)),
-        reverse=True,
-    )
-
-    return {
-        "scan_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "criteria": {
-            "leaps_min_days": min_leaps_days,
-            "leaps_target_delta": leaps_delta,
-            "short_target_delta": short_delta,
-        },
-        "count": len(valid_results),
-        "results": valid_results,
-        "errors": [r for r in results if "error" in r],
+    output = format_scan_results(results)
+    output["criteria"] = {
+        "leaps_min_days": min_leaps_days,
+        "leaps_target_delta": leaps_delta,
+        "short_target_delta": short_delta,
     }
+    return output
 
 
 # ============================================================================
