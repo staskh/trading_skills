@@ -8,7 +8,7 @@ from datetime import datetime
 
 from ib_async import IB, Option, Stock
 
-from trading_skills.broker.connection import CLIENT_IDS, ib_connection
+from trading_skills.broker.connection import CLIENT_IDS, best_option_chain, ib_connection
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.utils import days_to_expiry
 
@@ -137,8 +137,7 @@ async def get_option_chain_params(ib: IB, symbol: str) -> dict:
     if not chains:
         return {"expirations": [], "strikes": []}
 
-    # Prefer SMART exchange
-    chain = next((c for c in chains if c.exchange == "SMART"), chains[0])
+    chain = best_option_chain(chains)
     return {
         "expirations": sorted(chain.expirations),
         "strikes": sorted(chain.strikes),
