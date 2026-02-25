@@ -4,33 +4,32 @@
 import asyncio
 from datetime import date, datetime
 
-from ib_async import IB, Stock
+from ib_async import Stock
 
 from trading_skills.black_scholes import black_scholes_delta, estimate_iv
+from trading_skills.broker.connection import CLIENT_IDS, fetch_positions, ib_connection
 from trading_skills.utils import fetch_with_timeout
 
 
 async def get_delta_exposure(port: int = 7496):
     """Fetch portfolio and calculate delta-adjusted notional."""
-    ib = IB()
-
     try:
-        await ib.connectAsync(host="127.0.0.1", port=port, clientId=10)
-    except Exception as e:
+        return await _get_delta_exposure(port)
+    except ConnectionError as e:
         return {
             "connected": False,
-            "error": f"Could not connect to IB on port {port}. Is TWS/Gateway running? Error: {e}",
+            "error": f"{e}. Is TWS/Gateway running?",
         }
 
-    managed = ib.managedAccounts()
 
-    try:
-        await asyncio.sleep(2)
+async def _get_delta_exposure(port: int):
+    """Internal implementation with connection context manager."""
+    async with ib_connection(port, CLIENT_IDS["delta_exposure"]) as ib:
+        managed = ib.managedAccounts()
 
         all_positions = []
         for acct in managed:
-            positions = ib.positions(account=acct)
-            all_positions.extend(positions)
+            all_positions.extend(await fetch_positions(ib, account=acct))
 
         # Separate by type
         option_positions = [p for p in all_positions if p.contract.secType == "OPT"]
@@ -247,9 +246,6 @@ async def get_delta_exposure(port: int = 7496):
                 },
             },
         }
-
-    finally:
-        ib.disconnect()
 
 
 def format_markdown(data, full_report=False):
