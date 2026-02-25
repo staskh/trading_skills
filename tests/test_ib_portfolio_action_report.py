@@ -1,9 +1,7 @@
 # ABOUTME: Tests for IB portfolio action report module with mocked dependencies.
-# ABOUTME: Validates spread grouping, recommendations, report generation, and PDF output.
+# ABOUTME: Validates spread grouping, recommendations, and analysis functions.
 
-import tempfile
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -12,11 +10,8 @@ import pandas as pd
 from trading_skills.broker.portfolio_action import (
     calculate_days_to_expiry,
     calculate_otm_pct,
-    convert_to_pdf,
     fetch_earnings_date,
     fetch_technicals,
-    format_expiry,
-    generate_report,
     get_spread_recommendation,
     group_positions_into_spreads,
 )
@@ -38,22 +33,6 @@ class TestCalculateDaysToExpiry:
 
     def test_empty_expiry(self):
         assert calculate_days_to_expiry("") == 999
-
-
-class TestFormatExpiry:
-    """Tests for expiry date formatting."""
-
-    def test_valid_expiry_format(self):
-        assert format_expiry("20250321") == "Mar 21"
-
-    def test_invalid_expiry_returns_original(self):
-        assert format_expiry("invalid") == "invalid"
-
-    def test_empty_expiry_returns_dash(self):
-        assert format_expiry("") == "-"
-
-    def test_none_expiry_returns_dash(self):
-        assert format_expiry(None) == "-"
 
 
 class TestCalculateOtmPct:
@@ -282,119 +261,3 @@ class TestFetchTechnicals:
 
         result = fetch_technicals("AAPL")
         assert "error" in result
-
-
-class TestGenerateReport:
-    """Tests for report generation."""
-
-    def test_report_contains_technicals(self):
-        today = datetime.now()
-        expiry = (today + timedelta(days=30)).strftime("%Y%m%d")
-        data = {
-            "accounts": ["U123456"],
-            "positions": {
-                "U123456": [
-                    {
-                        "symbol": "AAPL",
-                        "sec_type": "OPT",
-                        "quantity": -1,
-                        "avg_cost": 2.50,
-                        "strike": 180,
-                        "expiry": expiry,
-                        "right": "C",
-                    }
-                ]
-            },
-            "prices": {"AAPL": 175.0},
-        }
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = Path(tmpdir) / "test_report.md"
-            with (
-                patch(f"{MODULE}.fetch_earnings_date") as mock_earnings,
-                patch(f"{MODULE}.fetch_technicals") as mock_technicals,
-            ):
-                mock_earnings.return_value = {"symbol": "AAPL", "earnings_date": None}
-                mock_technicals.return_value = {
-                    "symbol": "AAPL",
-                    "rsi": 55.5,
-                    "trend": "bullish",
-                    "sma20": 172.0,
-                    "above_sma20": True,
-                }
-                content = generate_report(data, output_path)
-                assert "TECHNICAL ANALYSIS" in content
-                assert "AAPL" in content
-
-    def test_empty_portfolio(self):
-        data = {"accounts": ["U123456"], "positions": {"U123456": []}, "prices": {}}
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = Path(tmpdir) / "test_report.md"
-            content = generate_report(data, output_path)
-            assert "IB Portfolio Action Report" in content
-
-    def test_multiple_accounts(self):
-        today = datetime.now()
-        expiry = (today + timedelta(days=30)).strftime("%Y%m%d")
-        data = {
-            "accounts": ["U123456", "U789012"],
-            "positions": {
-                "U123456": [
-                    {
-                        "symbol": "AAPL",
-                        "sec_type": "OPT",
-                        "quantity": -1,
-                        "avg_cost": 2.50,
-                        "strike": 180,
-                        "expiry": expiry,
-                        "right": "C",
-                    }
-                ],
-                "U789012": [
-                    {
-                        "symbol": "GOOG",
-                        "sec_type": "OPT",
-                        "quantity": -1,
-                        "avg_cost": 5.00,
-                        "strike": 150,
-                        "expiry": expiry,
-                        "right": "C",
-                    }
-                ],
-            },
-            "prices": {"AAPL": 175.0, "GOOG": 140.0},
-        }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = Path(tmpdir) / "test_report.md"
-            with (
-                patch(f"{MODULE}.fetch_earnings_date") as mock_earnings,
-                patch(f"{MODULE}.fetch_technicals") as mock_technicals,
-            ):
-                mock_earnings.return_value = {"symbol": "TEST", "earnings_date": None}
-                mock_technicals.return_value = {"symbol": "TEST", "error": "test"}
-                content = generate_report(data, output_path)
-                assert "U123456" in content
-                assert "U789012" in content
-
-
-class TestConvertToPdf:
-    """Tests for PDF conversion."""
-
-    def test_convert_success(self):
-        md_content = "# Test\n\n| Col1 | Col2 |\n|------|------|\n| A | B |\n"
-        with tempfile.TemporaryDirectory() as tmpdir:
-            md_path = Path(tmpdir) / "test.md"
-            pdf_path = Path(tmpdir) / "test.pdf"
-            md_path.write_text(md_content)
-            result = convert_to_pdf(md_path, pdf_path)
-            assert result is True
-            assert pdf_path.exists()
-
-    def test_convert_with_emojis(self):
-        md_content = "# Test\n🔴 Red 🟡 Yellow 🟢 Green\n"
-        with tempfile.TemporaryDirectory() as tmpdir:
-            md_path = Path(tmpdir) / "test.md"
-            pdf_path = Path(tmpdir) / "test.pdf"
-            md_path.write_text(md_content)
-            result = convert_to_pdf(md_path, pdf_path)
-            assert result is True

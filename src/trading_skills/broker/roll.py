@@ -8,6 +8,7 @@ from datetime import datetime
 
 from ib_async import IB, Option, Stock
 
+from trading_skills.broker.connection import CLIENT_IDS, ib_connection
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.utils import days_to_expiry
 
@@ -322,6 +323,7 @@ async def _find_roll(ib, symbol, current_position, chain_params):
 
     return {
         "success": True,
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "mode": "roll",
         "symbol": symbol,
         "underlying_price": underlying_price,
@@ -379,6 +381,7 @@ async def _find_spread(ib, symbol, long_option, right, chain_params):
 
     return {
         "success": True,
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "mode": "spread",
         "symbol": symbol,
         "underlying_price": underlying_price,
@@ -433,6 +436,7 @@ async def _find_new_short(ib, symbol, long_position, right, chain_params):
 
     return {
         "success": True,
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "mode": "new_short",
         "symbol": symbol,
         "underlying_price": underlying_price,
@@ -463,45 +467,40 @@ async def find_roll_candidates(
     - Long stock found → new_short mode (find covered call/put candidates)
     """
     symbol = symbol.upper()
-    ib = IB()
     try:
-        await ib.connectAsync("127.0.0.1", port, clientId=30)
-    except Exception as e:
-        return {"error": f"Could not connect to IB on port {port}: {e}"}
+        async with ib_connection(port, CLIENT_IDS["roll"]) as ib:
+            chain_params = await get_option_chain_params(ib, symbol)
 
-    try:
-        chain_params = await get_option_chain_params(ib, symbol)
+            # Explicit strike/expiry → roll mode
+            if strike and expiry:
+                current_position = {
+                    "quantity": -1,
+                    "strike": strike,
+                    "expiry": expiry,
+                    "right": right,
+                    "account": account or "N/A",
+                }
+                return await _find_roll(ib, symbol, current_position, chain_params)
 
-        # Explicit strike/expiry → roll mode
-        if strike and expiry:
-            current_position = {
-                "quantity": -1,
-                "strike": strike,
-                "expiry": expiry,
-                "right": right,
-                "account": account or "N/A",
+            # Auto-detect: try short position first
+            current_position = await get_current_position(ib, symbol, account)
+            if current_position:
+                return await _find_roll(ib, symbol, current_position, chain_params)
+
+            # No short → try long option for spread
+            long_option = await get_long_option_position(ib, symbol, right, account)
+            if long_option:
+                return await _find_spread(ib, symbol, long_option, right, chain_params)
+
+            # No long option → try long stock for covered call/put
+            long_stock = await get_long_stock_position(ib, symbol, account)
+            if long_stock:
+                return await _find_new_short(ib, symbol, long_stock, right, chain_params)
+
+            return {
+                "error": f"No positions found for {symbol}. "
+                "Use strike and expiry params to specify a short position manually."
             }
-            return await _find_roll(ib, symbol, current_position, chain_params)
 
-        # Auto-detect: try short position first
-        current_position = await get_current_position(ib, symbol, account)
-        if current_position:
-            return await _find_roll(ib, symbol, current_position, chain_params)
-
-        # No short → try long option for spread
-        long_option = await get_long_option_position(ib, symbol, right, account)
-        if long_option:
-            return await _find_spread(ib, symbol, long_option, right, chain_params)
-
-        # No long option → try long stock for covered call/put
-        long_stock = await get_long_stock_position(ib, symbol, account)
-        if long_stock:
-            return await _find_new_short(ib, symbol, long_stock, right, chain_params)
-
-        return {
-            "error": f"No positions found for {symbol}. "
-            "Use strike and expiry params to specify a short position manually."
-        }
-
-    finally:
-        ib.disconnect()
+    except ConnectionError as e:
+        return {"error": str(e)}

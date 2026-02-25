@@ -83,7 +83,7 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
    ```cmd
    python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
    ```
-   The script will be `trading-skills-mcp.exe` in that directory.
+   The script will be `trading-skills-mcp.exe` in that directory (typically at `C:\Users\<YourUsername>\AppData\Local\Programs\Python\Python<Version>\Scripts\`)
 
 3. Open Claude Desktop, go to **Settings** → **Developer** → **Edit Config**:
 
@@ -116,7 +116,34 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 
 4. Restart Claude Desktop. Don't worry if you see an MCP error message — it will disappear once you try some of the examples below.
 
-> **Note:** The MCP server provides core analysis tools but does not include all the interactive features of Claude Code skills (e.g., multi-step workflows, report generation). It's ideal for quick lookups and analysis within Claude Desktop.
+#### Installation from GitHub
+
+   Add the following to `claude_desktop_config.json`:
+
+   **macOS / Linux:**
+   ```json
+   {
+     "mcpServers": {
+       "trading-skills": {
+         "command": "uvx",
+         "args": ["--from", "git+https://github.com/staskh/trading_skills.git", "trading-skills-mcp"]
+       }
+     }
+   }
+   ```
+
+   **Windows:**
+   ```json
+   {
+     "mcpServers": {
+       "trading-skills": {
+         "command": "cmd",
+         "args": ["/c", "uvx", "--from", "git+https://github.com/staskh/trading_skills.git", "trading-skills-mcp"]
+       }
+     }
+   }
+   ```
+
 
 ## Example Queries
 
