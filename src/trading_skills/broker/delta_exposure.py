@@ -8,7 +8,7 @@ from ib_async import Stock
 
 from trading_skills.black_scholes import black_scholes_delta, estimate_iv
 from trading_skills.broker.connection import CLIENT_IDS, fetch_positions, ib_connection
-from trading_skills.utils import fetch_with_timeout
+from trading_skills.utils import fetch_with_timeout, format_expiry_iso
 
 
 async def get_delta_exposure(port: int = 7496):
@@ -361,7 +361,7 @@ def format_markdown(data, full_report=False):
                     strike = p.get("strike", "-")
                     expiry = p.get("expiry", "-")
                     if expiry != "-":
-                        expiry = f"{expiry[:4]}-{expiry[4:6]}-{expiry[6:]}"
+                        expiry = format_expiry_iso(expiry)
                     right = p.get("right", "")
                     type_str = f"{p['sec_type']}" + (f" {right}" if right else "")
                     sym = p["symbol"]
@@ -393,7 +393,7 @@ def format_markdown(data, full_report=False):
                     strike = p.get("strike", "-")
                     expiry = p.get("expiry", "-")
                     if expiry != "-":
-                        expiry = f"{expiry[:4]}-{expiry[4:6]}-{expiry[6:]}"
+                        expiry = format_expiry_iso(expiry)
                     right = p.get("right", "")
                     type_str = f"{p['sec_type']}" + (f" {right}" if right else "")
                     sym = p["symbol"]
