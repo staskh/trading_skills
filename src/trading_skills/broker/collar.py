@@ -1,14 +1,19 @@
 # ABOUTME: Analyzes tactical collar strategies for PMCC positions.
 # ABOUTME: Evaluates earnings risk and recommends optimal put protection.
 
-import asyncio
 import math
 from datetime import datetime
 
 import yfinance as yf
-from ib_async import IB, Stock
 
 from trading_skills.black_scholes import black_scholes_price
+from trading_skills.broker.connection import (
+    CLIENT_IDS,
+    fetch_positions,
+    fetch_spot_prices,
+    ib_connection,
+    normalize_positions,
+)
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.options import get_expiries
 from trading_skills.utils import annualized_volatility
@@ -385,13 +390,31 @@ async def find_collar_candidates(
     Connects to IB, finds the long call (LEAPS) and short calls,
     fetches current price and earnings date, then runs collar analysis.
     """
-    connected, positions, error = await get_portfolio_positions(port, account)
+    try:
+        async with ib_connection(port, CLIENT_IDS["collar"]) as ib:
+            managed = ib.managedAccounts()
+            if account:
+                if account not in managed:
+                    return {"error": f"Account {account} not found. Available: {managed}"}
+                accounts = [account]
+            else:
+                accounts = managed
 
-    if not connected:
-        return {"error": error}
+            # Fetch and normalize positions
+            raw = []
+            for acct in accounts:
+                raw.extend(await fetch_positions(ib, account=acct))
+            positions = normalize_positions(raw)
 
-    if error:
-        return {"error": error}
+            # Fetch underlying prices for option positions
+            opt_symbols = {p["symbol"] for p in positions if p["sec_type"] == "OPT"}
+            prices = await fetch_spot_prices(ib, list(opt_symbols))
+            for pos in positions:
+                if pos["symbol"] in prices:
+                    pos["underlying_price"] = prices[pos["symbol"]]
+
+    except ConnectionError as e:
+        return {"error": str(e)}
 
     # Filter for the symbol
     symbol = symbol.upper()
@@ -454,75 +477,3 @@ async def find_collar_candidates(
         analysis["earnings_date"] = analysis["earnings_date"].strftime("%Y-%m-%d")
 
     return analysis
-
-
-async def get_portfolio_positions(
-    port: int, account: str | None
-) -> tuple[bool, list[dict], str | None]:
-    """Fetch portfolio positions from IB."""
-    ib = IB()
-
-    try:
-        await ib.connectAsync(host="127.0.0.1", port=port, clientId=1)
-    except Exception as e:
-        return False, [], f"Could not connect to IB on port {port}: {e}"
-
-    try:
-        await asyncio.sleep(2)
-
-        managed = ib.managedAccounts()
-        if account:
-            if account not in managed:
-                return True, [], f"Account {account} not found. Available: {managed}"
-            accounts = [account]
-        else:
-            accounts = managed
-
-        positions = []
-        for acct in accounts:
-            for pos in ib.positions(account=acct):
-                contract = pos.contract
-                entry = {
-                    "account": pos.account,
-                    "symbol": contract.symbol,
-                    "sec_type": contract.secType,
-                    "quantity": pos.position,
-                    "avg_cost": pos.avgCost,
-                }
-                if contract.secType == "OPT":
-                    multiplier = int(contract.multiplier) if contract.multiplier else 100
-                    entry.update(
-                        {
-                            "strike": contract.strike,
-                            "expiry": contract.lastTradeDateOrContractMonth,
-                            "right": contract.right,
-                            "avg_cost": pos.avgCost / multiplier,
-                        }
-                    )
-                positions.append(entry)
-
-        # Get current prices for underlyings
-        symbols = {p["symbol"] for p in positions if p["sec_type"] == "OPT"}
-        prices = {}
-
-        if symbols:
-            contracts = [Stock(sym, "SMART", "USD") for sym in symbols]
-            try:
-                qualified = await asyncio.wait_for(ib.qualifyContractsAsync(*contracts), timeout=15)
-                tickers = await asyncio.wait_for(ib.reqTickersAsync(*qualified), timeout=15)
-                for t in tickers:
-                    p = t.marketPrice()
-                    if p and p > 0:
-                        prices[t.contract.symbol] = p
-            except asyncio.TimeoutError:
-                pass
-
-        # Add prices to positions
-        for pos in positions:
-            if pos["symbol"] in prices:
-                pos["underlying_price"] = prices[pos["symbol"]]
-
-        return True, positions, None
-
-    finally:
-        ib.disconnect()
