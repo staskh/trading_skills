@@ -1,5 +1,5 @@
 # ABOUTME: Tests for trade consolidation module pure logic functions.
-# ABOUTME: Validates position determination, row consolidation, and reports.
+# ABOUTME: Validates position determination, row consolidation, and CSV reading.
 
 import csv
 import tempfile
@@ -8,10 +8,6 @@ from pathlib import Path
 from trading_skills.broker.consolidate import (
     consolidate_rows,
     determine_position,
-    format_date,
-    format_money,
-    generate_csv,
-    generate_markdown,
     read_csv_files,
 )
 
@@ -37,43 +33,6 @@ class TestDeterminePosition:
 
     def test_whitespace_stripped(self):
         assert determine_position("  SELL  ", "  O  ") == "SHORT"
-
-
-class TestFormatDate:
-    """Tests for date formatting."""
-
-    def test_valid_yyyymmdd(self):
-        assert format_date("20250321") == "2025-03-21"
-
-    def test_short_string_passthrough(self):
-        assert format_date("2025") == "2025"
-
-    def test_already_formatted(self):
-        assert format_date("2025-03-21") == "2025-03-21"
-
-
-class TestFormatMoney:
-    """Tests for money formatting."""
-
-    def test_positive(self):
-        assert format_money(1234.56) == "$1,234.56"
-
-    def test_negative_is_red(self):
-        result = format_money(-500.00)
-        assert "color:red" in result
-        assert "$-500.00" in result
-
-    def test_bold(self):
-        result = format_money(100.00, bold=True)
-        assert "**$100.00**" in result
-
-    def test_negative_bold(self):
-        result = format_money(-100.00, bold=True)
-        assert "color:red" in result
-        assert "**" in result
-
-    def test_zero(self):
-        assert format_money(0.00) == "$0.00"
 
 
 class TestConsolidateRows:
@@ -254,94 +213,3 @@ class TestReadCsvFiles:
             rows, files = read_csv_files(Path(tmpdir))
             assert rows == []
             assert files == []
-
-
-class TestGenerateMarkdown:
-    """Tests for markdown report generation."""
-
-    def test_generates_report(self):
-        consolidated = [
-            {
-                "UnderlyingSymbol": "AAPL",
-                "Symbol": "AAPL250321C200",
-                "TradeDate": "20250101",
-                "Strike": "200",
-                "Put/Call": "C",
-                "Buy/Sell": "SELL",
-                "Open/CloseIndicator": "O",
-                "Position": "SHORT",
-                "Quantity": 1.0,
-                "Proceeds": 500.0,
-                "NetCash": 500.0,
-                "IBCommission": -1.5,
-                "FifoPnlRealized": 0.0,
-            }
-        ]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output = Path(tmpdir) / "report.md"
-            generate_markdown(consolidated, {}, [], output)
-            content = output.read_text()
-            assert "Consolidated Trades Report" in content
-            assert "AAPL" in content
-
-    def test_with_unrealized_pnl(self):
-        consolidated = [
-            {
-                "UnderlyingSymbol": "AAPL",
-                "Symbol": "AAPL250321C200",
-                "TradeDate": "20250101",
-                "Strike": "200",
-                "Put/Call": "C",
-                "Buy/Sell": "SELL",
-                "Open/CloseIndicator": "O",
-                "Position": "SHORT",
-                "Quantity": 1.0,
-                "Proceeds": 500.0,
-                "NetCash": 500.0,
-                "IBCommission": -1.5,
-                "FifoPnlRealized": 0.0,
-            }
-        ]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output = Path(tmpdir) / "report.md"
-            generate_markdown(consolidated, {"AAPL": 150.0}, [], output)
-            content = output.read_text()
-            assert "Connected to IB" in content
-
-
-class TestGenerateCsv:
-    """Tests for CSV report generation."""
-
-    def test_generates_csv(self):
-        consolidated = [
-            {
-                "UnderlyingSymbol": "AAPL",
-                "Symbol": "AAPL250321C200",
-                "TradeDate": "20250101",
-                "Strike": "200",
-                "Put/Call": "C",
-                "Buy/Sell": "SELL",
-                "Open/CloseIndicator": "O",
-                "Position": "SHORT",
-                "Quantity": 1.0,
-                "Proceeds": 500.0,
-                "NetCash": 500.0,
-                "IBCommission": -1.5,
-                "FifoPnlRealized": 0.0,
-                "ClientAccountID": "U123",
-                "Description": "Test",
-                "Expiry": "20250321",
-            }
-        ]
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output = Path(tmpdir) / "report.csv"
-            generate_csv(consolidated, output)
-            assert output.exists()
-            content = output.read_text()
-            assert "AAPL" in content
-
-    def test_empty_data(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            output = Path(tmpdir) / "report.csv"
-            generate_csv([], output)
-            assert not output.exists()

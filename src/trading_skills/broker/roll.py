@@ -322,6 +322,7 @@ async def _find_roll(ib, symbol, current_position, chain_params):
 
     return {
         "success": True,
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "mode": "roll",
         "symbol": symbol,
         "underlying_price": underlying_price,
@@ -379,6 +380,7 @@ async def _find_spread(ib, symbol, long_option, right, chain_params):
 
     return {
         "success": True,
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "mode": "spread",
         "symbol": symbol,
         "underlying_price": underlying_price,
@@ -433,6 +435,7 @@ async def _find_new_short(ib, symbol, long_position, right, chain_params):
 
     return {
         "success": True,
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "mode": "new_short",
         "symbol": symbol,
         "underlying_price": underlying_price,

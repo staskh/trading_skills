@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # ABOUTME: MCP server providing trading analysis tools.
-# ABOUTME: Exposes quote, technicals, options, fundamentals, and scanner tools.
+# ABOUTME: Exposes market data, options, IB broker, portfolio, and report tools.
 
 import os
 import sys
-from pathlib import Path
 
 # Ensure unbuffered output for MCP protocol (equivalent to python -u)
 os.environ["PYTHONUNBUFFERED"] = "1"
@@ -16,14 +15,12 @@ if hasattr(sys.stderr, "reconfigure"):
 from mcp.server.fastmcp import FastMCP
 
 from trading_skills.broker.account import get_account_summary
-from trading_skills.broker.collar import (
-    analyze_collar,
-    get_earnings_date as get_collar_earnings_date,
-    get_portfolio_positions,
-)
+from trading_skills.broker.collar import find_collar_candidates
 from trading_skills.broker.delta_exposure import get_delta_exposure
 from trading_skills.broker.options import (
     get_expiries as ib_get_expiries,
+)
+from trading_skills.broker.options import (
     get_option_chain as ib_get_option_chain,
 )
 from trading_skills.broker.portfolio import get_portfolio
@@ -520,10 +517,12 @@ async def ib_find_short_roll(
     expiry: str | None = None,
     right: str = "C",
 ) -> dict:
-    """Find roll options for a short position using real-time IB data.
+    """Find roll, spread, or covered call/put candidates using real-time IB data.
 
-    Analyzes current short option position and finds roll candidates with
-    credit/debit analysis.
+    Auto-detects mode based on existing positions:
+    - Short option found: roll candidates with credit/debit analysis
+    - Long option found: short candidates to create a vertical spread
+    - Long stock found: covered call/put candidates
     Requires TWS or IB Gateway running locally.
 
     Args:
@@ -621,87 +620,7 @@ async def ib_collar(
         port: IB port (7496 for live, 7497 for paper)
         account: Account ID (optional)
     """
-    from datetime import datetime
-
-    import yfinance as yf
-
-    # Fetch portfolio
-    connected, positions, error = await get_portfolio_positions(port, account)
-
-    if not connected:
-        return {"error": error}
-
-    if error:
-        return {"error": error}
-
-    # Filter for the symbol
-    symbol = symbol.upper()
-    symbol_positions = [p for p in positions if p["symbol"] == symbol]
-
-    if not symbol_positions:
-        available = sorted(set(p["symbol"] for p in positions))
-        return {"error": f"{symbol} not found in portfolio. Available: {available}"}
-
-    # Separate long and short calls
-    long_calls = [
-        p
-        for p in symbol_positions
-        if p["sec_type"] == "OPT" and p["right"] == "C" and p["quantity"] > 0
-    ]
-    short_calls = [
-        p
-        for p in symbol_positions
-        if p["sec_type"] == "OPT" and p["right"] == "C" and p["quantity"] < 0
-    ]
-
-    if not long_calls:
-        return {"error": f"No long call positions found for {symbol}. Requires a PMCC position."}
-
-    # Use the longest-dated long call as the LEAPS
-    long_calls.sort(key=lambda x: x["expiry"], reverse=True)
-    main_long = long_calls[0]
-
-    # Get current price
-    current_price = main_long.get("underlying_price")
-    if not current_price:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
-        current_price = info.get("regularMarketPrice") or info.get("previousClose")
-
-    if not current_price:
-        return {"error": f"Could not get current price for {symbol}"}
-
-    # Get earnings date
-    earnings_date, _ = get_collar_earnings_date(symbol)
-
-    # Format short positions
-    short_positions = [
-        {
-            "strike": p["strike"],
-            "expiry": p["expiry"],
-            "qty": abs(p["quantity"]),
-        }
-        for p in short_calls
-    ]
-
-    # Run analysis
-    analysis = analyze_collar(
-        symbol=symbol,
-        current_price=current_price,
-        long_strike=main_long["strike"],
-        long_expiry=main_long["expiry"],
-        long_qty=int(main_long["quantity"]),
-        long_cost=main_long["avg_cost"],
-        short_positions=short_positions,
-        earnings_date=earnings_date,
-    )
-
-    # Serialize datetime for JSON
-    if analysis.get("earnings_date"):
-        analysis["earnings_date"] = analysis["earnings_date"].strftime("%Y-%m-%d")
-
-    return analysis
-
+    return await find_collar_candidates(symbol, port, account)
 
 
 def main():
