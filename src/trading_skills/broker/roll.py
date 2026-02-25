@@ -266,9 +266,6 @@ def calculate_roll_options(current: dict, target_quotes: list, buy_price: float)
     return rolls
 
 
-fetch_earnings_date = get_next_earnings_date
-
-
 async def _find_roll(ib, symbol, current_position, chain_params):
     """Find roll candidates for an existing short position."""
     underlying_price = await get_underlying_price(ib, symbol)
@@ -319,7 +316,7 @@ async def _find_roll(ib, symbol, current_position, chain_params):
         )
         roll_data[exp] = calculate_roll_options(current_position, quotes, buy_price)
 
-    earnings_date = fetch_earnings_date(symbol)
+    earnings_date = get_next_earnings_date(symbol)
 
     return {
         "success": True,
@@ -377,7 +374,7 @@ async def _find_spread(ib, symbol, long_option, right, chain_params):
         if candidates:
             candidates_by_expiry[exp] = candidates
 
-    earnings_date = fetch_earnings_date(symbol)
+    earnings_date = get_next_earnings_date(symbol)
 
     return {
         "success": True,
@@ -432,7 +429,7 @@ async def _find_new_short(ib, symbol, long_position, right, chain_params):
         if candidates:
             candidates_by_expiry[exp] = candidates
 
-    earnings_date = fetch_earnings_date(symbol)
+    earnings_date = get_next_earnings_date(symbol)
 
     return {
         "success": True,

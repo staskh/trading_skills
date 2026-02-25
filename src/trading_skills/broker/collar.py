@@ -104,9 +104,6 @@ def get_put_chain(symbol: str, target_expiry: str) -> list[dict]:
         return []
 
 
-get_available_expiries = get_expiries
-
-
 def get_call_market_price(symbol: str, strike: float, expiry: str) -> float | None:
     """Get actual market price for a call option.
 
@@ -196,7 +193,7 @@ def analyze_collar(
     days_to_earnings = (earnings_date - today).days if earnings_date else None
 
     # Get available expiries
-    expiries = get_available_expiries(symbol)
+    expiries = get_expiries(symbol)
 
     # Find suitable put expiries (after earnings if applicable)
     put_expiries = []
