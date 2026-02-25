@@ -137,14 +137,14 @@ async def fetch_unrealized_pnl(port: int = None) -> tuple[dict[str, float], str 
     Returns tuple of (unrealized_pnl_by_symbol, account_id).
     """
     try:
-        from ib_async import IB, Stock
+        from trading_skills.broker.connection import (
+            CLIENT_IDS,
+            fetch_positions,
+            ib_connection,
+        )
     except ImportError:
         print("Warning: ib_async not available, skipping unrealized P&L")
         return {}, None
-
-    ib = IB()
-    unrealized_by_symbol = {}
-    account_id = None
 
     # Determine ports to try
     if port:
@@ -152,15 +152,17 @@ async def fetch_unrealized_pnl(port: int = None) -> tuple[dict[str, float], str 
     else:
         ports_to_try = [7496, 7497]  # Try live first, then paper
 
+    ib_ctx = None
     connected_port = None
     for try_port in ports_to_try:
         try:
             print(f"Trying to connect to IB on port {try_port}...")
-            await ib.connectAsync(host="127.0.0.1", port=try_port, clientId=99)
+            ib_ctx = ib_connection(try_port, CLIENT_IDS["consolidate"])
+            ib = await ib_ctx.__aenter__()
             connected_port = try_port
             print(f"Connected to IB on port {try_port}")
             break
-        except Exception as e:
+        except ConnectionError as e:
             print(f"  Port {try_port} not available: {e}")
             continue
 
@@ -168,10 +170,10 @@ async def fetch_unrealized_pnl(port: int = None) -> tuple[dict[str, float], str 
         print("Warning: Could not connect to IB on any port")
         return {}, None
 
-    try:
-        # Wait for position data to sync
-        await asyncio.sleep(2)
+    unrealized_by_symbol = {}
+    account_id = None
 
+    try:
         # Get account ID
         managed_accounts = ib.managedAccounts()
         if managed_accounts:
@@ -179,31 +181,11 @@ async def fetch_unrealized_pnl(port: int = None) -> tuple[dict[str, float], str 
             print(f"Account: {account_id}")
 
         # Get all positions
-        all_positions = ib.positions()
+        all_positions = await fetch_positions(ib)
         print(f"Found {len(all_positions)} positions in portfolio")
 
         # Separate options from other positions
         option_positions = [p for p in all_positions if p.contract.secType == "OPT"]
-
-        # Get unique underlying symbols
-        underlying_symbols = {p.contract.symbol for p in option_positions}
-
-        # Fetch spot prices for underlyings
-        spot_prices = {}
-        if underlying_symbols:
-            stock_contracts = [Stock(sym, "SMART", "USD") for sym in underlying_symbols]
-            try:
-                qualified = await asyncio.wait_for(
-                    ib.qualifyContractsAsync(*stock_contracts), timeout=15.0
-                )
-                if qualified:
-                    tickers = await asyncio.wait_for(ib.reqTickersAsync(*qualified), timeout=15.0)
-                    for ticker in tickers or []:
-                        price = ticker.marketPrice()
-                        if price and price > 0:
-                            spot_prices[ticker.contract.symbol] = price
-            except asyncio.TimeoutError:
-                print("Warning: Timeout fetching spot prices")
 
         # Fetch option prices
         option_prices = {}
@@ -248,6 +230,6 @@ async def fetch_unrealized_pnl(port: int = None) -> tuple[dict[str, float], str 
         print(f"Calculated unrealized P&L for {len(unrealized_by_symbol)} symbols")
 
     finally:
-        ib.disconnect()
+        await ib_ctx.__aexit__(None, None, None)
 
     return unrealized_by_symbol, account_id
