@@ -10,7 +10,7 @@ from trading_skills.earnings import get_earnings_info
 from trading_skills.technicals import compute_raw_indicators
 
 
-def compute_bullish_score(symbol: str, period: str = "3mo") -> dict | None:
+def compute_bullish_score(symbol: str, period: str = "3mo", ticker=None) -> dict | None:
     """Compute bullish trend score for a symbol.
 
     Score components (higher = more bullish):
@@ -21,7 +21,7 @@ def compute_bullish_score(symbol: str, period: str = "3mo") -> dict | None:
     - Price momentum (% change over period): weighted contribution
     """
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = ticker or yf.Ticker(symbol)
         df = ticker.history(period=period)
 
         if df.empty or len(df) < 50:

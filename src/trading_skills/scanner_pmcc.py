@@ -75,10 +75,11 @@ def analyze_pmcc(
     short_days_range: tuple = (7, 21),
     leaps_delta: float = 0.80,
     short_delta: float = 0.20,
+    ticker=None,
 ) -> dict | None:
     """Analyze a symbol for PMCC suitability."""
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = ticker or yf.Ticker(symbol)
         info = ticker.info
         current_price = get_current_price(info)
 
