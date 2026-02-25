@@ -124,6 +124,9 @@ class TestNormalizePositions:
         assert result[0]["sec_type"] == "STK"
         assert result[0]["quantity"] == 100
         assert result[0]["avg_cost"] == 150.0
+        assert result[0]["strike"] is None
+        assert result[0]["expiry"] is None
+        assert result[0]["right"] is None
 
     def test_option_divides_cost_by_multiplier(self):
         pos = self._make_position(

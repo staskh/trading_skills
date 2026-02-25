@@ -66,6 +66,9 @@ def normalize_positions(raw_positions: list) -> list[dict]:
             "sec_type": c.secType,
             "quantity": pos.position,
             "avg_cost": pos.avgCost,
+            "strike": None,
+            "expiry": None,
+            "right": None,
         }
         if c.secType in ("OPT", "FOP"):
             entry.update({

@@ -1,14 +1,19 @@
 # ABOUTME: Analyzes IB portfolio positions with earnings and risk assessment.
 # ABOUTME: Groups positions into spreads, categorizes by urgency/risk.
 
-import asyncio
 import sys
 from collections import defaultdict
 from datetime import datetime
 
 import yfinance as yf
-from ib_async import IB, Stock
 
+from trading_skills.broker.connection import (
+    CLIENT_IDS,
+    fetch_positions,
+    fetch_spot_prices,
+    ib_connection,
+    normalize_positions,
+)
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.technicals import compute_raw_indicators
 from trading_skills.utils import days_to_expiry as _days_to_expiry
@@ -251,91 +256,53 @@ def group_positions_into_spreads(positions: list, symbol: str) -> list:
 
 async def get_portfolio_data(port: int, account: str = None) -> dict:
     """Fetch portfolio positions and prices from IB."""
-    ib = IB()
-
     try:
-        await ib.connectAsync(host="127.0.0.1", port=port, clientId=10)
-    except Exception as e:
-        return {"error": f"Could not connect to IB on port {port}: {e}"}
+        async with ib_connection(port, CLIENT_IDS["portfolio_action"]) as ib:
+            if account:
+                managed = ib.managedAccounts()
+                if account not in managed:
+                    return {"error": f"Account {account} not found. Available: {managed}"}
+                raw_positions = await fetch_positions(ib, account=account)
+                accounts = [account]
+            else:
+                raw_positions = await fetch_positions(ib)
+                accounts = ib.managedAccounts()
 
-    try:
-        await asyncio.sleep(2)
+            normalized = normalize_positions(raw_positions)
 
-        if account:
-            managed = ib.managedAccounts()
-            if account not in managed:
-                return {"error": f"Account {account} not found. Available: {managed}"}
-            all_positions = ib.positions(account=account)
-            accounts = [account]
-        else:
-            all_positions = ib.positions()
-            accounts = ib.managedAccounts()
+            # Group by account
+            positions_by_account = {}
+            for pos in normalized:
+                acc = pos.pop("account")
+                if acc not in positions_by_account:
+                    positions_by_account[acc] = []
+                # Round avg_cost for display
+                pos["avg_cost"] = round(pos["avg_cost"], 2)
+                positions_by_account[acc].append(pos)
 
-        positions_by_account = {}
-        for pos in all_positions:
-            acc = pos.account
-            if acc not in positions_by_account:
-                positions_by_account[acc] = []
+            # Collect symbols, excluding futures
+            symbols = set()
+            futures_symbols = set()
+            for positions in positions_by_account.values():
+                for pos in positions:
+                    if pos["sec_type"] in ("FUT", "FOP"):
+                        futures_symbols.add(pos["symbol"])
+                    else:
+                        symbols.add(pos["symbol"])
 
-            c = pos.contract
-            multiplier = int(c.multiplier) if c.multiplier else 100
+            symbols = symbols - futures_symbols
+            prices = await fetch_spot_prices(ib, list(symbols))
+            # Round prices for display
+            prices = {k: round(v, 2) for k, v in prices.items()}
 
-            positions_by_account[acc].append(
-                {
-                    "symbol": c.symbol,
-                    "sec_type": c.secType,
-                    "quantity": pos.position,
-                    "avg_cost": round(pos.avgCost / multiplier, 2)
-                    if c.secType == "OPT"
-                    else round(pos.avgCost, 2),
-                    "strike": c.strike if c.secType == "OPT" else None,
-                    "expiry": c.lastTradeDateOrContractMonth if c.secType == "OPT" else None,
-                    "right": c.right if c.secType == "OPT" else None,
-                }
-            )
+            return {
+                "accounts": list(accounts),
+                "positions": positions_by_account,
+                "prices": prices,
+            }
 
-        # Collect symbols, excluding futures
-        symbols = set()
-        futures_symbols = set()
-        for positions in positions_by_account.values():
-            for pos in positions:
-                if pos["sec_type"] in ("FUT", "FOP"):
-                    futures_symbols.add(pos["symbol"])
-                else:
-                    symbols.add(pos["symbol"])
-
-        symbols = symbols - futures_symbols
-
-        prices = {}
-        if symbols:
-            contracts = [Stock(sym, "SMART", "USD") for sym in symbols]
-            qualified = []
-            try:
-                qualified = await asyncio.wait_for(ib.qualifyContractsAsync(*contracts), timeout=15)
-            except asyncio.TimeoutError:
-                pass
-
-            valid_contracts = [c for c in qualified if c.conId]
-            if valid_contracts:
-                try:
-                    tickers = await asyncio.wait_for(
-                        ib.reqTickersAsync(*valid_contracts), timeout=15
-                    )
-                    for t in tickers:
-                        p = t.marketPrice()
-                        if p and p > 0:
-                            prices[t.contract.symbol] = round(p, 2)
-                except asyncio.TimeoutError:
-                    pass
-
-        return {
-            "accounts": list(accounts),
-            "positions": positions_by_account,
-            "prices": prices,
-        }
-
-    finally:
-        ib.disconnect()
+    except ConnectionError as e:
+        return {"error": str(e)}
 
 
 def analyze_portfolio(data: dict) -> dict:
