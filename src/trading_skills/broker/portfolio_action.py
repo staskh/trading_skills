@@ -16,7 +16,7 @@ from trading_skills.broker.connection import (
 )
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.technicals import compute_raw_indicators
-from trading_skills.utils import days_to_expiry as _days_to_expiry
+from trading_skills.utils import days_to_expiry
 
 
 def fetch_earnings_date(symbol: str) -> dict:
@@ -95,10 +95,6 @@ def fetch_technicals(symbol: str, period: str = "3mo") -> dict:
         result["error"] = str(e)
 
     return result
-
-
-# days_to_expiry is imported from trading_skills.utils
-calculate_days_to_expiry = _days_to_expiry
 
 
 def calculate_otm_pct(strike: float, underlying: float, right: str = "C") -> float:
@@ -337,7 +333,7 @@ def analyze_portfolio(data: dict) -> dict:
     for acc, positions in positions_by_account.items():
         for pos in positions:
             if pos["expiry"]:
-                pos["days_to_exp"] = calculate_days_to_expiry(pos["expiry"])
+                pos["days_to_exp"] = days_to_expiry(pos["expiry"])
             else:
                 pos["days_to_exp"] = 999
             pos["underlying_price"] = prices.get(pos["symbol"])

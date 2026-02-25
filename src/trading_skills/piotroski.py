@@ -7,9 +7,9 @@ import yfinance as yf
 from trading_skills.utils import safe_value
 
 
-def calculate_piotroski_score(symbol: str) -> dict:
+def calculate_piotroski_score(symbol: str, ticker=None) -> dict:
     """Calculate Piotroski F-Score for a stock."""
-    ticker = yf.Ticker(symbol)
+    ticker = ticker or yf.Ticker(symbol)
     result = {"symbol": symbol.upper(), "score": 0, "max_score": 9, "criteria": {}}
 
     try:

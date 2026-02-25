@@ -13,10 +13,10 @@ from trading_skills.spreads import get_option_price
 from trading_skills.utils import get_current_price
 
 
-def analyze_spreads(symbol: str) -> dict:
+def analyze_spreads(symbol: str, ticker=None) -> dict:
     """Analyze various option spread strategies for the symbol."""
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = ticker or yf.Ticker(symbol)
         info = ticker.info
         price = get_current_price(info)
 
@@ -210,20 +210,22 @@ def analyze_spreads(symbol: str) -> dict:
 
 def fetch_data(symbol: str) -> dict:
     """Fetch all analysis data for a symbol using library functions directly."""
+    ticker = yf.Ticker(symbol)
+
     # Bullish scanner
-    bullish_data = compute_bullish_score(symbol) or {}
+    bullish_data = compute_bullish_score(symbol, ticker=ticker) or {}
 
     # PMCC scanner
-    pmcc_data = analyze_pmcc(symbol) or {}
+    pmcc_data = analyze_pmcc(symbol, ticker=ticker) or {}
 
     # Fundamentals
-    fundamentals = get_fundamentals(symbol, "all")
+    fundamentals = get_fundamentals(symbol, "all", ticker=ticker)
 
     # Piotroski
-    piotroski = calculate_piotroski_score(symbol)
+    piotroski = calculate_piotroski_score(symbol, ticker=ticker)
 
     # Spread analysis
-    spreads = analyze_spreads(symbol)
+    spreads = analyze_spreads(symbol, ticker=ticker)
 
     return {
         "symbol": symbol,

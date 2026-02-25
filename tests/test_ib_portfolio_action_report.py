@@ -8,13 +8,13 @@ import numpy as np
 import pandas as pd
 
 from trading_skills.broker.portfolio_action import (
-    calculate_days_to_expiry,
     calculate_otm_pct,
     fetch_earnings_date,
     fetch_technicals,
     get_spread_recommendation,
     group_positions_into_spreads,
 )
+from trading_skills.utils import days_to_expiry
 
 MODULE = "trading_skills.broker.portfolio_action"
 
@@ -25,14 +25,14 @@ class TestCalculateDaysToExpiry:
     def test_valid_expiry(self):
         future = datetime.now() + timedelta(days=10)
         expiry_str = future.strftime("%Y%m%d")
-        days = calculate_days_to_expiry(expiry_str)
+        days = days_to_expiry(expiry_str)
         assert 9 <= days <= 11
 
     def test_invalid_expiry(self):
-        assert calculate_days_to_expiry("invalid") == 999
+        assert days_to_expiry("invalid") == 999
 
     def test_empty_expiry(self):
-        assert calculate_days_to_expiry("") == 999
+        assert days_to_expiry("") == 999
 
 
 class TestCalculateOtmPct:

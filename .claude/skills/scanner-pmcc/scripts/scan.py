@@ -5,9 +5,8 @@
 import argparse
 import json
 import sys
-from datetime import datetime
 
-from trading_skills.scanner_pmcc import analyze_pmcc
+from trading_skills.scanner_pmcc import analyze_pmcc, format_scan_results
 
 
 def main():
@@ -41,21 +40,13 @@ def main():
         if result:
             results.append(result)
 
-    valid_results = [r for r in results if "pmcc_score" in r]
-    valid_results.sort(key=lambda x: (x["pmcc_score"], x["metrics"]["annual_yield_est_pct"]), reverse=True)
-
-    output = {
-        "scan_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "criteria": {
-            "leaps_min_days": args.min_leaps_days,
-            "leaps_target_delta": args.leaps_delta,
-            "short_days_range": "7-21",
-            "short_target_delta": args.short_delta,
-            "short_strike": "above LEAPS strike"
-        },
-        "count": len(valid_results),
-        "results": valid_results,
-        "errors": [r for r in results if "error" in r],
+    output = format_scan_results(results)
+    output["criteria"] = {
+        "leaps_min_days": args.min_leaps_days,
+        "leaps_target_delta": args.leaps_delta,
+        "short_days_range": "7-21",
+        "short_target_delta": args.short_delta,
+        "short_strike": "above LEAPS strike",
     }
 
     if args.output:

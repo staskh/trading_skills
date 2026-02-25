@@ -16,7 +16,7 @@ from trading_skills.broker.connection import (
 )
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.options import get_expiries
-from trading_skills.utils import annualized_volatility
+from trading_skills.utils import annualized_volatility, format_expiry_iso
 
 
 def get_earnings_date(symbol: str) -> tuple[datetime | None, str]:
@@ -104,9 +104,6 @@ def get_put_chain(symbol: str, target_expiry: str) -> list[dict]:
         return []
 
 
-get_available_expiries = get_expiries
-
-
 def get_call_market_price(symbol: str, strike: float, expiry: str) -> float | None:
     """Get actual market price for a call option.
 
@@ -122,10 +119,7 @@ def get_call_market_price(symbol: str, strike: float, expiry: str) -> float | No
         ticker = yf.Ticker(symbol)
 
         # Convert YYYYMMDD to YYYY-MM-DD if needed
-        if len(expiry) == 8 and "-" not in expiry:
-            expiry_formatted = f"{expiry[:4]}-{expiry[4:6]}-{expiry[6:]}"
-        else:
-            expiry_formatted = expiry
+        expiry_formatted = format_expiry_iso(expiry)
 
         # Get available expiries and find closest match
         available = ticker.options
@@ -199,7 +193,7 @@ def analyze_collar(
     days_to_earnings = (earnings_date - today).days if earnings_date else None
 
     # Get available expiries
-    expiries = get_available_expiries(symbol)
+    expiries = get_expiries(symbol)
 
     # Find suitable put expiries (after earnings if applicable)
     put_expiries = []
