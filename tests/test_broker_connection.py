@@ -46,7 +46,7 @@ class TestIbConnection:
             MockIB.return_value = mock_ib
 
             async def run():
-                async with ib_connection(7496, 1) as ib:
+                async with ib_connection(7496, 1):
                     raise ValueError("test error")
 
             with pytest.raises(ValueError, match="test error"):
@@ -63,7 +63,7 @@ class TestIbConnection:
             MockIB.return_value = mock_ib
 
             async def run():
-                async with ib_connection(7496, 1) as ib:
+                async with ib_connection(7496, 1):
                     pass
 
             with pytest.raises(ConnectionError, match="7496"):
@@ -103,7 +103,9 @@ class TestFetchPositions:
 class TestNormalizePositions:
     """Tests for normalize_positions pure function."""
 
-    def _make_position(self, symbol, sec_type, qty, avg_cost, strike=0, expiry="", right="", multiplier=""):
+    def _make_position(
+        self, symbol, sec_type, qty, avg_cost, strike=0, expiry="", right="", multiplier=""
+    ):
         pos = MagicMock()
         pos.account = "U123"
         pos.contract.symbol = symbol
