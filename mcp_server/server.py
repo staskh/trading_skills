@@ -478,7 +478,7 @@ async def ib_account(port: int = 7496) -> dict:
     Args:
         port: IB port (7496 for live, 7497 for paper)
     """
-    return await get_account_summary(port)
+    return await get_account_summary(port, all_accounts=True)
 
 
 @mcp.tool()
@@ -492,7 +492,7 @@ async def ib_portfolio(port: int = 7496, account: str | None = None) -> dict:
         port: IB port (7496 for live, 7497 for paper)
         account: Specific account ID (optional, uses first if not specified)
     """
-    return await get_portfolio(port, account)
+    return await get_portfolio(port, account, all_accounts=True)
 
 
 @mcp.tool()
