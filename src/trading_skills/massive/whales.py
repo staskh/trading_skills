@@ -104,6 +104,18 @@ def option_whales(
     if df.empty:
         return (_empty, all_bars) if return_all else _empty
 
+    # Exclude bars averaging <= $10k per transaction — these are retail noise,
+    # not institutional activity worth flagging.
+    df = df[
+        ~(
+            df["transactions"].notna()
+            & (df["transactions"] > 0)
+            & (df["invested"] / df["transactions"] <= 10_000)
+        )
+    ]
+    if df.empty:
+        return (_empty, all_bars) if return_all else _empty
+
     median = df["invested"].median()
     n = len(df)
 

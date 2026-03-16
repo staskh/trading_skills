@@ -59,6 +59,14 @@ class TestOptionWhales:
         assert len(all_bars) >= len(outliers)
         assert set(outliers.columns) == set(all_bars.columns)
 
+    def test_low_per_transaction_bars_never_whale(self):
+        """Bars averaging <= $10k per transaction must not appear as whales."""
+        result = option_whales(TEST_CONTRACT, trading_date=TEST_DATE, sigma=0.5, sigma_z=0.5)
+        for _, row in result.iterrows():
+            if row["transactions"] and row["transactions"] > 0:
+                avg = row["invested"] / row["transactions"]
+                assert avg > 10_000, f"Whale with avg invested/tx = {avg:.0f} <= $10k"
+
     def test_large_per_transaction_bars_always_detected(self):
         """Bars with avg invested/transaction >= $1M are whales regardless of sigma."""
         _, all_bars = option_whales(TX_CONTRACT, trading_date=TEST_DATE, return_all=True)
