@@ -149,14 +149,14 @@ def option_whales(
         else:
             mask = (df["invested"] > median + sigma * std) | tx_mask
 
-    # Drop outliers averaging <= $10k per transaction — statistical detection
+    # Drop outliers averaging <= $100k per transaction — statistical detection
     # may flag high-invested seconds driven by many small retail trades, not
     # institutional block activity.
     low_tx = (
         mask
         & df["transactions"].notna()
         & (df["transactions"] > 0)
-        & (df["invested"] / df["transactions"] <= 10_000)
+        & (df["invested"] / df["transactions"] <= 100_000)
     )
 
     outliers = (

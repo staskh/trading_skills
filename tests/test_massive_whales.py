@@ -65,7 +65,7 @@ class TestOptionWhales:
         for _, row in result.iterrows():
             if row["transactions"] and row["transactions"] > 0:
                 avg = row["invested"] / row["transactions"]
-                assert avg > 10_000, f"Whale with avg invested/tx = {avg:.0f} <= $10k"
+                assert avg > 100_000, f"Whale with avg invested/tx = {avg:.0f} <= $100k"
 
     def test_large_per_transaction_bars_always_detected(self):
         """Bars with avg invested/transaction >= $1M are whales regardless of sigma."""
