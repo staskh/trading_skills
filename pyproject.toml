@@ -15,8 +15,11 @@ dependencies = [
     "numpy>=2.0",
     "pandas-ta>=0.3.14b0",
     "scipy>=1.14",
-"mcp>=1.25.0",
+    "mcp>=1.25.0",
     "lxml>=6.0.2",
+    "massive>=2.4.0",
+    "pandas-market-calendars>=5.3.1.2",
+    "plotly>=6.6.0",
 ]
 
 [project.scripts]
@@ -48,4 +51,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "pytest-cov>=7.0.0",
     "ruff>=0.8",
+    "nbconvert>=7.17.0",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.8",
 ]

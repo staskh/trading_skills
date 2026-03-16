@@ -1,15 +1,17 @@
 # ABOUTME: Tests for shared utility functions.
-# ABOUTME: Covers type conversion, price extraction, date formatting, and volatility helpers.
+# ABOUTME: Covers type conversion, price extraction, date formatting, volatility helpers, and NYSE calendar utilities.
 
 import asyncio
 import math
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from trading_skills.utils import (
+    _coerce_date,
     annualized_volatility,
     days_to_expiry,
     fetch_with_timeout,
@@ -17,7 +19,10 @@ from trading_skills.utils import (
     format_expiry_long,
     format_expiry_short,
     get_current_price,
+    is_trading_now,
+    latest_trading_date,
     safe_value,
+    trading_sessions,
 )
 
 
@@ -189,3 +194,111 @@ class TestFormatExpiryShort:
 
     def test_invalid_returns_original(self):
         assert format_expiry_short("invalid") == "invalid"
+
+
+class TestCoerceDate:
+    def test_date_passthrough(self):
+        d = date(2025, 3, 21)
+        assert _coerce_date(d) == d
+
+    def test_datetime(self):
+        assert _coerce_date(datetime(2025, 3, 21, 10, 0)) == date(2025, 3, 21)
+
+    def test_iso_string(self):
+        assert _coerce_date("2025-03-21") == date(2025, 3, 21)
+
+    def test_yyyymmdd_string(self):
+        assert _coerce_date("20250321") == date(2025, 3, 21)
+
+    def test_invalid_raises(self):
+        with pytest.raises(ValueError):
+            _coerce_date("not-a-date")
+
+
+class TestIsTradingNow:
+    def test_true_during_market_hours(self):
+        # Wednesday 2025-03-19 11:00 ET — normal trading day, midday
+        market_time = datetime(2025, 3, 19, 11, 0, tzinfo=pytest.importorskip("zoneinfo").ZoneInfo("America/New_York"))
+        with patch("trading_skills.utils.datetime") as mock_dt:
+            mock_dt.now.return_value = market_time
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = is_trading_now()
+        assert result is True
+
+    def test_false_on_weekend(self):
+        # Saturday 2025-03-22
+        weekend = datetime(2025, 3, 22, 11, 0, tzinfo=pytest.importorskip("zoneinfo").ZoneInfo("America/New_York"))
+        with patch("trading_skills.utils.datetime") as mock_dt:
+            mock_dt.now.return_value = weekend
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = is_trading_now()
+        assert result is False
+
+    def test_false_before_open(self):
+        # Wednesday 2025-03-19 8:00 ET — before open
+        before_open = datetime(2025, 3, 19, 8, 0, tzinfo=pytest.importorskip("zoneinfo").ZoneInfo("America/New_York"))
+        with patch("trading_skills.utils.datetime") as mock_dt:
+            mock_dt.now.return_value = before_open
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = is_trading_now()
+        assert result is False
+
+
+class TestLatestTradingDate:
+    def test_returns_today_during_market_hours(self):
+        # Wednesday 2025-03-19 11:00 ET
+        ny = pytest.importorskip("zoneinfo").ZoneInfo("America/New_York")
+        market_time = datetime(2025, 3, 19, 11, 0, tzinfo=ny)
+        with patch("trading_skills.utils.datetime") as mock_dt:
+            mock_dt.now.return_value = market_time
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = latest_trading_date()
+        assert result == date(2025, 3, 19)
+
+    def test_returns_friday_on_saturday(self):
+        # Saturday 2025-03-22 → should return Friday 2025-03-21
+        ny = pytest.importorskip("zoneinfo").ZoneInfo("America/New_York")
+        weekend = datetime(2025, 3, 22, 11, 0, tzinfo=ny)
+        with patch("trading_skills.utils.datetime") as mock_dt:
+            mock_dt.now.return_value = weekend
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            result = latest_trading_date()
+        assert result == date(2025, 3, 21)
+
+
+class TestTradingSessions:
+    def test_known_week(self):
+        # 2025-03-17 (Mon) to 2025-03-21 (Fri) — 5 sessions
+        sessions = trading_sessions("2025-03-17", "2025-03-21")
+        assert len(sessions) == 5
+        assert sessions[0] == date(2025, 3, 17)
+        assert sessions[-1] == date(2025, 3, 21)
+
+    def test_skips_weekend(self):
+        sessions = trading_sessions("2025-03-21", "2025-03-24")
+        # Fri + Mon = 2 sessions (Sat/Sun skipped)
+        assert date(2025, 3, 22) not in sessions
+        assert date(2025, 3, 23) not in sessions
+
+    def test_skips_holiday(self):
+        # Good Friday 2025-04-18 is NYSE holiday
+        sessions = trading_sessions("2025-04-17", "2025-04-22")
+        assert date(2025, 4, 18) not in sessions
+
+    def test_accepts_date_objects(self):
+        sessions = trading_sessions(date(2025, 3, 17), date(2025, 3, 19))
+        assert len(sessions) == 3
+
+    def test_accepts_datetime_objects(self):
+        sessions = trading_sessions(datetime(2025, 3, 17, 9, 0), datetime(2025, 3, 19, 16, 0))
+        assert len(sessions) == 3
+
+    def test_sorted_ascending(self):
+        sessions = trading_sessions("2025-03-17", "2025-03-21")
+        assert sessions == sorted(sessions)
+
+    def test_to_none_uses_today(self):
+        # Just verify it doesn't raise and returns a list
+        sessions = trading_sessions("2025-03-17")
+        assert isinstance(sessions, list)
+        assert all(isinstance(s, date) for s in sessions)

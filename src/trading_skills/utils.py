@@ -1,11 +1,75 @@
 # ABOUTME: Shared utility functions used across trading analysis modules.
-# ABOUTME: Includes type conversion, price extraction, date formatting, and volatility helpers.
+# ABOUTME: Includes type conversion, price extraction, date formatting, volatility helpers, and NYSE trading calendar utilities.
 
 import asyncio
 import math
-from datetime import datetime
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
+import pandas_market_calendars as mcal
+
+_NYSE = mcal.get_calendar("NYSE")
+_NY = ZoneInfo("America/New_York")
+
+
+def is_trading_now() -> bool:
+    """Return True if NYSE is currently open for regular trading."""
+    now = datetime.now(_NY)
+    schedule = _NYSE.schedule(start_date=str(now.date()), end_date=str(now.date()))
+    if schedule.empty:
+        return False
+    open_t = schedule.iloc[0]["market_open"].to_pydatetime()
+    close_t = schedule.iloc[0]["market_close"].to_pydatetime()
+    return open_t <= now.astimezone(open_t.tzinfo) <= close_t
+
+
+def latest_trading_date() -> date:
+    """Return today if NYSE is open now, otherwise the most recent prior trading date."""
+    today = datetime.now(_NY).date()
+    schedule = _NYSE.schedule(
+        start_date=str(today - pd.Timedelta(days=10)),
+        end_date=str(today),
+    )
+    if schedule.empty:
+        raise ValueError("No trading sessions found in the last 10 days")
+    last_session = schedule.index[-1].date()
+    # If today is a session day but market hasn't opened yet, use the previous session
+    if last_session == today and not is_trading_now():
+        now = datetime.now(_NY)
+        open_t = schedule.iloc[-1]["market_open"].to_pydatetime().astimezone(_NY)
+        if now < open_t:
+            prev = schedule.iloc[:-1]
+            return prev.index[-1].date() if not prev.empty else last_session
+    return last_session
+
+
+def _coerce_date(d) -> date:
+    """Coerce datetime, date, or string to date."""
+    if isinstance(d, datetime):
+        return d.date()
+    if isinstance(d, date):
+        return d
+    # string: try ISO first, then YYYYMMDD
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(str(d), fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f"Cannot parse date: {d!r}")
+
+
+def trading_sessions(from_date, to_date=None) -> list[date]:
+    """Return sorted list of NYSE trading dates between from_date and to_date (inclusive).
+
+    Args:
+        from_date: start bound — datetime, date, or string (ISO or YYYYMMDD)
+        to_date:   end bound — same types, or None to use today's date
+    """
+    start = _coerce_date(from_date)
+    end = _coerce_date(to_date) if to_date is not None else datetime.now(_NY).date()
+    schedule = _NYSE.schedule(start_date=str(start), end_date=str(end))
+    return [idx.date() for idx in schedule.index]
 
 
 def safe_value(val):
