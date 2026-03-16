@@ -107,6 +107,14 @@ def option_whales(
     median = df["invested"].median()
     n = len(df)
 
+    # Per-transaction rule: any bar averaging >= $1M per trade is a whale
+    # regardless of the statistical threshold — these are institutional block trades.
+    tx_mask = (
+        df["transactions"].notna()
+        & (df["transactions"] > 0)
+        & (df["invested"] / df["transactions"] >= 1_000_000)
+    )
+
     if n < 30:
         # Small sample: Modified Z-Score (Iglewicz & Hoaglin, 1993).
         #
@@ -123,10 +131,9 @@ def option_whales(
         mad = (df["invested"] - median).abs().median()
 
         if mad == 0:
-            # >50% of bars are identical — no outliers can be identified.
-            return (_empty, all_bars) if return_all else _empty
-
-        mask = 0.6745 * (df["invested"] - median) / mad > sigma_z
+            mask = tx_mask
+        else:
+            mask = (0.6745 * (df["invested"] - median) / mad > sigma_z) | tx_mask
 
     else:
         # Large sample: median + sigma * std.
@@ -138,9 +145,9 @@ def option_whales(
         std = df["invested"].std()
 
         if std == 0:
-            return (_empty, all_bars) if return_all else _empty
-
-        mask = df["invested"] > median + sigma * std
+            mask = tx_mask
+        else:
+            mask = (df["invested"] > median + sigma * std) | tx_mask
 
     outliers = (
         df[mask]
