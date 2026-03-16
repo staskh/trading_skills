@@ -3,7 +3,9 @@
 
 import pytest
 
-from trading_skills.options import get_expiries, get_option_chain
+from datetime import date
+
+from trading_skills.options import get_expiries, get_option_chain, parse_option_ticker
 
 
 class TestGetExpiries:
@@ -58,3 +60,47 @@ class TestGetOptionChain:
     def test_invalid_expiry(self):
         result = get_option_chain("AAPL", "2020-01-01")
         assert "error" in result
+
+
+class TestParseOptionTicker:
+    def test_yfinance_put(self):
+        underlying, opt_type, strike, expiry = parse_option_ticker("NVDA260320P00170000")
+        assert underlying == "NVDA"
+        assert opt_type == "put"
+        assert strike == 170.0
+        assert expiry == date(2026, 3, 20)
+
+    def test_yfinance_call(self):
+        underlying, opt_type, strike, expiry = parse_option_ticker("AAPL260117C00230000")
+        assert underlying == "AAPL"
+        assert opt_type == "call"
+        assert strike == 230.0
+        assert expiry == date(2026, 1, 17)
+
+    def test_polygon_prefix_stripped(self):
+        underlying, opt_type, strike, expiry = parse_option_ticker("O:NVDA260320P00170000")
+        assert underlying == "NVDA"
+        assert opt_type == "put"
+        assert strike == 170.0
+        assert expiry == date(2026, 3, 20)
+
+    def test_fractional_strike(self):
+        _, _, strike, _ = parse_option_ticker("NVDA260316C00182500")
+        assert strike == 182.5
+
+    def test_long_underlying(self):
+        underlying, _, strike, _ = parse_option_ticker("O:GOOGL260320C00200000")
+        assert underlying == "GOOGL"
+        assert strike == 200.0
+
+    def test_seven_digit_date_format(self):
+        """OCC adjusted symbology: YYYMMDD where YYY = year - 1900."""
+        underlying, opt_type, strike, expiry = parse_option_ticker("O:BABA1250620C00045000")
+        assert underlying == "BABA"
+        assert opt_type == "call"
+        assert strike == 45.0
+        assert expiry == date(2025, 6, 20)
+
+    def test_invalid_raises(self):
+        with pytest.raises(ValueError):
+            parse_option_ticker("TOOSHORT")

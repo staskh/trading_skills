@@ -1,6 +1,8 @@
 # ABOUTME: Fetches option chain data from Yahoo Finance.
 # ABOUTME: Supports listing expiries and fetching chains by date.
 
+from datetime import datetime, date
+
 import pandas as pd
 import yfinance as yf
 
@@ -74,3 +76,57 @@ def get_option_chain(symbol: str, expiry: str) -> dict:
         "calls": process_options(chain.calls),
         "puts": process_options(chain.puts),
     }
+
+
+def parse_option_ticker(ticker: str) -> tuple[str, str, float, date]:
+    """Parse an option ticker into its components.
+
+    Accepts both plain OCC format (e.g. "NVDA260320P00170000") and
+    Polygon format with "O:" prefix (e.g. "O:NVDA260320P00170000").
+
+    OCC standard symbology — fixed-width 15-char suffix:
+      <underlying> + YYMMDD(6) + C/P(1) + strike*1000 zero-padded to 8 digits
+
+    OCC adjusted symbology for long underlyings — 16-char suffix:
+      <underlying> + YYYMMDD(7) + C/P(1) + strike*1000 zero-padded to 8 digits
+      where YYY = year - 1900  (e.g. 125 → 2025).
+      Reference: OCC Symbology, https://www.theocc.com/clearing/clearing-services/symbology
+
+    Disambiguation: try 6-digit date first; if the remaining underlying
+    contains non-alpha chars (e.g. "BABA1"), the trailing digit belongs to
+    the 7-digit date field instead.
+
+    Returns:
+        (underlying, type, strike, expiry) — type is "call" or "put".
+
+    Raises:
+        ValueError: if the ticker is too short to contain all fixed fields.
+    """
+    symbol = ticker.removeprefix("O:")
+
+    if len(symbol) < 15:
+        raise ValueError(f"Cannot parse option ticker: {ticker!r}")
+
+    opt_type   = symbol[-9]       # C or P
+    strike_str = symbol[-8:]      # strike * 1000, zero-padded
+
+    underlying_6 = symbol[:-15]
+    if underlying_6.isalpha():
+        # Standard 6-digit date: YYMMDD
+        underlying = underlying_6
+        expiry = datetime.strptime(symbol[-15:-9], "%y%m%d").date()
+    else:
+        # Adjusted 7-digit date: YYYMMDD  (YYY = year - 1900)
+        if len(symbol) < 16:
+            raise ValueError(f"Cannot parse option ticker: {ticker!r}")
+        underlying = symbol[:-16]
+        date_str   = symbol[-16:-9]          # YYYMMDD
+        year       = 1900 + int(date_str[:3])
+        expiry     = datetime.strptime(f"{year}{date_str[3:]}", "%Y%m%d").date()
+
+    return (
+        underlying,
+        "call" if opt_type.upper() == "C" else "put",
+        int(strike_str) / 1000,
+        expiry,
+    )
