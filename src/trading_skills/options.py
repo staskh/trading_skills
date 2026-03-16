@@ -127,6 +127,6 @@ def parse_option_ticker(ticker: str) -> tuple[str, str, float, date]:
     return (
         underlying,
         "call" if opt_type.upper() == "C" else "put",
-        int(strike_str) / 1000,
+        int(strike_str) / 1000.0,
         expiry,
     )

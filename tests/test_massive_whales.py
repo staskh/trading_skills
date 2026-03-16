@@ -11,7 +11,7 @@ from trading_skills.massive.whales import option_whales
 TEST_CONTRACT = "O:NVDA260320P00170000"
 TEST_DATE = date(2026, 3, 13)
 
-REQUIRED_COLUMNS = {"timestamp", "volume", "vwap", "invested", "open", "high", "low", "close"}
+REQUIRED_COLUMNS = {"timestamp", "ticker", "type", "strike", "expiry", "close", "volume", "transactions", "invested", "break_even"}
 
 
 class TestOptionWhales:

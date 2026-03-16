@@ -9,6 +9,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from massive import RESTClient
 
+from trading_skills.options import parse_option_ticker
 from trading_skills.utils import _coerce_date, latest_trading_date
 
 load_dotenv()
@@ -73,15 +74,27 @@ def option_whales(
     ):
         bars.append(bar)
 
-    _cols = ["timestamp", "open", "high", "low", "close", "volume", "vwap", "transactions", "invested"]
+    _cols = ["timestamp", 'ticker','type', 'strike', 'expiry', "close", "volume", "transactions", "invested", "break_even"]
     _empty = pd.DataFrame(columns=_cols)
 
     if not bars:
         return (_empty, _empty) if return_all else _empty
 
+    # get the underlying, type, strike, expiry from the option ticker
+    underlying, type, strike, expiry = parse_option_ticker(option_ticker)
+
     df = pd.DataFrame([b.__dict__ for b in bars])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(_NY)
-    df["invested"] = (df["vwap"] * df["volume"] * 100).round(2)
+    df['close'] = df['vwap']
+    df["invested"] = (df["close"] * df["volume"] * 100).round(2)
+    if type == "call":
+        df["break_even"] = strike + df['close']
+    else:
+        df["break_even"] = strike - df['close']
+    df['ticker'] = option_ticker.removeprefix("O:")
+    df['type'] = type
+    df['strike'] = strike
+    df['expiry'] = expiry
 
     all_bars = df[_cols].reset_index(drop=True)
 
@@ -129,7 +142,7 @@ def option_whales(
 
     outliers = (
         df[mask]
-        .sort_values("timestamp", ascending=False)
+        .sort_values("timestamp", ascending=True)
         .reset_index(drop=True)
     )[_cols]
 
