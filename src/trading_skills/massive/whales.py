@@ -9,7 +9,9 @@ import pandas as pd
 from dotenv import load_dotenv
 from massive import RESTClient
 
-from trading_skills.options import parse_option_ticker
+from dateutil.relativedelta import relativedelta
+
+from trading_skills.options import get_expiries, get_option_chain, parse_option_ticker
 from trading_skills.utils import _coerce_date, latest_trading_date
 
 load_dotenv()
@@ -147,3 +149,128 @@ def option_whales(
     )[_cols]
 
     return (outliers, all_bars) if return_all else outliers
+
+
+_WHALE_COLS = [
+    "timestamp", "ticker", "type", "strike", "expiry",
+    "close", "volume", "transactions", "invested", "break_even",
+]
+
+
+def whales_hunter(
+    underlying: str,
+    max_months: int = 2,
+    precise: bool = True,
+    sigma: float = 3.0,
+    sigma_z: float = 3.5,
+    trading_date=None,
+) -> dict:
+    """Scan an underlying for whale option activity in two steps.
+
+    Step 1 (crude): uses Yahoo Finance option chain data to find contracts
+    with anomalous daily investment (invested > median + sigma * std).
+
+    Step 2 (precise): if precise=True, drills into each candidate with
+    Polygon per-second data via option_whales. Falls back to crude results
+    if the precise step yields nothing.
+
+    Args:
+        underlying: Underlying ticker (e.g. "AAPL").
+        max_months: Maximum months until expiration (default 2).
+        precise: If True, refine with Polygon per-second data (default True).
+        sigma: Std-deviation multiplier for outlier detection (default 3.0).
+        sigma_z: Modified Z-Score threshold for option_whales small samples (default 3.5).
+        trading_date: Date to analyze. Defaults to latest trading day.
+
+    Returns:
+        dict with:
+          "whales": list of dicts with keys timestamp, ticker, type, strike,
+                    expiry, close, volume, transactions, invested, break_even.
+          "source": "massive" if precise step succeeded, else "yahoo only".
+    """
+    if trading_date is None:
+        trading_date = latest_trading_date()
+    else:
+        trading_date = _coerce_date(trading_date)
+
+    expiry_max = trading_date + relativedelta(months=max_months)
+    _empty = {"whales": [], "source": "yahoo only"}
+
+    # --- Step 1: crude Yahoo Finance scan ---
+    all_expiries = get_expiries(underlying)
+    expiries = [e for e in all_expiries if date.fromisoformat(e) <= expiry_max]
+
+    rows = []
+    for expiry in expiries:
+        chain = get_option_chain(underlying, expiry)
+        if "error" in chain:
+            continue
+        for opt_type, contracts in [("call", chain["calls"]), ("put", chain["puts"])]:
+            for c in contracts:
+                rows.append({**c, "expiry": expiry, "type": opt_type})
+
+    if not rows:
+        return _empty
+
+    df = pd.DataFrame(rows)
+    df = df.dropna(subset=["lastTradeDate"]).copy()
+    df["tradeDate"] = (
+        pd.to_datetime(df["lastTradeDate"], utc=True)
+        .dt.tz_convert("America/New_York")
+        .dt.date
+    )
+    df = df[df["tradeDate"] == trading_date].copy()
+
+    if df.empty:
+        return _empty
+
+    df["invested"] = (df["lastPrice"].fillna(0) * df["volume"].fillna(0) * 100).round(2)
+    active = df[df["invested"] > 0].copy()
+
+    if active.empty or active["invested"].std() == 0:
+        return _empty
+
+    median_inv = active["invested"].median()
+    threshold = median_inv + sigma * active["invested"].std()
+    candidates = active[active["invested"] > threshold].copy()
+
+    if candidates.empty:
+        return _empty
+
+    # Map candidate columns to the shared whale schema
+    crude = candidates.copy()
+    crude["timestamp"] = (
+        pd.to_datetime(crude["lastTradeDate"], utc=True)
+        .dt.tz_convert("America/New_York")
+    )
+    crude["ticker"] = crude["contractSymbol"]
+    crude["close"] = crude["lastPrice"].round(2)
+    crude["volume"] = crude["volume"].apply(lambda x: int(x) if pd.notna(x) else None)
+    crude["transactions"] = None
+    crude["expiry"] = crude["expiry"].apply(date.fromisoformat)
+    crude["break_even"] = crude.apply(
+        lambda r: round(r["strike"] + r["close"], 4) if r["type"] == "call"
+                  else round(r["strike"] - r["close"], 4),
+        axis=1,
+    )
+    crude_records = crude[_WHALE_COLS].to_dict("records")
+
+    # --- Step 2: precise Polygon drill-down ---
+    if not precise:
+        return {"whales": crude_records, "source": "yahoo only"}
+
+    whale_dfs = []
+    for _, row in candidates.iterrows():
+        try:
+            poly_ticker = "O:" + row["contractSymbol"]
+            w = option_whales(poly_ticker, trading_date=trading_date, sigma=sigma, sigma_z=sigma_z)
+            if not w.empty:
+                whale_dfs.append(w[_WHALE_COLS])
+        except Exception:
+            pass
+
+    if whale_dfs:
+        precise_df = pd.concat(whale_dfs, ignore_index=True)
+        return {"whales": precise_df.to_dict("records"), "source": "massive"}
+
+    return {"whales": crude_records, "source": "yahoo only"}
