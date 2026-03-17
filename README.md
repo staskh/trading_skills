@@ -158,7 +158,7 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 - "Generate portfolio action report" (requires IB)
 - "Find roll candidates for my GOOG short call" (requires IB)
 
-## Available Skills (21)
+## Available Skills (22)
 
 ### Market Data
 | Skill | Description |
@@ -183,6 +183,7 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 |-------|-------------|
 | `scanner-bullish` | Scan symbols for bullish trends (SMA, RSI, MACD, ADX) |
 | `scanner-pmcc` | Scan for PMCC suitability (delta, liquidity, spread, IV, yield) |
+| `whale-hunting` | Detect institutional option whale activity for an underlying (requires Massive API key) |
 
 ### Portfolio (requires TWS/Gateway)
 | Skill | Description |
