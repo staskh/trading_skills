@@ -214,6 +214,7 @@ def whales_hunter(
         trading_date = _coerce_date(trading_date)
 
     expiry_max = trading_date + relativedelta(months=max_months)
+    prev_trading_date = (pd.Timestamp(trading_date) - pd.offsets.BDay(1)).date()
     _empty = {"whales": [], "source": "yahoo only", "trading_date": trading_date}
 
     # --- Step 1: crude Yahoo Finance scan ---
@@ -239,7 +240,7 @@ def whales_hunter(
         .dt.tz_convert("America/New_York")
         .dt.date
     )
-    df = df[df["tradeDate"] == trading_date].copy()
+    df = df[df["tradeDate"].isin([trading_date, prev_trading_date])].copy()
 
     if df.empty:
         return _empty
@@ -283,7 +284,7 @@ def whales_hunter(
     for _, row in candidates.iterrows():
         try:
             poly_ticker = "O:" + row["contractSymbol"]
-            w = option_whales(poly_ticker, trading_date=trading_date, sigma=sigma, sigma_z=sigma_z)
+            w = option_whales(poly_ticker, trading_date=row["tradeDate"], sigma=sigma, sigma_z=sigma_z)
             if not w.empty:
                 whale_dfs.append(w[_WHALE_COLS])
         except Exception:
