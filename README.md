@@ -201,7 +201,7 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 |-------|-------------|
 | `report-stock` | Comprehensive PDF/markdown report with trend, PMCC, and fundamental analysis |
 
-## MCP Server Tools (23 tools)
+## MCP Server Tools (24 tools)
 
 The MCP server exposes a subset of skills as tools for Claude Desktop:
 
@@ -212,6 +212,7 @@ The MCP server exposes a subset of skills as tools for Claude Desktop:
 | **Options** | `option_expiries`, `option_chain`, `option_greeks` |
 | **Spreads** | `spread_vertical`, `spread_diagonal`, `spread_straddle`, `spread_strangle`, `spread_iron_condor` |
 | **Scanners** | `scan_bullish`, `scan_pmcc` |
+| **Whale Hunting** | `whale_hunting` |
 | **IB Portfolio** | `ib_account`, `ib_portfolio`, `ib_find_short_roll`, `ib_portfolio_action_report` |
 
 ## Sandbox Outputs (Not Committed)

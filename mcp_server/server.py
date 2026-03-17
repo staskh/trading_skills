@@ -40,6 +40,7 @@ from trading_skills.piotroski import calculate_piotroski_score
 from trading_skills.quote import get_quote
 from trading_skills.report import generate_report_data
 from trading_skills.risk import calculate_risk_metrics
+from trading_skills.massive.whales import whales_hunter
 from trading_skills.scanner_bullish import compute_bullish_score, scan_symbols
 from trading_skills.scanner_pmcc import analyze_pmcc, format_scan_results
 from trading_skills.spreads import (
@@ -442,6 +443,81 @@ def scan_pmcc(
         "leaps_target_delta": leaps_delta,
         "short_target_delta": short_delta,
     }
+    return output
+
+
+# ============================================================================
+# WHALE HUNTING TOOLS
+# ============================================================================
+
+
+@mcp.tool()
+def whale_hunting(
+    symbol: str,
+    max_months: int = 2,
+    trading_date: str | None = None,
+    sigma: float = 3.0,
+    sigma_z: float = 3.5,
+    summary: bool = False,
+) -> dict:
+    """Detect institutional whale option activity for a given underlying.
+
+    Uses a two-step approach:
+    1. Crude scan via Yahoo Finance — finds contracts with anomalous daily investment.
+    2. Precise drill-down via Massive API — per-second bars for each candidate.
+
+    Requires MASSIVE_API_KEY environment variable for per-second data.
+    Falls back to Yahoo-only daily data if unavailable.
+
+    Args:
+        symbol: Underlying ticker (e.g. AAPL, NVDA, SPY)
+        max_months: Max months until expiration to consider (default 2)
+        trading_date: Date to analyze YYYY-MM-DD (default: latest trading day)
+        sigma: Std-deviation multiplier for crude outlier threshold (default 3.0)
+        sigma_z: Modified Z-Score threshold for small-sample detection (default 3.5)
+        summary: If True, include per-ticker aggregate summary in result
+    """
+    import pandas as pd
+
+    result = whales_hunter(
+        symbol.upper(),
+        max_months=max_months,
+        precise=True,
+        sigma=sigma,
+        sigma_z=sigma_z,
+        trading_date=trading_date,
+    )
+
+    whales = result["whales"]
+    call_invested = sum(w["invested"] for w in whales if w.get("type") == "call" and w.get("invested"))
+    put_invested = sum(w["invested"] for w in whales if w.get("type") == "put" and w.get("invested"))
+
+    output = {
+        "underlying": symbol.upper(),
+        "trading_date": str(result["trading_date"]),
+        "source": result["source"],
+        "total_whales": len(whales),
+        "total_call_invested": round(call_invested, 2),
+        "total_put_invested": round(put_invested, 2),
+        "call_put_ratio": round(call_invested / put_invested, 4) if put_invested > 0 else None,
+        "whales": [
+            {**w, "timestamp": str(w["timestamp"]), "expiry": str(w["expiry"])}
+            for w in whales
+        ],
+    }
+
+    if summary and whales:
+        df = pd.DataFrame(whales)
+        agg = (
+            df.groupby(["ticker", "type", "strike", "expiry"])
+            .agg(whale_count=("invested", "count"), total_invested=("invested", "sum"), break_even=("break_even", "first"))
+            .reset_index()
+            .sort_values("total_invested", ascending=False)
+        )
+        agg["total_invested"] = agg["total_invested"].round(2)
+        agg["expiry"] = agg["expiry"].astype(str)
+        output["summary"] = agg.to_dict("records")
+
     return output
 
 
