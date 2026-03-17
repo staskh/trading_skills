@@ -59,6 +59,18 @@ def _coerce_date(d) -> date:
     raise ValueError(f"Cannot parse date: {d!r}")
 
 
+def previous_trading_date(d=None) -> date:
+    """Return the NYSE trading date immediately preceding the given date."""
+    ref = _coerce_date(d) if d is not None else datetime.now(_NY).date()
+    schedule = _NYSE.schedule(
+        start_date=str(ref - pd.Timedelta(days=10)),
+        end_date=str(ref - pd.Timedelta(days=1)),
+    )
+    if schedule.empty:
+        raise ValueError(f"No trading session found before {ref}")
+    return schedule.index[-1].date()
+
+
 def trading_sessions(from_date, to_date=None) -> list[date]:
     """Return sorted list of NYSE trading dates between from_date and to_date (inclusive).
 

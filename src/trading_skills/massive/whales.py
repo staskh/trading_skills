@@ -12,7 +12,7 @@ from massive import RESTClient
 from dateutil.relativedelta import relativedelta
 
 from trading_skills.options import get_expiries, get_option_chain, parse_option_ticker
-from trading_skills.utils import _coerce_date, latest_trading_date
+from trading_skills.utils import _coerce_date, latest_trading_date, previous_trading_date
 
 load_dotenv()
 
@@ -214,7 +214,7 @@ def whales_hunter(
         trading_date = _coerce_date(trading_date)
 
     expiry_max = trading_date + relativedelta(months=max_months)
-    prev_trading_date = (pd.Timestamp(trading_date) - pd.offsets.BDay(1)).date()
+    prev_trading_date = previous_trading_date(trading_date)
     _empty = {"whales": [], "source": "yahoo only", "trading_date": trading_date}
 
     # --- Step 1: crude Yahoo Finance scan ---

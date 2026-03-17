@@ -21,6 +21,7 @@ from trading_skills.utils import (
     get_current_price,
     is_trading_now,
     latest_trading_date,
+    previous_trading_date,
     safe_value,
     trading_sessions,
 )
@@ -302,3 +303,23 @@ class TestTradingSessions:
         sessions = trading_sessions("2025-03-17")
         assert isinstance(sessions, list)
         assert all(isinstance(s, date) for s in sessions)
+
+
+class TestPreviousTradingDate:
+    def test_monday_returns_friday(self):
+        # 2026-03-16 is Monday, previous trading day is 2026-03-13 (Friday)
+        assert previous_trading_date(date(2026, 3, 16)) == date(2026, 3, 13)
+
+    def test_tuesday_returns_monday(self):
+        assert previous_trading_date(date(2026, 3, 17)) == date(2026, 3, 16)
+
+    def test_skips_holiday(self):
+        # Good Friday 2025-04-18 is NYSE holiday; previous of 2025-04-21 (Mon) is 2025-04-17 (Thu)
+        assert previous_trading_date(date(2025, 4, 21)) == date(2025, 4, 17)
+
+    def test_accepts_string(self):
+        assert previous_trading_date("2026-03-17") == date(2026, 3, 16)
+
+    def test_returns_date_type(self):
+        result = previous_trading_date(date(2026, 3, 17))
+        assert isinstance(result, date)
