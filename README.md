@@ -226,9 +226,9 @@ To use IB features:
 2. Enable API connections in TWS: Configure → API → Settings → Enable ActiveX and Socket Clients
 3. Note the port: 7497 (paper) or 7496 (live)
 
-## Polygon.io (Massive) Setup
+## Massive (formerly Polygon.io) Setup
 
-Whale-detection features (`option_whales`, `whales_hunter`) require a [Polygon.io](https://polygon.io/) API key.
+Whale-detection features (`option_whales`, `whales_hunter`) require a [Massive](https://massive.com/) API key (the platform was previously known as Polygon.io).
 
 ### Claude Code / Cursor
 
