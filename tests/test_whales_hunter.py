@@ -23,6 +23,11 @@ class TestWhalesHunter:
         assert isinstance(result, dict)
         assert "whales" in result
         assert "source" in result
+        assert "trading_date" in result
+
+    def test_trading_date_in_result(self):
+        result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=False)
+        assert result["trading_date"] == TEST_DATE
 
     def test_whales_is_list(self):
         result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=False)

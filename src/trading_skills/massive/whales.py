@@ -211,7 +211,7 @@ def whales_hunter(
         trading_date = _coerce_date(trading_date)
 
     expiry_max = trading_date + relativedelta(months=max_months)
-    _empty = {"whales": [], "source": "yahoo only"}
+    _empty = {"whales": [], "source": "yahoo only", "trading_date": trading_date}
 
     # --- Step 1: crude Yahoo Finance scan ---
     all_expiries = get_expiries(underlying)
@@ -274,7 +274,7 @@ def whales_hunter(
 
     # --- Step 2: precise Polygon drill-down ---
     if not precise:
-        return {"whales": crude_records, "source": "yahoo only"}
+        return {"whales": crude_records, "source": "yahoo only", "trading_date": trading_date}
 
     whale_dfs = []
     for _, row in candidates.iterrows():
@@ -288,6 +288,6 @@ def whales_hunter(
 
     if whale_dfs:
         precise_df = pd.concat(whale_dfs, ignore_index=True)
-        return {"whales": precise_df.to_dict("records"), "source": "massive"}
+        return {"whales": precise_df.to_dict("records"), "source": "massive", "trading_date": trading_date}
 
-    return {"whales": crude_records, "source": "yahoo only"}
+    return {"whales": crude_records, "source": "yahoo only", "trading_date": trading_date}
