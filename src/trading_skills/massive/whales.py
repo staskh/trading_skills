@@ -131,7 +131,10 @@ def option_whales(
         mad = (df["invested"] - median).abs().median()
 
         if mad == 0:
-            mask = tx_mask
+            # All bars have identical investment (typically a single bar).
+            # Can't rank outliers statistically — include everything and let
+            # the per-transaction filter below discard low-value bars.
+            mask = pd.Series(True, index=df.index)
         else:
             mask = (0.6745 * (df["invested"] - median) / mad > sigma_z) | tx_mask
 
