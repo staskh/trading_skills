@@ -226,6 +226,54 @@ To use IB features:
 2. Enable API connections in TWS: Configure → API → Settings → Enable ActiveX and Socket Clients
 3. Note the port: 7497 (paper) or 7496 (live)
 
+## Polygon.io (Massive) Setup
+
+Whale-detection features (`option_whales`, `whales_hunter`) require a [Polygon.io](https://polygon.io/) API key.
+
+### Claude Code / Cursor
+
+Create a `.env` file in the repository root:
+
+```bash
+MASSIVE_API_KEY=your_polygon_api_key_here
+```
+
+The library loads it automatically via `python-dotenv`.
+
+### MCP Server (Claude Desktop)
+
+Pass the key through the `env` field in `claude_desktop_config.json`:
+
+**macOS / Linux:**
+```json
+{
+  "mcpServers": {
+    "trading-skills": {
+      "command": "/full/path/to/trading-skills-mcp",
+      "env": {
+        "MASSIVE_API_KEY": "your_polygon_api_key_here"
+      }
+    }
+  }
+}
+```
+
+**Windows:**
+```json
+{
+  "mcpServers": {
+    "trading-skills": {
+      "command": "C:\\full\\path\\to\\trading-skills-mcp.exe",
+      "env": {
+        "MASSIVE_API_KEY": "your_polygon_api_key_here"
+      }
+    }
+  }
+}
+```
+
+> The `env` block is merged with the system environment, so other variables are not affected.
+
 ## Development
 
 ```bash
