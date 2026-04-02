@@ -1,8 +1,17 @@
 # ABOUTME: Integration tests for whales_hunter using real Yahoo Finance + Polygon APIs.
 # ABOUTME: Validates two-step whale detection: crude Yahoo scan + precise Polygon drill-down.
 
+import os
+
+import pytest
+
 from trading_skills.massive.whales import whales_hunter
 from trading_skills.utils import latest_trading_date
+
+requires_massive = pytest.mark.skipif(
+    not os.getenv("MASSIVE_API_KEY"),
+    reason="MASSIVE_API_KEY not set",
+)
 
 # NVDA is highly liquid and consistently generates whale activity
 TEST_UNDERLYING = "NVDA"

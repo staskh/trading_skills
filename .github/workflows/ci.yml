@@ -29,6 +29,8 @@ jobs:
         run: uv run ruff check src/ tests/
 
       - name: Run tests
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
         run: |
           uv run pytest tests/ -v --tb=short \
             --cov=trading_skills --cov-report=term-missing \
