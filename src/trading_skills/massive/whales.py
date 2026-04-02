@@ -1,15 +1,14 @@
 # ABOUTME: Detects option whale activity using Polygon.io second-level aggregation.
-# ABOUTME: Identifies seconds with statistically anomalous dollar invested for a given option contract.
+# ABOUTME: Identifies seconds with anomalous dollar invested for a given option contract.
 
 import os
-from datetime import date, datetime
+from datetime import date
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 from massive import RESTClient
-
-from dateutil.relativedelta import relativedelta
 
 from trading_skills.options import get_expiries, get_option_chain, parse_option_ticker
 from trading_skills.utils import _coerce_date, latest_trading_date, previous_trading_date
@@ -76,7 +75,10 @@ def option_whales(
     ):
         bars.append(bar)
 
-    _cols = ["timestamp", 'ticker','type', 'strike', 'expiry', "close", "volume", "transactions", "invested", "break_even"]
+    _cols = [
+        "timestamp", "ticker", "type", "strike", "expiry",
+        "close", "volume", "transactions", "invested", "break_even",
+    ]
     _empty = pd.DataFrame(columns=_cols)
 
     if not bars:
@@ -284,7 +286,9 @@ def whales_hunter(
     for _, row in candidates.iterrows():
         try:
             poly_ticker = "O:" + row["contractSymbol"]
-            w = option_whales(poly_ticker, trading_date=row["tradeDate"], sigma=sigma, sigma_z=sigma_z)
+            w = option_whales(
+                poly_ticker, trading_date=row["tradeDate"], sigma=sigma, sigma_z=sigma_z
+            )
             if not w.empty:
                 whale_dfs.append(w[_WHALE_COLS])
         except Exception:
@@ -292,6 +296,7 @@ def whales_hunter(
 
     if whale_dfs:
         precise_df = pd.concat(whale_dfs, ignore_index=True)
-        return {"whales": precise_df.to_dict("records"), "source": "massive", "trading_date": trading_date}
+        return {"whales": precise_df.to_dict("records"), "source": "massive",
+                "trading_date": trading_date}
 
     return {"whales": crude_records, "source": "yahoo only", "trading_date": trading_date}

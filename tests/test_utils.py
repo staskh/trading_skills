@@ -1,5 +1,5 @@
 # ABOUTME: Tests for shared utility functions.
-# ABOUTME: Covers type conversion, price extraction, date formatting, volatility helpers, and NYSE calendar utilities.
+# ABOUTME: Covers type coercion, price extraction, date helpers, volatility, and NYSE calendar.
 
 import asyncio
 import math
@@ -219,7 +219,8 @@ class TestCoerceDate:
 class TestIsTradingNow:
     def test_true_during_market_hours(self):
         # Wednesday 2025-03-19 11:00 ET — normal trading day, midday
-        market_time = datetime(2025, 3, 19, 11, 0, tzinfo=pytest.importorskip("zoneinfo").ZoneInfo("America/New_York"))
+        ET = pytest.importorskip("zoneinfo").ZoneInfo("America/New_York")
+        market_time = datetime(2025, 3, 19, 11, 0, tzinfo=ET)
         with patch("trading_skills.utils.datetime") as mock_dt:
             mock_dt.now.return_value = market_time
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
@@ -228,7 +229,8 @@ class TestIsTradingNow:
 
     def test_false_on_weekend(self):
         # Saturday 2025-03-22
-        weekend = datetime(2025, 3, 22, 11, 0, tzinfo=pytest.importorskip("zoneinfo").ZoneInfo("America/New_York"))
+        ET = pytest.importorskip("zoneinfo").ZoneInfo("America/New_York")
+        weekend = datetime(2025, 3, 22, 11, 0, tzinfo=ET)
         with patch("trading_skills.utils.datetime") as mock_dt:
             mock_dt.now.return_value = weekend
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
@@ -237,7 +239,8 @@ class TestIsTradingNow:
 
     def test_false_before_open(self):
         # Wednesday 2025-03-19 8:00 ET — before open
-        before_open = datetime(2025, 3, 19, 8, 0, tzinfo=pytest.importorskip("zoneinfo").ZoneInfo("America/New_York"))
+        ET = pytest.importorskip("zoneinfo").ZoneInfo("America/New_York")
+        before_open = datetime(2025, 3, 19, 8, 0, tzinfo=ET)
         with patch("trading_skills.utils.datetime") as mock_dt:
             mock_dt.now.return_value = before_open
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)

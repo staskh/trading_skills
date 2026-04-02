@@ -1,5 +1,5 @@
 # ABOUTME: Shared utility functions used across trading analysis modules.
-# ABOUTME: Includes type conversion, price extraction, date formatting, volatility helpers, and NYSE trading calendar utilities.
+# ABOUTME: Type coercion, price extraction, date helpers, volatility, and NYSE calendar utilities.
 
 import asyncio
 import math

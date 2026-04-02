@@ -1,9 +1,9 @@
 # ABOUTME: Tests for option chain module using real Yahoo Finance data.
 # ABOUTME: Validates expiry listing and chain retrieval.
 
-import pytest
-
 from datetime import date
+
+import pytest
 
 from trading_skills.options import get_expiries, get_option_chain, parse_option_ticker
 

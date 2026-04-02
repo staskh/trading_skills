@@ -1,7 +1,7 @@
 # ABOUTME: Fetches option chain data from Yahoo Finance.
 # ABOUTME: Supports listing expiries and fetching chains by date.
 
-from datetime import datetime, date
+from datetime import date, datetime
 
 import pandas as pd
 import yfinance as yf

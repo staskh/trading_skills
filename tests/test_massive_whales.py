@@ -15,7 +15,10 @@ TEST_DATE = date(2026, 3, 13)
 # HOOD 110p 2026-03-20 — contract with known $1M+ single-transaction blocks
 TX_CONTRACT = "O:HOOD260320P00110000"
 
-REQUIRED_COLUMNS = {"timestamp", "ticker", "type", "strike", "expiry", "close", "volume", "transactions", "invested", "break_even"}
+REQUIRED_COLUMNS = {
+    "timestamp", "ticker", "type", "strike", "expiry",
+    "close", "volume", "transactions", "invested", "break_even",
+}
 
 
 class TestOptionWhales:

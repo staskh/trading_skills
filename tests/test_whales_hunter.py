@@ -3,8 +3,6 @@
 
 from datetime import date
 
-import pytest
-
 from trading_skills.massive.whales import whales_hunter
 
 # HOOD on 2026-03-13 had known heavy put whale activity
