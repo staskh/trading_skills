@@ -253,7 +253,7 @@ Pass the key through the `env` field in `claude_desktop_config.json`:
     "trading-skills": {
       "command": "/full/path/to/trading-skills-mcp",
       "env": {
-        "MASSIVE_API_KEY": "your_polygon_api_key_here"
+        "MASSIVE_API_KEY": "your_massive_api_key_here"
       }
     }
   }
@@ -267,7 +267,7 @@ Pass the key through the `env` field in `claude_desktop_config.json`:
     "trading-skills": {
       "command": "C:\\full\\path\\to\\trading-skills-mcp.exe",
       "env": {
-        "MASSIVE_API_KEY": "your_polygon_api_key_here"
+        "MASSIVE_API_KEY": "your_massive_api_key_here"
       }
     }
   }
