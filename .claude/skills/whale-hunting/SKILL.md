@@ -69,11 +69,11 @@ After running the script, present the results as follows.
 
 **When `--summary` was requested**, render the `summary` array as a table:
 
-| Ticker | Type | Strike | Expiry | # Events | Total Invested | Break Even |
-|--------|------|--------|--------|----------|----------------|------------|
-| {ticker} | {type} | {strike} | {expiry} | {whale_count} | ${total_invested:,.0f} | {break_even} |
+| Time (ET) | Ticker | Type | Strike | Expiry | # Events | Total Invested | Break Even |
+|-----------|--------|------|--------|--------|----------|----------------|------------|
+| {timestamp} | {ticker} | {type} | {strike} | {expiry} | {whale_count} | ${total_invested:,.0f} | {break_even} |
 
-Sort by `total_invested` descending.
+Sort by `total_invested` descending. For multi-event rows use the time range of first–last event (e.g. `11:46–12:33`).
 
 **Interpretation guidance:**
 - `source: "massive"` — High-confidence; per-second block trade data from Massive API
