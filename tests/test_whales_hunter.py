@@ -1,13 +1,12 @@
 # ABOUTME: Integration tests for whales_hunter using real Yahoo Finance + Polygon APIs.
 # ABOUTME: Validates two-step whale detection: crude Yahoo scan + precise Polygon drill-down.
 
-from datetime import date
-
 from trading_skills.massive.whales import whales_hunter
+from trading_skills.utils import latest_trading_date
 
-# HOOD on 2026-03-13 had known heavy put whale activity
-TEST_UNDERLYING = "HOOD"
-TEST_DATE = date(2026, 3, 13)
+# NVDA is highly liquid and consistently generates whale activity
+TEST_UNDERLYING = "NVDA"
+TEST_DATE = latest_trading_date()
 
 REQUIRED_FIELDS = {
     "timestamp", "ticker", "type", "strike", "expiry",
