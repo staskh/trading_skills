@@ -2,6 +2,7 @@
 # ABOUTME: Identifies seconds with anomalous dollar invested for a given option contract.
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from zoneinfo import ZoneInfo
 
@@ -179,6 +180,47 @@ def option_whales(
     return (outliers, all_bars) if return_all else outliers
 
 
+def _fetch_chain(underlying: str, expiry: str) -> list[dict]:
+    """Fetch one expiry's option chain; returns [] on error."""
+    chain = get_option_chain(underlying, expiry)
+    if "error" in chain:
+        return []
+    rows = []
+    for opt_type, contracts in [("call", chain["calls"]), ("put", chain["puts"])]:
+        for c in contracts:
+            rows.append({**c, "expiry": expiry, "type": opt_type})
+    return rows
+
+
+def _fetch_whales_parallel(
+    candidates: pd.DataFrame,
+    sigma: float,
+    sigma_z: float,
+) -> list[pd.DataFrame]:
+    """Fetch per-second whale data for each candidate concurrently.
+
+    Returns a list of non-empty DataFrames, one per candidate that had whale activity.
+    Exceptions from individual candidates are swallowed so others still complete.
+    """
+
+    def fetch_one(row):
+        poly_ticker = "O:" + row["contractSymbol"]
+        try:
+            w = option_whales(
+                poly_ticker, trading_date=row["tradeDate"], sigma=sigma, sigma_z=sigma_z
+            )
+            return w[_WHALE_COLS] if not w.empty else None
+        except Exception:
+            return None
+
+    rows = [row for _, row in candidates.iterrows()]
+    with ThreadPoolExecutor() as executor:
+        futures = {executor.submit(fetch_one, row): row for row in rows}
+        results = [f.result() for f in as_completed(futures)]
+
+    return [r for r in results if r is not None]
+
+
 def _crude_filter(invested: pd.Series, sigma_z: float) -> pd.Series:
     """Boolean mask identifying outliers via Modified Z-Score (MAD-based).
 
@@ -258,14 +300,9 @@ def whales_hunter(
     all_expiries = get_expiries(underlying)
     expiries = [e for e in all_expiries if date.fromisoformat(e) <= expiry_max]
 
-    rows = []
-    for expiry in expiries:
-        chain = get_option_chain(underlying, expiry)
-        if "error" in chain:
-            continue
-        for opt_type, contracts in [("call", chain["calls"]), ("put", chain["puts"])]:
-            for c in contracts:
-                rows.append({**c, "expiry": expiry, "type": opt_type})
+    with ThreadPoolExecutor() as executor:
+        chain_results = list(executor.map(lambda e: _fetch_chain(underlying, e), expiries))
+    rows = [row for chain_rows in chain_results for row in chain_rows]
 
     if not rows:
         return _empty
@@ -315,17 +352,7 @@ def whales_hunter(
     if not precise:
         return {"whales": crude_records, "source": "yahoo only", "trading_date": trading_date}
 
-    whale_dfs = []
-    for _, row in candidates.iterrows():
-        try:
-            poly_ticker = "O:" + row["contractSymbol"]
-            w = option_whales(
-                poly_ticker, trading_date=row["tradeDate"], sigma=sigma, sigma_z=sigma_z
-            )
-            if not w.empty:
-                whale_dfs.append(w[_WHALE_COLS])
-        except Exception:
-            pass
+    whale_dfs = _fetch_whales_parallel(candidates, sigma=sigma, sigma_z=sigma_z)
 
     if whale_dfs:
         precise_df = pd.concat(whale_dfs, ignore_index=True)
