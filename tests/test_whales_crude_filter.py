@@ -1,5 +1,5 @@
 # ABOUTME: Unit tests for the crude filter used in whale detection.
-# ABOUTME: Validates that MAD-based z-score detects high-volume cheap options missed by std-based approach.
+# ABOUTME: Validates MAD-based z-score detects high-volume cheap options missed by std.
 
 import numpy as np
 import pandas as pd
