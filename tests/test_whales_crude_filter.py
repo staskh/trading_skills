@@ -24,7 +24,7 @@ class TestCrudeFilter:
         return pd.Series(np.concatenate([typical, high_dollar, whale]))
 
     def test_detects_high_volume_cheap_option(self, skewed_invested):
-        """Whale at index -1 ($140k) must be flagged despite high-dollar contracts inflating spread."""
+        """Whale ($140k) must be flagged despite high-dollar contracts inflating spread."""
         mask = _crude_filter(skewed_invested, sigma_z=3.5)
         assert mask.iloc[-1], "HTZ-like whale should be detected by MAD-based z-score"
 
