@@ -420,11 +420,13 @@ async def find_collar_candidates(
 
     # Separate long and short calls
     long_calls = [
-        p for p in symbol_positions
+        p
+        for p in symbol_positions
         if p["sec_type"] == "OPT" and p["right"] == "C" and p["quantity"] > 0
     ]
     short_calls = [
-        p for p in symbol_positions
+        p
+        for p in symbol_positions
         if p["sec_type"] == "OPT" and p["right"] == "C" and p["quantity"] < 0
     ]
 

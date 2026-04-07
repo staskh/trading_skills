@@ -16,8 +16,16 @@ TEST_DATE = date(2026, 3, 13)
 TX_CONTRACT = "O:HOOD260320P00110000"
 
 REQUIRED_COLUMNS = {
-    "timestamp", "ticker", "type", "strike", "expiry",
-    "close", "volume", "transactions", "invested", "break_even",
+    "timestamp",
+    "ticker",
+    "type",
+    "strike",
+    "expiry",
+    "close",
+    "volume",
+    "transactions",
+    "invested",
+    "break_even",
 }
 
 

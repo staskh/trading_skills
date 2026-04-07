@@ -33,9 +33,7 @@ class TestIbConnection:
 
             result = asyncio.run(run())
             assert result is mock_ib
-            mock_ib.connectAsync.assert_called_once_with(
-                host="127.0.0.1", port=7496, clientId=1
-            )
+            mock_ib.connectAsync.assert_called_once_with(host="127.0.0.1", port=7496, clientId=1)
             mock_ib.disconnect.assert_called_once()
 
     def test_disconnects_on_exception(self):
@@ -57,9 +55,7 @@ class TestIbConnection:
     def test_raises_connection_error_on_failure(self):
         with patch(f"{MODULE}.IB") as MockIB:
             mock_ib = MagicMock()
-            mock_ib.connectAsync = AsyncMock(
-                side_effect=ConnectionRefusedError("refused")
-            )
+            mock_ib.connectAsync = AsyncMock(side_effect=ConnectionRefusedError("refused"))
             MockIB.return_value = mock_ib
 
             async def run():
@@ -132,8 +128,7 @@ class TestNormalizePositions:
 
     def test_option_divides_cost_by_multiplier(self):
         pos = self._make_position(
-            "AAPL", "OPT", -5, 250.0,
-            strike=200.0, expiry="20250321", right="C", multiplier="100"
+            "AAPL", "OPT", -5, 250.0, strike=200.0, expiry="20250321", right="C", multiplier="100"
         )
         result = normalize_positions([pos])
         assert len(result) == 1
@@ -144,16 +139,14 @@ class TestNormalizePositions:
 
     def test_option_default_multiplier_100(self):
         pos = self._make_position(
-            "AAPL", "OPT", 1, 500.0,
-            strike=150.0, expiry="20250321", right="P", multiplier=""
+            "AAPL", "OPT", 1, 500.0, strike=150.0, expiry="20250321", right="P", multiplier=""
         )
         result = normalize_positions([pos])
         assert result[0]["avg_cost"] == 5.0
 
     def test_fop_divides_cost_by_multiplier(self):
         pos = self._make_position(
-            "ES", "FOP", -2, 1000.0,
-            strike=5000.0, expiry="20250321", right="P", multiplier="50"
+            "ES", "FOP", -2, 1000.0, strike=5000.0, expiry="20250321", right="P", multiplier="50"
         )
         result = normalize_positions([pos])
         assert result[0]["avg_cost"] == 20.0
@@ -227,8 +220,14 @@ class TestClientIds:
 
     def test_all_modules_registered(self):
         expected = {
-            "portfolio", "account", "collar", "portfolio_action",
-            "delta_exposure", "options_expiries", "options_chain", "roll",
+            "portfolio",
+            "account",
+            "collar",
+            "portfolio_action",
+            "delta_exposure",
+            "options_expiries",
+            "options_chain",
+            "roll",
             "consolidate",
         }
         assert set(CLIENT_IDS.keys()) == expected

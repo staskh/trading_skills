@@ -18,8 +18,16 @@ TEST_UNDERLYING = "NVDA"
 TEST_DATE = latest_trading_date()
 
 REQUIRED_FIELDS = {
-    "timestamp", "ticker", "type", "strike", "expiry",
-    "close", "volume", "transactions", "invested", "break_even",
+    "timestamp",
+    "ticker",
+    "type",
+    "strike",
+    "expiry",
+    "close",
+    "volume",
+    "transactions",
+    "invested",
+    "break_even",
 }
 
 

@@ -32,9 +32,7 @@ async def ib_connection(port: int, client_id: int):
     try:
         await ib.connectAsync(host="127.0.0.1", port=port, clientId=client_id)
     except Exception as e:
-        raise ConnectionError(
-            f"Could not connect to IB on port {port}: {e}"
-        ) from e
+        raise ConnectionError(f"Could not connect to IB on port {port}: {e}") from e
 
     try:
         yield ib
@@ -71,12 +69,14 @@ def normalize_positions(raw_positions: list) -> list[dict]:
             "right": None,
         }
         if c.secType in ("OPT", "FOP"):
-            entry.update({
-                "strike": c.strike,
-                "expiry": c.lastTradeDateOrContractMonth,
-                "right": c.right,
-                "avg_cost": pos.avgCost / multiplier,
-            })
+            entry.update(
+                {
+                    "strike": c.strike,
+                    "expiry": c.lastTradeDateOrContractMonth,
+                    "right": c.right,
+                    "avg_cost": pos.avgCost / multiplier,
+                }
+            )
         result.append(entry)
     return result
 
@@ -91,9 +91,7 @@ def best_option_chain(chains: list):
     return max(pool, key=lambda c: len(c.expirations))
 
 
-async def fetch_spot_prices(
-    ib: IB, symbols: list[str], timeout: float = 15.0
-) -> dict[str, float]:
+async def fetch_spot_prices(ib: IB, symbols: list[str], timeout: float = 15.0) -> dict[str, float]:
     """Fetch spot prices for stock symbols. Returns {symbol: price} dict."""
     if not symbols:
         return {}
@@ -105,9 +103,7 @@ async def fetch_spot_prices(
     if not qualified:
         return {}
 
-    tickers = await fetch_with_timeout(
-        ib.reqTickersAsync(*qualified), timeout=timeout, default=[]
-    )
+    tickers = await fetch_with_timeout(ib.reqTickersAsync(*qualified), timeout=timeout, default=[])
 
     prices = {}
     for ticker in tickers or []:

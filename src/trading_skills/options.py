@@ -107,8 +107,8 @@ def parse_option_ticker(ticker: str) -> tuple[str, str, float, date]:
     if len(symbol) < 15:
         raise ValueError(f"Cannot parse option ticker: {ticker!r}")
 
-    opt_type   = symbol[-9]       # C or P
-    strike_str = symbol[-8:]      # strike * 1000, zero-padded
+    opt_type = symbol[-9]  # C or P
+    strike_str = symbol[-8:]  # strike * 1000, zero-padded
 
     underlying_6 = symbol[:-15]
     if underlying_6.isalpha():
@@ -120,9 +120,9 @@ def parse_option_ticker(ticker: str) -> tuple[str, str, float, date]:
         if len(symbol) < 16:
             raise ValueError(f"Cannot parse option ticker: {ticker!r}")
         underlying = symbol[:-16]
-        date_str   = symbol[-16:-9]          # YYYMMDD
-        year       = 1900 + int(date_str[:3])
-        expiry     = datetime.strptime(f"{year}{date_str[3:]}", "%Y%m%d").date()
+        date_str = symbol[-16:-9]  # YYYMMDD
+        year = 1900 + int(date_str[:3])
+        expiry = datetime.strptime(f"{year}{date_str[3:]}", "%Y%m%d").date()
 
     return (
         underlying,

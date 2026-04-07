@@ -44,9 +44,9 @@ async def get_current_position(ib: IB, symbol: str, account: str = None) -> dict
     # Show all found positions
     print(f"Found {len(short_options)} short {symbol} positions:", file=sys.stderr)
     for opt in short_options:
-        qty = abs(opt['quantity'])
-        acct = opt['account']
-        s, r, e = opt['strike'], opt['right'], opt['expiry']
+        qty = abs(opt["quantity"])
+        acct = opt["account"]
+        s, r, e = opt["strike"], opt["right"], opt["expiry"]
         print(
             f"  {acct}: -{qty} ${s} {r} exp {e}",
             file=sys.stderr,
@@ -107,9 +107,9 @@ async def get_long_option_position(
     # Show all found positions
     print(f"Found {len(long_options)} long {symbol} {right} positions:", file=sys.stderr)
     for opt in long_options:
-        acct = opt['account']
-        qty, s = opt['quantity'], opt['strike']
-        r, e = opt['right'], opt['expiry']
+        acct = opt["account"]
+        qty, s = opt["quantity"], opt["strike"]
+        r, e = opt["right"], opt["expiry"]
         print(
             f"  {acct}: +{qty} ${s} {r} exp {e}",
             file=sys.stderr,
@@ -296,13 +296,11 @@ async def _find_roll(ib, symbol, current_position, chain_params):
 
     if current_position["right"] == "C":
         target_strikes = [
-            s for s in all_strikes
-            if current_strike - 10 <= s <= current_strike + 50 and s % 5 == 0
+            s for s in all_strikes if current_strike - 10 <= s <= current_strike + 50 and s % 5 == 0
         ]
     else:
         target_strikes = [
-            s for s in all_strikes
-            if current_strike - 50 <= s <= current_strike + 10 and s % 5 == 0
+            s for s in all_strikes if current_strike - 50 <= s <= current_strike + 10 and s % 5 == 0
         ]
 
     target_strikes = sorted(target_strikes)[:10]
@@ -310,9 +308,7 @@ async def _find_roll(ib, symbol, current_position, chain_params):
     # Fetch quotes for each target expiration
     roll_data = {}
     for exp in future_exps:
-        quotes = await get_option_quotes(
-            ib, symbol, exp, target_strikes, current_position["right"]
-        )
+        quotes = await get_option_quotes(ib, symbol, exp, target_strikes, current_position["right"])
         roll_data[exp] = calculate_roll_options(current_position, quotes, buy_price)
 
     earnings_date = get_next_earnings_date(symbol)

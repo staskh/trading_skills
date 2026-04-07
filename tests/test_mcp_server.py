@@ -217,7 +217,6 @@ class TestIBTools:
         assert "error" in result
 
 
-
 class TestReportTools:
     """Test report generation tools."""
 
