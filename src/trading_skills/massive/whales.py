@@ -76,8 +76,16 @@ def option_whales(
         bars.append(bar)
 
     _cols = [
-        "timestamp", "ticker", "type", "strike", "expiry",
-        "close", "volume", "transactions", "invested", "break_even",
+        "timestamp",
+        "ticker",
+        "type",
+        "strike",
+        "expiry",
+        "close",
+        "volume",
+        "transactions",
+        "invested",
+        "break_even",
     ]
     _empty = pd.DataFrame(columns=_cols)
 
@@ -89,16 +97,16 @@ def option_whales(
 
     df = pd.DataFrame([b.__dict__ for b in bars])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(_NY)
-    df['close'] = df['vwap']
+    df["close"] = df["vwap"]
     df["invested"] = (df["close"] * df["volume"] * 100).round(2)
     if type == "call":
-        df["break_even"] = strike + df['close']
+        df["break_even"] = strike + df["close"]
     else:
-        df["break_even"] = strike - df['close']
-    df['ticker'] = option_ticker.removeprefix("O:")
-    df['type'] = type
-    df['strike'] = strike
-    df['expiry'] = expiry
+        df["break_even"] = strike - df["close"]
+    df["ticker"] = option_ticker.removeprefix("O:")
+    df["type"] = type
+    df["strike"] = strike
+    df["expiry"] = expiry
 
     all_bars = df[_cols].reset_index(drop=True)
 
@@ -164,18 +172,45 @@ def option_whales(
         & (df["invested"] / df["transactions"] <= 100_000)
     )
 
-    outliers = (
-        df[mask & ~low_tx]
-        .sort_values("timestamp", ascending=True)
-        .reset_index(drop=True)
-    )[_cols]
+    outliers = (df[mask & ~low_tx].sort_values("timestamp", ascending=True).reset_index(drop=True))[
+        _cols
+    ]
 
     return (outliers, all_bars) if return_all else outliers
 
 
+def _crude_filter(invested: pd.Series, sigma_z: float) -> pd.Series:
+    """Boolean mask identifying outliers via Modified Z-Score (MAD-based).
+
+    Options dollar-invested is heavily right-skewed; a std-based threshold gets
+    inflated by high-dollar contracts (e.g. NVDA/SPY), causing high-volume cheap
+    options to fall below the threshold and go undetected.
+
+    MAD (Median Absolute Deviation) is resistant to that inflation:
+        MAD  = median( |xi − median(x)| )
+        Mzi  = 0.6745 × (xi − median(x)) / MAD
+
+    A bar is flagged when Mzi > sigma_z.
+    """
+    median = invested.median()
+    mad = (invested - median).abs().median()
+    if mad == 0:
+        return invested > median
+    z_scores = 0.6745 * (invested - median) / mad
+    return z_scores > sigma_z
+
+
 _WHALE_COLS = [
-    "timestamp", "ticker", "type", "strike", "expiry",
-    "close", "volume", "transactions", "invested", "break_even",
+    "timestamp",
+    "ticker",
+    "type",
+    "strike",
+    "expiry",
+    "close",
+    "volume",
+    "transactions",
+    "invested",
+    "break_even",
 ]
 
 
@@ -238,9 +273,7 @@ def whales_hunter(
     df = pd.DataFrame(rows)
     df = df.dropna(subset=["lastTradeDate"]).copy()
     df["tradeDate"] = (
-        pd.to_datetime(df["lastTradeDate"], utc=True)
-        .dt.tz_convert("America/New_York")
-        .dt.date
+        pd.to_datetime(df["lastTradeDate"], utc=True).dt.tz_convert("America/New_York").dt.date
     )
     df = df[df["tradeDate"].isin([trading_date, prev_trading_date])].copy()
 
@@ -250,21 +283,18 @@ def whales_hunter(
     df["invested"] = (df["lastPrice"].fillna(0) * df["volume"].fillna(0) * 100).round(2)
     active = df[df["invested"] > 0].copy()
 
-    if active.empty or active["invested"].std() == 0:
+    if active.empty:
         return _empty
 
-    median_inv = active["invested"].median()
-    threshold = median_inv + sigma * active["invested"].std()
-    candidates = active[active["invested"] > threshold].copy()
+    candidates = active[_crude_filter(active["invested"], sigma_z)].copy()
 
     if candidates.empty:
         return _empty
 
     # Map candidate columns to the shared whale schema
     crude = candidates.copy()
-    crude["timestamp"] = (
-        pd.to_datetime(crude["lastTradeDate"], utc=True)
-        .dt.tz_convert("America/New_York")
+    crude["timestamp"] = pd.to_datetime(crude["lastTradeDate"], utc=True).dt.tz_convert(
+        "America/New_York"
     )
     crude["ticker"] = crude["contractSymbol"]
     crude["close"] = crude["lastPrice"].round(2)
@@ -272,8 +302,11 @@ def whales_hunter(
     crude["transactions"] = None
     crude["expiry"] = crude["expiry"].apply(date.fromisoformat)
     crude["break_even"] = crude.apply(
-        lambda r: round(r["strike"] + r["close"], 4) if r["type"] == "call"
-                  else round(r["strike"] - r["close"], 4),
+        lambda r: (
+            round(r["strike"] + r["close"], 4)
+            if r["type"] == "call"
+            else round(r["strike"] - r["close"], 4)
+        ),
         axis=1,
     )
     crude_records = crude[_WHALE_COLS].to_dict("records")
@@ -296,7 +329,10 @@ def whales_hunter(
 
     if whale_dfs:
         precise_df = pd.concat(whale_dfs, ignore_index=True)
-        return {"whales": precise_df.to_dict("records"), "source": "massive",
-                "trading_date": trading_date}
+        return {
+            "whales": precise_df.to_dict("records"),
+            "source": "massive",
+            "trading_date": trading_date,
+        }
 
     return {"whales": crude_records, "source": "yahoo only", "trading_date": trading_date}
