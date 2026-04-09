@@ -1,6 +1,6 @@
 ---
 name: scanner-pmcc
-description: Scan stocks for Poor Man's Covered Call (PMCC) suitability. Analyzes LEAPS and short call options for delta, liquidity, spread, IV, and yield. Use when user asks about PMCC candidates, diagonal spreads, or LEAPS strategies.
+description: Scan stocks for Poor Man's Covered Call (PMCC) suitability. Analyzes LEAPS and short call options for delta, liquidity, spread, IV, yield, trend direction, and earnings proximity. Use when user asks about PMCC candidates, diagonal spreads, or LEAPS strategies.
 dependencies: ["trading-skills"]
 ---
 
@@ -28,7 +28,7 @@ uv run python scripts/scan.py SYMBOLS [options]
 - `--short-delta` - Target short call delta (default: 0.20)
 - `--output` - Save results to JSON file
 
-## Scoring System (max ~11 points)
+## Scoring System (range: -4.5 to ~14.5)
 
 | Category | Condition | Points |
 |----------|-----------|--------|
@@ -48,6 +48,12 @@ uv run python scripts/scan.py SYMBOLS [options]
 | | 20-60% | +1 |
 | **Yield** | Annual > 50% | +2 |
 | | Annual > 30% | +1 |
+| **Trend** | Price > SMA50 | +1 / -1 |
+| | RSI > 50 | +0.5 / -0.5 |
+| | MACD > signal | +0.5 / -0.5 |
+| **Earnings** | Next earnings > 45 days | +0.5 |
+| | Earnings within 45 days | -1.0 |
+| | Earnings within short expiry | -2.0 |
 
 ## Output
 
@@ -58,6 +64,7 @@ Returns JSON with:
   - `leaps` - expiry, strike, delta, bid/ask, spread%, volume, OI
   - `short` - expiry, strike, delta, bid/ask, spread%, volume, OI
   - `metrics` - net_debit, short_yield%, annual_yield%, capital_required
+  - `score_breakdown` - trend_delta, trend (per-indicator explanation), earnings_delta, earnings (explanation)
 - `errors` - Symbols that failed (no options, insufficient data)
 
 ## Examples
@@ -87,10 +94,10 @@ uv run python scripts/scan.py AAPL,MSFT,GOOGL --output pmcc_results.json
 
 ## Interpretation
 
-- Score > 9: Excellent candidate
-- Score 7-9: Good candidate
-- Score 5-7: Acceptable with caveats
-- Score < 5: Poor liquidity or structure
+- Score > 11: Excellent candidate (strong structure + bullish trend + clear earnings runway)
+- Score 9-11: Good candidate
+- Score 6-9: Acceptable with caveats
+- Score < 6: Poor structure, bearish trend, or earnings risk
 
 ## Dependencies
 
