@@ -26,11 +26,37 @@ def _make_client() -> RESTClient:
     return RESTClient(api_key=api_key)
 
 
+def _modified_z_score(invested: pd.Series, sigma_z: float) -> pd.Series:
+    """Boolean mask identifying outliers via Modified Z-Score (MAD-based).
+
+    Robust to the right-skewed distribution of options dollar-invested.
+    A std-based threshold gets inflated by high-dollar contracts (e.g. NVDA/SPY),
+    causing high-volume cheap options to fall below the threshold undetected.
+
+    MAD (Median Absolute Deviation) is resistant to that inflation:
+        MAD  = median( |xi − median(x)| )
+        Mzi  = 0.6745 × (xi − median(x)) / MAD
+
+    0.6745 = Φ⁻¹(0.75): makes MAD a consistent estimator of σ for normal data,
+    keeping the threshold on the same scale as sigma_z.
+
+    A value is flagged when Mzi > sigma_z. When MAD = 0 (majority of values
+    share the median, leaving deviation undefined), any value strictly above
+    the median is flagged.
+    """
+    median = invested.median()
+    mad = (invested - median).abs().median()
+    if mad == 0:
+        # Majority of values are at the median; flag anything strictly above it.
+        return invested > median
+    z_scores = 0.6745 * (invested - median) / mad
+    return z_scores > sigma_z
+
+
 def option_whales(
     option_ticker: str,
     trading_date=None,
     sigma_z: float = 3.5,
-    sigma: float = 3.0,
     return_all: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """Find whale trades for an option contract — seconds with outlier dollar invested.
@@ -38,22 +64,21 @@ def option_whales(
     Fetches all 1-second bars for the contract during market hours (9:30–16:00 NY)
     on the given date. invested = vwap × volume × 100 (contract size).
 
-    Detection method depends on sample size (n = bars with invested > 0):
-      n <  30: Modified Z-Score  — bar is whale when Mzi > sigma_z
-      n >= 30: median + sigma * std — bar is whale when invested > median + sigma * std
+    Detection uses Modified Z-Score (MAD-based) for all sample sizes:
+        Mzi = 0.6745 × (xi − median) / MAD
+    A bar is a whale when Mzi > sigma_z OR it averages >= $1M per transaction.
 
     Args:
         option_ticker: Option contract ticker (e.g. "O:NVDA260320P00170000").
         trading_date: Date to analyze (date, datetime, or "YYYY-MM-DD" string).
                       Defaults to latest trading day.
-        sigma_z: Modified Z-Score threshold used when n < 30 (default 3.5).
-        sigma: Std-deviation multiplier used when n >= 30 (default 3.0).
+        sigma_z: Modified Z-Score threshold (default 3.5).
         return_all: If True, return (outliers, all_bars) tuple instead of just outliers.
 
     Returns:
-        DataFrame of outliers sorted by timestamp descending, or (outliers, all_bars)
-        tuple when return_all=True. Columns: timestamp, open, high, low, close,
-        volume, vwap, transactions, invested. timestamp is NY-timezone-aware.
+        DataFrame of outliers sorted by timestamp ascending, or (outliers, all_bars)
+        tuple when return_all=True. Columns: timestamp, ticker, type, strike, expiry,
+        close, volume, transactions, invested, break_even. timestamp is NY-timezone-aware.
         Empty DataFrame(s) if no data found.
     """
     if trading_date is None:
@@ -94,18 +119,18 @@ def option_whales(
         return (_empty, _empty) if return_all else _empty
 
     # get the underlying, type, strike, expiry from the option ticker
-    underlying, type, strike, expiry = parse_option_ticker(option_ticker)
+    _, opt_type, strike, expiry = parse_option_ticker(option_ticker)
 
     df = pd.DataFrame([b.__dict__ for b in bars])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(_NY)
     df["close"] = df["vwap"]
     df["invested"] = (df["close"] * df["volume"] * 100).round(2)
-    if type == "call":
+    if opt_type == "call":
         df["break_even"] = strike + df["close"]
     else:
         df["break_even"] = strike - df["close"]
     df["ticker"] = option_ticker.removeprefix("O:")
-    df["type"] = type
+    df["type"] = opt_type
     df["strike"] = strike
     df["expiry"] = expiry
 
@@ -115,9 +140,6 @@ def option_whales(
     if df.empty:
         return (_empty, all_bars) if return_all else _empty
 
-    median = df["invested"].median()
-    n = len(df)
-
     # Per-transaction rule: any bar averaging >= $1M per trade is a whale
     # regardless of the statistical threshold — these are institutional block trades.
     tx_mask = (
@@ -126,42 +148,7 @@ def option_whales(
         & (df["invested"] / df["transactions"] >= 1_000_000)
     )
 
-    if n < 30:
-        # Small sample: Modified Z-Score (Iglewicz & Hoaglin, 1993).
-        #
-        # With few bars, std is unstable — a single large value inflates it,
-        # raising the threshold and hiding the whale.  MAD (Median Absolute
-        # Deviation) is resistant to that distortion.
-        #
-        #   MAD  = median( |xi − median(x)| )
-        #   Mzi  = 0.6745 × (xi − median(x)) / MAD
-        #
-        # 0.6745 = Φ⁻¹(0.75): makes MAD a consistent estimator of σ for
-        # normal data, so the threshold is on the same scale as sigma.
-
-        mad = (df["invested"] - median).abs().median()
-
-        if mad == 0:
-            # All bars have identical investment (typically a single bar).
-            # Can't rank outliers statistically — include everything and let
-            # the per-transaction filter below discard low-value bars.
-            mask = pd.Series(True, index=df.index)
-        else:
-            mask = (0.6745 * (df["invested"] - median) / mad > sigma_z) | tx_mask
-
-    else:
-        # Large sample: median + sigma * std.
-        #
-        # With enough bars the std estimate is stable.  Using the median
-        # (instead of mean) as the centre keeps the threshold robust against
-        # the skewed investment distribution while std captures its spread.
-
-        std = df["invested"].std()
-
-        if std == 0:
-            mask = tx_mask
-        else:
-            mask = (df["invested"] > median + sigma * std) | tx_mask
+    mask = _modified_z_score(df["invested"], sigma_z) | tx_mask
 
     # Drop outliers averaging <= $100k per transaction — statistical detection
     # may flag high-invested seconds driven by many small retail trades, not
@@ -194,7 +181,6 @@ def _fetch_chain(underlying: str, expiry: str) -> list[dict]:
 
 def _fetch_whales_parallel(
     candidates: pd.DataFrame,
-    sigma: float,
     sigma_z: float,
 ) -> list[pd.DataFrame]:
     """Fetch per-second whale data for each candidate concurrently.
@@ -206,9 +192,7 @@ def _fetch_whales_parallel(
     def fetch_one(row):
         poly_ticker = "O:" + row["contractSymbol"]
         try:
-            w = option_whales(
-                poly_ticker, trading_date=row["tradeDate"], sigma=sigma, sigma_z=sigma_z
-            )
+            w = option_whales(poly_ticker, trading_date=row["tradeDate"], sigma_z=sigma_z)
             return w[_WHALE_COLS] if not w.empty else None
         except Exception:
             return None
@@ -219,27 +203,6 @@ def _fetch_whales_parallel(
         results = [f.result() for f in as_completed(futures)]
 
     return [r for r in results if r is not None]
-
-
-def _crude_filter(invested: pd.Series, sigma_z: float) -> pd.Series:
-    """Boolean mask identifying outliers via Modified Z-Score (MAD-based).
-
-    Options dollar-invested is heavily right-skewed; a std-based threshold gets
-    inflated by high-dollar contracts (e.g. NVDA/SPY), causing high-volume cheap
-    options to fall below the threshold and go undetected.
-
-    MAD (Median Absolute Deviation) is resistant to that inflation:
-        MAD  = median( |xi − median(x)| )
-        Mzi  = 0.6745 × (xi − median(x)) / MAD
-
-    A bar is flagged when Mzi > sigma_z.
-    """
-    median = invested.median()
-    mad = (invested - median).abs().median()
-    if mad == 0:
-        return invested > median
-    z_scores = 0.6745 * (invested - median) / mad
-    return z_scores > sigma_z
 
 
 _WHALE_COLS = [
@@ -260,14 +223,13 @@ def whales_hunter(
     underlying: str,
     max_months: int = 2,
     precise: bool = True,
-    sigma: float = 3.0,
     sigma_z: float = 3.5,
     trading_date=None,
 ) -> dict:
     """Scan an underlying for whale option activity in two steps.
 
     Step 1 (crude): uses Yahoo Finance option chain data to find contracts
-    with anomalous daily investment (invested > median + sigma * std).
+    with anomalous daily investment, detected via Modified Z-Score (MAD-based).
 
     Step 2 (precise): if precise=True, drills into each candidate with
     Polygon per-second data via option_whales. Falls back to crude results
@@ -277,8 +239,7 @@ def whales_hunter(
         underlying: Underlying ticker (e.g. "AAPL").
         max_months: Maximum months until expiration (default 2).
         precise: If True, refine with Polygon per-second data (default True).
-        sigma: Std-deviation multiplier for outlier detection (default 3.0).
-        sigma_z: Modified Z-Score threshold for option_whales small samples (default 3.5).
+        sigma_z: Modified Z-Score threshold for outlier detection (default 3.5).
         trading_date: Date to analyze. Defaults to latest trading day.
 
     Returns:
@@ -323,7 +284,7 @@ def whales_hunter(
     if active.empty:
         return _empty
 
-    candidates = active[_crude_filter(active["invested"], sigma_z)].copy()
+    candidates = active[_modified_z_score(active["invested"], sigma_z)].copy()
 
     if candidates.empty:
         return _empty
@@ -352,7 +313,7 @@ def whales_hunter(
     if not precise:
         return {"whales": crude_records, "source": "yahoo only", "trading_date": trading_date}
 
-    whale_dfs = _fetch_whales_parallel(candidates, sigma=sigma, sigma_z=sigma_z)
+    whale_dfs = _fetch_whales_parallel(candidates, sigma_z=sigma_z)
 
     if whale_dfs:
         precise_df = pd.concat(whale_dfs, ignore_index=True)

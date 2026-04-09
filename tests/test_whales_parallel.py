@@ -24,7 +24,7 @@ class TestFetchWhalesParallel:
         candidates = _make_candidates("HTZ260515C00007500", "NVDA260320P00170000")
         side_effects = [_whale_df("HTZ260515C00007500"), _whale_df("NVDA260320P00170000")]
         with patch("trading_skills.massive.whales.option_whales", side_effect=side_effects):
-            result = _fetch_whales_parallel(candidates, sigma=3.0, sigma_z=3.5)
+            result = _fetch_whales_parallel(candidates, sigma_z=3.5)
         assert len(result) == 2
 
     def test_exception_in_one_candidate_does_not_abort_others(self):
@@ -37,7 +37,7 @@ class TestFetchWhalesParallel:
             return good_df
 
         with patch("trading_skills.massive.whales.option_whales", side_effect=side_effect):
-            result = _fetch_whales_parallel(candidates, sigma=3.0, sigma_z=3.5)
+            result = _fetch_whales_parallel(candidates, sigma_z=3.5)
         assert len(result) == 1
         assert result[0]["ticker"].iloc[0] == "GOOD260515C00007500"
 
@@ -47,12 +47,12 @@ class TestFetchWhalesParallel:
         full_df = _whale_df("FULL260515C00007500")
 
         with patch("trading_skills.massive.whales.option_whales", side_effect=[empty_df, full_df]):
-            result = _fetch_whales_parallel(candidates, sigma=3.0, sigma_z=3.5)
+            result = _fetch_whales_parallel(candidates, sigma_z=3.5)
         assert len(result) == 1
 
     def test_all_empty_returns_empty_list(self):
         candidates = _make_candidates("A", "B")
         empty_df = pd.DataFrame(columns=_WHALE_COLS)
         with patch("trading_skills.massive.whales.option_whales", return_value=empty_df):
-            result = _fetch_whales_parallel(candidates, sigma=3.0, sigma_z=3.5)
+            result = _fetch_whales_parallel(candidates, sigma_z=3.5)
         assert result == []

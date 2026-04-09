@@ -48,11 +48,6 @@ class TestOptionWhales:
         result = option_whales(TEST_CONTRACT, trading_date="2026-03-13")
         assert isinstance(result, pd.DataFrame)
 
-    def test_higher_sigma_returns_fewer_outliers(self):
-        low_sigma = option_whales(TEST_CONTRACT, trading_date=TEST_DATE, sigma=2.0)
-        high_sigma = option_whales(TEST_CONTRACT, trading_date=TEST_DATE, sigma=5.0)
-        assert len(low_sigma) >= len(high_sigma)
-
     def test_higher_sigma_z_returns_fewer_outliers(self):
         low_sigma_z = option_whales(TEST_CONTRACT, trading_date=TEST_DATE, sigma_z=2.0)
         high_sigma_z = option_whales(TEST_CONTRACT, trading_date=TEST_DATE, sigma_z=5.0)
@@ -72,14 +67,14 @@ class TestOptionWhales:
 
     def test_low_per_transaction_bars_never_whale(self):
         """Bars averaging <= $10k per transaction must not appear as whales."""
-        result = option_whales(TEST_CONTRACT, trading_date=TEST_DATE, sigma=0.5, sigma_z=0.5)
+        result = option_whales(TEST_CONTRACT, trading_date=TEST_DATE, sigma_z=0.5)
         for _, row in result.iterrows():
             if row["transactions"] and row["transactions"] > 0:
                 avg = row["invested"] / row["transactions"]
                 assert avg > 100_000, f"Whale with avg invested/tx = {avg:.0f} <= $100k"
 
     def test_large_per_transaction_bars_always_detected(self):
-        """Bars with avg invested/transaction >= $1M are whales regardless of sigma."""
+        """Bars with avg invested/transaction >= $1M are whales regardless of sigma_z."""
         _, all_bars = option_whales(TX_CONTRACT, trading_date=TEST_DATE, return_all=True)
         qualifying = all_bars[
             all_bars["transactions"].notna()
@@ -88,8 +83,8 @@ class TestOptionWhales:
         ]
         if qualifying.empty:
             pytest.skip("No bars with avg invested/tx >= $1M in test data")
-        # With sigma=1000 statistical detection is off — per-tx rule must still fire
-        result = option_whales(TX_CONTRACT, trading_date=TEST_DATE, sigma=1000, sigma_z=1000)
+        # With sigma_z=1000 statistical detection is off — per-tx rule must still fire
+        result = option_whales(TX_CONTRACT, trading_date=TEST_DATE, sigma_z=1000)
         assert not result.empty
         for ts in qualifying["timestamp"]:
             assert ts in result["timestamp"].tolist()

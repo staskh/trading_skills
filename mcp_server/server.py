@@ -456,7 +456,6 @@ def whale_hunting(
     symbol: str,
     max_months: int = 2,
     trading_date: str | None = None,
-    sigma: float = 3.0,
     sigma_z: float = 3.5,
     summary: bool = False,
 ) -> dict:
@@ -473,8 +472,7 @@ def whale_hunting(
         symbol: Underlying ticker (e.g. AAPL, NVDA, SPY)
         max_months: Max months until expiration to consider (default 2)
         trading_date: Date to analyze YYYY-MM-DD (default: latest trading day)
-        sigma: Std-deviation multiplier for crude outlier threshold (default 3.0)
-        sigma_z: Modified Z-Score threshold for small-sample detection (default 3.5)
+        sigma_z: Modified Z-Score threshold for outlier detection (default 3.5)
         summary: If True, include per-ticker aggregate summary in result
     """
     import pandas as pd
@@ -483,7 +481,6 @@ def whale_hunting(
         symbol.upper(),
         max_months=max_months,
         precise=True,
-        sigma=sigma,
         sigma_z=sigma_z,
         trading_date=trading_date,
     )
