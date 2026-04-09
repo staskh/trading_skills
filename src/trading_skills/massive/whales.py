@@ -193,7 +193,11 @@ def _fetch_whales_parallel(
         poly_ticker = "O:" + row["contractSymbol"]
         try:
             w = option_whales(poly_ticker, trading_date=row["tradeDate"], sigma_z=sigma_z)
-            return w[_WHALE_COLS] if not w.empty else None
+            if w.empty:
+                return None
+            w["open_interest"] = row.get("open_interest")
+            w["reason"] = row.get("reason")
+            return w[_WHALE_COLS]
         except Exception:
             return None
 
@@ -213,10 +217,51 @@ _WHALE_COLS = [
     "expiry",
     "close",
     "volume",
+    "open_interest",
     "transactions",
     "invested",
     "break_even",
+    "reason",
 ]
+
+
+def _apply_crude_selection(active: pd.DataFrame, sigma_z: float) -> pd.DataFrame:
+    """Select whale candidates and tag each with the selection reason.
+
+    Two independent criteria (either suffices):
+      - z_score : invested is a Modified Z-Score outlier across all active contracts
+      - volume>oi: today's volume exceeds open interest (fresh positioning signal)
+
+    The returned DataFrame has two extra columns:
+      - open_interest : int or None (from openInterest in Yahoo chain data)
+      - reason        : 'z_score' | 'volume>oi' | 'both'
+    """
+    zscore_mask = _modified_z_score(active["invested"], sigma_z)
+
+    oi = (
+        active["openInterest"]
+        if "openInterest" in active.columns
+        else pd.Series(float("nan"), index=active.index)
+    )
+    vol_oi_mask = active["volume"] > oi  # NaN OI → False (safe)
+
+    candidates = active[zscore_mask | vol_oi_mask].copy()
+    if candidates.empty:
+        candidates["open_interest"] = pd.Series(dtype=object)
+        candidates["reason"] = pd.Series(dtype=str)
+        return candidates
+
+    oi_sub = oi.loc[candidates.index]
+    vol_sub = candidates["volume"]
+    zs_sub = zscore_mask.loc[candidates.index]
+    vo_sub = vol_sub > oi_sub
+
+    candidates["open_interest"] = oi_sub.apply(lambda x: int(x) if pd.notna(x) else None)
+    candidates["reason"] = "z_score"
+    candidates.loc[vo_sub & ~zs_sub, "reason"] = "volume>oi"
+    candidates.loc[vo_sub & zs_sub, "reason"] = "both"
+
+    return candidates
 
 
 def whales_hunter(
@@ -284,7 +329,7 @@ def whales_hunter(
     if active.empty:
         return _empty
 
-    candidates = active[_modified_z_score(active["invested"], sigma_z)].copy()
+    candidates = _apply_crude_selection(active, sigma_z)
 
     if candidates.empty:
         return _empty
