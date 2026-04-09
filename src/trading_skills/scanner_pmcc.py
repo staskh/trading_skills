@@ -1,5 +1,5 @@
 # ABOUTME: Scans symbols for PMCC suitability based on option chain quality.
-# ABOUTME: Scores on delta accuracy, liquidity, spread tightness, IV level, and yield.
+# ABOUTME: Scores delta accuracy, liquidity, spread, IV, yield, trend, and earnings proximity.
 
 from datetime import datetime
 
@@ -7,6 +7,8 @@ import pandas as pd
 import yfinance as yf
 
 from trading_skills.black_scholes import black_scholes_delta, black_scholes_price
+from trading_skills.earnings import get_next_earnings_date
+from trading_skills.technicals import compute_raw_indicators
 from trading_skills.utils import get_current_price
 
 
@@ -67,6 +69,80 @@ def find_strike_by_delta(
             best_option["calculated_delta"] = delta
 
     return best_strike, best_option
+
+
+def compute_trend_score(price: float, raw: dict) -> tuple[float, dict]:
+    """Score bullish/bearish trend based on SMA50, RSI, and MACD.
+
+    Returns (score_delta, breakdown). Range: -2.0 to +2.0.
+    """
+    delta = 0.0
+    breakdown = {}
+
+    sma50 = raw.get("sma50")
+    if sma50 is not None:
+        if price > sma50:
+            delta += 1.0
+            breakdown["sma50"] = f"+1.0 (price {price:.2f} > SMA50 {sma50:.2f})"
+        else:
+            delta -= 1.0
+            breakdown["sma50"] = f"-1.0 (price {price:.2f} < SMA50 {sma50:.2f})"
+
+    rsi = raw.get("rsi")
+    if rsi is not None:
+        if rsi > 50:
+            delta += 0.5
+            breakdown["rsi"] = f"+0.5 (RSI {rsi:.1f} > 50)"
+        else:
+            delta -= 0.5
+            breakdown["rsi"] = f"-0.5 (RSI {rsi:.1f} < 50)"
+
+    macd_line = raw.get("macd_line")
+    macd_signal = raw.get("macd_signal")
+    if macd_line is not None and macd_signal is not None:
+        if macd_line > macd_signal:
+            delta += 0.5
+            breakdown["macd"] = f"+0.5 (MACD {macd_line:.3f} > signal {macd_signal:.3f})"
+        else:
+            delta -= 0.5
+            breakdown["macd"] = f"-0.5 (MACD {macd_line:.3f} < signal {macd_signal:.3f})"
+
+    return round(delta, 1), breakdown
+
+
+def compute_earnings_score(earnings_date_str: str | None, short_days: int) -> tuple[float, dict]:
+    """Score earnings proximity relative to short call expiry.
+
+    Returns (score_delta, breakdown).
+    - Earnings > 45d away: +0.5 (full decay runway)
+    - Earnings within short expiry: -2.0 (IV crush / gap risk)
+    - Earnings between short expiry and 45d: -1.0
+    - No date or past: 0.0
+    """
+    if not earnings_date_str:
+        return 0.0, {"earnings": "0.0 (no earnings date)"}
+
+    try:
+        today = datetime.now().date()
+        earnings_date = datetime.strptime(earnings_date_str, "%Y-%m-%d").date()
+        days_to_earnings = (earnings_date - today).days
+
+        if days_to_earnings < 0:
+            return 0.0, {"earnings": "0.0 (earnings already passed)"}
+
+        if days_to_earnings > 45:
+            return 0.5, {
+                "earnings": f"+0.5 (earnings {days_to_earnings}d away, clear decay runway)"
+            }
+        elif days_to_earnings <= short_days:
+            return -2.0, {
+                "earnings": f"-2.0 (earnings in {days_to_earnings}d, within short call expiry)"
+            }
+        else:
+            return -1.0, {"earnings": f"-1.0 (earnings in {days_to_earnings}d, within 45 days)"}
+
+    except (ValueError, TypeError):
+        return 0.0, {"earnings": "0.0 (invalid earnings date)"}
 
 
 def analyze_pmcc(
@@ -256,6 +332,24 @@ def analyze_pmcc(
         elif annual_yield_est > 15:
             score += 0.5
 
+        # Trend scoring
+        hist = ticker.history(period="3mo")
+        raw_indicators = compute_raw_indicators(hist)
+        trend_delta, trend_breakdown = compute_trend_score(current_price, raw_indicators)
+        score += trend_delta
+
+        # Earnings proximity scoring
+        earnings_date_str = get_next_earnings_date(symbol)
+        earnings_delta, earnings_breakdown = compute_earnings_score(earnings_date_str, short_days)
+        score += earnings_delta
+
+        score_breakdown = {
+            "trend_delta": trend_delta,
+            "trend": trend_breakdown,
+            "earnings_delta": earnings_delta,
+            "earnings": earnings_breakdown,
+        }
+
         return {
             "symbol": symbol,
             "price": round(current_price, 2),
@@ -295,6 +389,7 @@ def analyze_pmcc(
                 "roi_pct": round(roi_pct, 1),
                 "capital_required": round(leaps_mid * 100, 2),
             },
+            "score_breakdown": score_breakdown,
         }
 
     except Exception as e:

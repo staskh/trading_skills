@@ -2,8 +2,15 @@
 # ABOUTME: Validates PMCC scoring, option chain analysis, and constraints.
 
 
+from datetime import date, timedelta
+
 from trading_skills.black_scholes import black_scholes_price
-from trading_skills.scanner_pmcc import analyze_pmcc, format_scan_results
+from trading_skills.scanner_pmcc import (
+    analyze_pmcc,
+    compute_earnings_score,
+    compute_trend_score,
+    format_scan_results,
+)
 
 
 class TestAnalyzePMCC:
@@ -59,7 +66,30 @@ class TestAnalyzePMCC:
     def test_score_range(self):
         result = analyze_pmcc("AAPL")
         if "pmcc_score" in result:
-            assert 0 <= result["pmcc_score"] <= 12
+            # Base score 0-12, trend adj -2 to +2, earnings adj -2 to +0.5
+            assert -4.5 <= result["pmcc_score"] <= 14.5
+
+    def test_has_score_breakdown(self):
+        result = analyze_pmcc("AAPL")
+        if "pmcc_score" in result:
+            assert "score_breakdown" in result
+            breakdown = result["score_breakdown"]
+            assert "trend" in breakdown
+            assert "earnings" in breakdown
+
+    def test_score_breakdown_shows_trend_adjustment(self):
+        result = analyze_pmcc("AAPL")
+        if "pmcc_score" in result:
+            breakdown = result["score_breakdown"]
+            assert "trend_delta" in breakdown
+            assert isinstance(breakdown["trend_delta"], float | int)
+
+    def test_score_breakdown_shows_earnings_adjustment(self):
+        result = analyze_pmcc("AAPL")
+        if "pmcc_score" in result:
+            breakdown = result["score_breakdown"]
+            assert "earnings_delta" in breakdown
+            assert isinstance(breakdown["earnings_delta"], float | int)
 
     def test_iv_positive(self):
         result = analyze_pmcc("AAPL")
@@ -115,6 +145,94 @@ class TestAnalyzePMCC:
         result = analyze_pmcc("BRK.A")
         # May return None or dict with error
         assert result is None or "error" in result
+
+
+class TestComputeTrendScore:
+    """Tests for trend scoring pure function."""
+
+    def _bullish_raw(self, price=100.0):
+        return {
+            "rsi": 60.0,
+            "sma50": 90.0,  # price above
+            "macd_line": 1.0,
+            "macd_signal": 0.5,  # macd above signal
+        }
+
+    def _bearish_raw(self, price=100.0):
+        return {
+            "rsi": 40.0,
+            "sma50": 110.0,  # price below
+            "macd_line": -0.5,
+            "macd_signal": 0.0,  # macd below signal
+        }
+
+    def test_bullish_gives_positive_delta(self):
+        delta, breakdown = compute_trend_score(100.0, self._bullish_raw())
+        assert delta > 0
+
+    def test_bearish_gives_negative_delta(self):
+        delta, breakdown = compute_trend_score(100.0, self._bearish_raw())
+        assert delta < 0
+
+    def test_breakdown_has_sma50_key(self):
+        _, breakdown = compute_trend_score(100.0, self._bullish_raw())
+        assert "sma50" in breakdown
+
+    def test_breakdown_has_rsi_key(self):
+        _, breakdown = compute_trend_score(100.0, self._bullish_raw())
+        assert "rsi" in breakdown
+
+    def test_breakdown_has_macd_key(self):
+        _, breakdown = compute_trend_score(100.0, self._bullish_raw())
+        assert "macd" in breakdown
+
+    def test_missing_indicators_handled(self):
+        raw = {"rsi": None, "sma50": None, "macd_line": None, "macd_signal": None}
+        delta, breakdown = compute_trend_score(100.0, raw)
+        assert delta == 0.0
+
+    def test_max_bullish_score(self):
+        delta, _ = compute_trend_score(100.0, self._bullish_raw())
+        assert delta == 2.0
+
+    def test_max_bearish_score(self):
+        delta, _ = compute_trend_score(100.0, self._bearish_raw())
+        assert delta == -2.0
+
+
+class TestComputeEarningsScore:
+    """Tests for earnings proximity scoring pure function."""
+
+    def _future_date(self, days):
+        return (date.today() + timedelta(days=days)).strftime("%Y-%m-%d")
+
+    def test_far_earnings_gives_bonus(self):
+        delta, _ = compute_earnings_score(self._future_date(60), short_days=14)
+        assert delta > 0
+
+    def test_earnings_within_short_expiry_gives_penalty(self):
+        delta, _ = compute_earnings_score(self._future_date(7), short_days=14)
+        assert delta < 0
+
+    def test_earnings_between_short_and_45d_gives_penalty(self):
+        delta, _ = compute_earnings_score(self._future_date(35), short_days=14)
+        assert delta < 0
+
+    def test_no_earnings_date_gives_neutral(self):
+        delta, breakdown = compute_earnings_score(None, short_days=14)
+        assert delta == 0.0
+
+    def test_past_earnings_gives_neutral(self):
+        delta, _ = compute_earnings_score(self._future_date(-10), short_days=14)
+        assert delta == 0.0
+
+    def test_breakdown_has_earnings_key(self):
+        _, breakdown = compute_earnings_score(self._future_date(60), short_days=14)
+        assert "earnings" in breakdown
+
+    def test_earnings_exactly_at_short_expiry_gives_penalty(self):
+        delta, _ = compute_earnings_score(self._future_date(14), short_days=14)
+        assert delta < 0
 
 
 class TestFormatScanResults:
