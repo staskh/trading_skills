@@ -9,8 +9,18 @@ import pandas as pd
 from trading_skills.massive.whales import _WHALE_COLS, _fetch_whales_parallel
 
 
-def _make_candidates(*symbols):
-    return pd.DataFrame([{"contractSymbol": s, "tradeDate": date(2026, 4, 7)} for s in symbols])
+def _make_candidates(*symbols, open_interest=123, reason="z_score"):
+    return pd.DataFrame(
+        [
+            {
+                "contractSymbol": s,
+                "tradeDate": date(2026, 4, 7),
+                "open_interest": open_interest,
+                "reason": reason,
+            }
+            for s in symbols
+        ]
+    )
 
 
 def _whale_df(symbol):
@@ -56,3 +66,13 @@ class TestFetchWhalesParallel:
         with patch("trading_skills.massive.whales.option_whales", return_value=empty_df):
             result = _fetch_whales_parallel(candidates, sigma=3.0, sigma_z=3.5)
         assert result == []
+
+    def test_open_interest_and_reason_propagated_from_candidate(self):
+        """open_interest and reason from the crude step carry through to precise output."""
+        candidates = _make_candidates("HTZ260515C00007500", open_interest=14000, reason="both")
+        whale_df = _whale_df("HTZ260515C00007500")
+        with patch("trading_skills.massive.whales.option_whales", return_value=whale_df):
+            result = _fetch_whales_parallel(candidates, sigma=3.0, sigma_z=3.5)
+        assert len(result) == 1
+        assert result[0]["open_interest"].iloc[0] == 14000
+        assert result[0]["reason"].iloc[0] == "both"

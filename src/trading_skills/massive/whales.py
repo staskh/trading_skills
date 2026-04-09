@@ -211,8 +211,8 @@ def _fetch_whales_parallel(
             )
             if w.empty:
                 return None
-            w["open_interest"] = None
-            w["reason"] = None
+            w["open_interest"] = row.get("open_interest")
+            w["reason"] = row.get("reason")
             return w[_WHALE_COLS]
         except Exception:
             return None
