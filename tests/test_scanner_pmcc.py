@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from trading_skills.black_scholes import black_scholes_price
 from trading_skills.scanner_pmcc import (
     analyze_pmcc,
+    compute_base_score,
     compute_earnings_score,
     compute_trend_score,
     format_scan_results,
@@ -66,8 +67,8 @@ class TestAnalyzePMCC:
     def test_score_range(self):
         result = analyze_pmcc("AAPL")
         if "pmcc_score" in result:
-            # Base score 0-12, trend adj -2 to +2, earnings adj -2 to +0.5
-            assert -4.5 <= result["pmcc_score"] <= 14.5
+            # Base score 0-11, trend adj -2 to +2, earnings adj -2 to +1
+            assert -4 <= result["pmcc_score"] <= 14
 
     def test_has_score_breakdown(self):
         result = analyze_pmcc("AAPL")
@@ -90,6 +91,44 @@ class TestAnalyzePMCC:
             breakdown = result["score_breakdown"]
             assert "earnings_delta" in breakdown
             assert isinstance(breakdown["earnings_delta"], float | int)
+
+    def test_score_breakdown_has_all_base_components(self):
+        result = analyze_pmcc("AAPL")
+        if "pmcc_score" in result:
+            bd = result["score_breakdown"]
+            for key in [
+                "leaps_delta_delta",
+                "leaps_delta",
+                "short_delta_delta",
+                "short_delta",
+                "leaps_liquidity_delta",
+                "leaps_liquidity",
+                "short_liquidity_delta",
+                "short_liquidity",
+                "leaps_spread_delta",
+                "leaps_spread",
+                "short_spread_delta",
+                "short_spread",
+                "iv_delta",
+                "iv",
+                "yield_delta",
+                "yield",
+            ]:
+                assert key in bd, f"Missing score_breakdown key: {key}"
+
+    def test_has_max_possible_score(self):
+        result = analyze_pmcc("AAPL")
+        if "pmcc_score" in result:
+            assert "max_possible_score" in result
+            assert result["max_possible_score"] == 14
+
+    def test_score_breakdown_deltas_sum_to_pmcc_score(self):
+        result = analyze_pmcc("AAPL")
+        if "pmcc_score" not in result:
+            return
+        bd = result["score_breakdown"]
+        total = sum(bd[k] for k in bd if k.endswith("_delta") and isinstance(bd[k], (int, float)))
+        assert abs(round(total, 1) - result["pmcc_score"]) < 0.01
 
     def test_iv_positive(self):
         result = analyze_pmcc("AAPL")
@@ -200,6 +239,92 @@ class TestComputeTrendScore:
         assert delta == -2.0
 
 
+class TestComputeBaseScore:
+    """Tests for base scoring pure function."""
+
+    def _perfect(self):
+        return dict(
+            actual_leaps_delta=0.80,
+            actual_short_delta=0.20,
+            leaps_liquidity=200,
+            short_liquidity=1000,
+            leaps_spread_pct=3.0,
+            short_spread_pct=5.0,
+            avg_iv=0.35,
+            annual_yield_est=60.0,
+            leaps_delta_target=0.80,
+            short_delta_target=0.20,
+        )
+
+    def test_perfect_inputs_score_11(self):
+        score, _ = compute_base_score(**self._perfect())
+        assert score == 11.0
+
+    def test_breakdown_has_all_keys(self):
+        _, bd = compute_base_score(**self._perfect())
+        for key in [
+            "leaps_delta_delta",
+            "leaps_delta",
+            "short_delta_delta",
+            "short_delta",
+            "leaps_liquidity_delta",
+            "leaps_liquidity",
+            "short_liquidity_delta",
+            "short_liquidity",
+            "leaps_spread_delta",
+            "leaps_spread",
+            "short_spread_delta",
+            "short_spread",
+            "iv_delta",
+            "iv",
+            "yield_delta",
+            "yield",
+        ]:
+            assert key in bd, f"Missing key: {key}"
+
+    def test_deltas_sum_to_score(self):
+        score, bd = compute_base_score(**self._perfect())
+        total = sum(bd[k] for k in bd if k.endswith("_delta") and isinstance(bd[k], (int, float)))
+        assert abs(total - score) < 0.01
+
+    def test_poor_leaps_delta_scores_lower(self):
+        kwargs = self._perfect()
+        kwargs["actual_leaps_delta"] = 0.50  # far from target
+        score, _ = compute_base_score(**kwargs)
+        assert score < 11.0
+
+    def test_low_liquidity_scores_lower(self):
+        kwargs = self._perfect()
+        kwargs["leaps_liquidity"] = 5
+        kwargs["short_liquidity"] = 10
+        score, _ = compute_base_score(**kwargs)
+        assert score < 11.0
+
+    def test_high_iv_scores_lower(self):
+        kwargs = self._perfect()
+        kwargs["avg_iv"] = 0.80  # too high
+        score, _ = compute_base_score(**kwargs)
+        assert score < 11.0
+
+    def test_breakdown_explanation_strings(self):
+        _, bd = compute_base_score(**self._perfect())
+        # Explanation strings should start with + or -
+        for key in [
+            "leaps_delta",
+            "short_delta",
+            "leaps_liquidity",
+            "short_liquidity",
+            "leaps_spread",
+            "short_spread",
+            "iv",
+            "yield",
+        ]:
+            assert isinstance(bd[key], str), f"{key} should be a string"
+            assert bd[key].startswith("+") or bd[key].startswith("0"), (
+                f"{key} explanation should start with '+' or '0', got: {bd[key]}"
+            )
+
+
 class TestComputeEarningsScore:
     """Tests for earnings proximity scoring pure function."""
 
@@ -208,7 +333,7 @@ class TestComputeEarningsScore:
 
     def test_far_earnings_gives_bonus(self):
         delta, _ = compute_earnings_score(self._future_date(60), short_days=14)
-        assert delta > 0
+        assert delta == 1.0
 
     def test_earnings_within_short_expiry_gives_penalty(self):
         delta, _ = compute_earnings_score(self._future_date(7), short_days=14)

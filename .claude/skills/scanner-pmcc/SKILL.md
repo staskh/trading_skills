@@ -28,7 +28,7 @@ uv run python scripts/scan.py SYMBOLS [options]
 - `--short-delta` - Target short call delta (default: 0.20)
 - `--output` - Save results to JSON file
 
-## Scoring System (range: -4.5 to ~14.5)
+## Scoring System (max possible: 14, range: -4 to 14)
 
 | Category | Condition | Points |
 |----------|-----------|--------|
@@ -51,7 +51,7 @@ uv run python scripts/scan.py SYMBOLS [options]
 | **Trend** | Price > SMA50 | +1 / -1 |
 | | RSI > 50 | +0.5 / -0.5 |
 | | MACD > signal | +0.5 / -0.5 |
-| **Earnings** | Next earnings > 45 days | +0.5 |
+| **Earnings** | Next earnings > 45 days | +1.0 |
 | | Earnings within 45 days | -1.0 |
 | | Earnings within short expiry | -2.0 |
 
@@ -60,11 +60,15 @@ uv run python scripts/scan.py SYMBOLS [options]
 Returns JSON with:
 - `criteria` - Scan parameters used
 - `results` - Array sorted by score:
-  - `symbol`, `price`, `iv_pct`, `pmcc_score`
+  - `symbol`, `price`, `iv_pct`, `pmcc_score`, `max_possible_score` (always 14)
   - `leaps` - expiry, strike, delta, bid/ask, spread%, volume, OI
   - `short` - expiry, strike, delta, bid/ask, spread%, volume, OI
   - `metrics` - net_debit, short_yield%, annual_yield%, capital_required
-  - `score_breakdown` - trend_delta, trend (per-indicator explanation), earnings_delta, earnings (explanation)
+  - `score_breakdown` - every scoring component as a `<name>_delta` (float) + `<name>` (explanation string) pair:
+    - Base: `leaps_delta`, `short_delta`, `leaps_liquidity`, `short_liquidity`, `leaps_spread`, `short_spread`, `iv`, `yield`
+    - Trend: `trend_delta`, `trend` (per-indicator dict)
+    - Earnings: `earnings_delta`, `earnings`
+    - All `_delta` values sum to `pmcc_score`
 - `errors` - Symbols that failed (no options, insufficient data)
 
 ## Examples
@@ -94,10 +98,11 @@ uv run python scripts/scan.py AAPL,MSFT,GOOGL --output pmcc_results.json
 
 ## Interpretation
 
-- Score > 11: Excellent candidate (strong structure + bullish trend + clear earnings runway)
-- Score 9-11: Good candidate
-- Score 6-9: Acceptable with caveats
+- Score > 12: Excellent candidate (strong structure + bullish trend + clear earnings runway)
+- Score 10-12: Good candidate
+- Score 6-10: Acceptable with caveats
 - Score < 6: Poor structure, bearish trend, or earnings risk
+- `max_possible_score` is always 14 — use `pmcc_score / max_possible_score` to gauge how close a candidate is to perfect
 
 ## Dependencies
 

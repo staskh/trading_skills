@@ -114,7 +114,7 @@ def compute_earnings_score(earnings_date_str: str | None, short_days: int) -> tu
     """Score earnings proximity relative to short call expiry.
 
     Returns (score_delta, breakdown).
-    - Earnings > 45d away: +0.5 (full decay runway)
+    - Earnings > 45d away: +1.0 (clear decay runway)
     - Earnings within short expiry: -2.0 (IV crush / gap risk)
     - Earnings between short expiry and 45d: -1.0
     - No date or past: 0.0
@@ -131,8 +131,8 @@ def compute_earnings_score(earnings_date_str: str | None, short_days: int) -> tu
             return 0.0, {"earnings": "0.0 (earnings already passed)"}
 
         if days_to_earnings > 45:
-            return 0.5, {
-                "earnings": f"+0.5 (earnings {days_to_earnings}d away, clear decay runway)"
+            return 1.0, {
+                "earnings": f"+1.0 (earnings {days_to_earnings}d away, clear decay runway)"
             }
         elif days_to_earnings <= short_days:
             return -2.0, {
@@ -143,6 +143,148 @@ def compute_earnings_score(earnings_date_str: str | None, short_days: int) -> tu
 
     except (ValueError, TypeError):
         return 0.0, {"earnings": "0.0 (invalid earnings date)"}
+
+
+def compute_base_score(
+    actual_leaps_delta: float,
+    actual_short_delta: float,
+    leaps_liquidity: int,
+    short_liquidity: int,
+    leaps_spread_pct: float,
+    short_spread_pct: float,
+    avg_iv: float,
+    annual_yield_est: float,
+    leaps_delta_target: float = 0.80,
+    short_delta_target: float = 0.20,
+) -> tuple[float, dict]:
+    """Score options structure: delta accuracy, liquidity, spread, IV, and yield.
+
+    Returns (score, breakdown). Max score is 11.
+    """
+    score = 0.0
+    bd = {}
+
+    # LEAPS delta accuracy
+    if leaps_delta_target - 0.05 <= actual_leaps_delta <= leaps_delta_target + 0.05:
+        d = 2.0
+        bd["leaps_delta"] = (
+            f"+2.0 (LEAPS delta {actual_leaps_delta:.3f} within ±0.05 of {leaps_delta_target})"
+        )
+    elif leaps_delta_target - 0.10 <= actual_leaps_delta <= leaps_delta_target + 0.10:
+        d = 1.0
+        bd["leaps_delta"] = (
+            f"+1.0 (LEAPS delta {actual_leaps_delta:.3f} within ±0.10 of {leaps_delta_target})"
+        )
+    else:
+        d = 0.0
+        bd["leaps_delta"] = (
+            f"0.0 (LEAPS delta {actual_leaps_delta:.3f} outside ±0.10 of {leaps_delta_target})"
+        )
+    bd["leaps_delta_delta"] = d
+    score += d
+
+    # Short delta accuracy
+    if short_delta_target - 0.05 <= actual_short_delta <= short_delta_target + 0.05:
+        d = 1.0
+        bd["short_delta"] = (
+            f"+1.0 (short delta {actual_short_delta:.3f} within ±0.05 of {short_delta_target})"
+        )
+    elif short_delta_target - 0.10 <= actual_short_delta <= short_delta_target + 0.10:
+        d = 0.5
+        bd["short_delta"] = (
+            f"+0.5 (short delta {actual_short_delta:.3f} within ±0.10 of {short_delta_target})"
+        )
+    else:
+        d = 0.0
+        bd["short_delta"] = (
+            f"0.0 (short delta {actual_short_delta:.3f} outside ±0.10 of {short_delta_target})"
+        )
+    bd["short_delta_delta"] = d
+    score += d
+
+    # LEAPS liquidity
+    if leaps_liquidity > 100:
+        d = 1.0
+        bd["leaps_liquidity"] = f"+1.0 (LEAPS vol+OI {leaps_liquidity} > 100)"
+    elif leaps_liquidity > 20:
+        d = 0.5
+        bd["leaps_liquidity"] = f"+0.5 (LEAPS vol+OI {leaps_liquidity} > 20)"
+    else:
+        d = 0.0
+        bd["leaps_liquidity"] = f"0.0 (LEAPS vol+OI {leaps_liquidity} <= 20)"
+    bd["leaps_liquidity_delta"] = d
+    score += d
+
+    # Short liquidity
+    if short_liquidity > 500:
+        d = 1.0
+        bd["short_liquidity"] = f"+1.0 (short vol+OI {short_liquidity} > 500)"
+    elif short_liquidity > 100:
+        d = 0.5
+        bd["short_liquidity"] = f"+0.5 (short vol+OI {short_liquidity} > 100)"
+    else:
+        d = 0.0
+        bd["short_liquidity"] = f"0.0 (short vol+OI {short_liquidity} <= 100)"
+    bd["short_liquidity_delta"] = d
+    score += d
+
+    # LEAPS spread
+    if leaps_spread_pct < 5:
+        d = 1.0
+        bd["leaps_spread"] = f"+1.0 (LEAPS spread {leaps_spread_pct:.1f}% < 5%)"
+    elif leaps_spread_pct < 10:
+        d = 0.5
+        bd["leaps_spread"] = f"+0.5 (LEAPS spread {leaps_spread_pct:.1f}% < 10%)"
+    else:
+        d = 0.0
+        bd["leaps_spread"] = f"0.0 (LEAPS spread {leaps_spread_pct:.1f}% >= 10%)"
+    bd["leaps_spread_delta"] = d
+    score += d
+
+    # Short spread
+    if short_spread_pct < 10:
+        d = 1.0
+        bd["short_spread"] = f"+1.0 (short spread {short_spread_pct:.1f}% < 10%)"
+    elif short_spread_pct < 20:
+        d = 0.5
+        bd["short_spread"] = f"+0.5 (short spread {short_spread_pct:.1f}% < 20%)"
+    else:
+        d = 0.0
+        bd["short_spread"] = f"0.0 (short spread {short_spread_pct:.1f}% >= 20%)"
+    bd["short_spread_delta"] = d
+    score += d
+
+    # IV level
+    iv_pct = avg_iv * 100
+    if 0.25 <= avg_iv <= 0.50:
+        d = 2.0
+        bd["iv"] = f"+2.0 (IV {iv_pct:.1f}% in ideal range 25-50%)"
+    elif 0.20 <= avg_iv <= 0.60:
+        d = 1.0
+        bd["iv"] = f"+1.0 (IV {iv_pct:.1f}% in acceptable range 20-60%)"
+    else:
+        d = 0.0
+        bd["iv"] = f"0.0 (IV {iv_pct:.1f}% outside range 20-60%)"
+    bd["iv_delta"] = d
+    score += d
+
+    # Annual yield
+    if annual_yield_est > 50:
+        d = 2.0
+        bd["yield"] = f"+2.0 (annual yield {annual_yield_est:.1f}% > 50%)"
+    elif annual_yield_est > 30:
+        d = 1.0
+        bd["yield"] = f"+1.0 (annual yield {annual_yield_est:.1f}% > 30%)"
+    elif annual_yield_est > 15:
+        d = 0.5
+        bd["yield"] = f"+0.5 (annual yield {annual_yield_est:.1f}% > 15%)"
+    else:
+        d = 0.0
+        bd["yield"] = f"0.0 (annual yield {annual_yield_est:.1f}% <= 15%)"
+    bd["yield_delta"] = d
+    score += d
+
+    return round(score, 1), bd
 
 
 def analyze_pmcc(
@@ -284,66 +426,36 @@ def analyze_pmcc(
             short_option.get("openInterest", 0) or 0
         )
 
-        # Calculate score
-        score = 0
-
         actual_leaps_delta = leaps_option.get("calculated_delta", 0)
         actual_short_delta = short_option.get("calculated_delta", 0)
 
-        if leaps_delta - 0.05 <= actual_leaps_delta <= leaps_delta + 0.05:
-            score += 2
-        elif leaps_delta - 0.10 <= actual_leaps_delta <= leaps_delta + 0.10:
-            score += 1
-
-        if short_delta - 0.05 <= actual_short_delta <= short_delta + 0.05:
-            score += 1
-        elif short_delta - 0.10 <= actual_short_delta <= short_delta + 0.10:
-            score += 0.5
-
-        if leaps_liquidity > 100:
-            score += 1
-        elif leaps_liquidity > 20:
-            score += 0.5
-
-        if short_liquidity > 500:
-            score += 1
-        elif short_liquidity > 100:
-            score += 0.5
-
-        if leaps_spread_pct < 5:
-            score += 1
-        elif leaps_spread_pct < 10:
-            score += 0.5
-
-        if short_spread_pct < 10:
-            score += 1
-        elif short_spread_pct < 20:
-            score += 0.5
-
-        if 0.25 <= avg_iv <= 0.50:
-            score += 2
-        elif 0.20 <= avg_iv <= 0.60:
-            score += 1
-
-        if annual_yield_est > 50:
-            score += 2
-        elif annual_yield_est > 30:
-            score += 1
-        elif annual_yield_est > 15:
-            score += 0.5
+        # Base score (options structure)
+        base_score, base_breakdown = compute_base_score(
+            actual_leaps_delta=actual_leaps_delta,
+            actual_short_delta=actual_short_delta,
+            leaps_liquidity=leaps_liquidity,
+            short_liquidity=short_liquidity,
+            leaps_spread_pct=leaps_spread_pct,
+            short_spread_pct=short_spread_pct,
+            avg_iv=avg_iv,
+            annual_yield_est=annual_yield_est,
+            leaps_delta_target=leaps_delta,
+            short_delta_target=short_delta,
+        )
 
         # Trend scoring
         hist = ticker.history(period="3mo")
         raw_indicators = compute_raw_indicators(hist)
         trend_delta, trend_breakdown = compute_trend_score(current_price, raw_indicators)
-        score += trend_delta
 
         # Earnings proximity scoring
         earnings_date_str = get_next_earnings_date(symbol)
         earnings_delta, earnings_breakdown = compute_earnings_score(earnings_date_str, short_days)
-        score += earnings_delta
+
+        score = base_score + trend_delta + earnings_delta
 
         score_breakdown = {
+            **base_breakdown,
             "trend_delta": trend_delta,
             "trend": trend_breakdown,
             "earnings_delta": earnings_delta,
@@ -355,6 +467,7 @@ def analyze_pmcc(
             "price": round(current_price, 2),
             "iv_pct": round(avg_iv * 100, 1),
             "pmcc_score": round(score, 1),
+            "max_possible_score": 14,
             "leaps": {
                 "expiry": leaps_expiry,
                 "days": leaps_days,
