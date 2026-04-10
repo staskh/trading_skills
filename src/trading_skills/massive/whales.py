@@ -150,14 +150,14 @@ def option_whales(
 
     mask = _modified_z_score(df["invested"], sigma_z) | tx_mask
 
-    # Drop outliers averaging <= $100k per transaction — statistical detection
+    # Drop outliers averaging <= $50k per transaction — statistical detection
     # may flag high-invested seconds driven by many small retail trades, not
     # institutional block activity.
     low_tx = (
         mask
         & df["transactions"].notna()
         & (df["transactions"] > 0)
-        & (df["invested"] / df["transactions"] <= 100_000)
+        & (df["invested"] / df["transactions"] <= 50_000)
     )
 
     outliers = (df[mask & ~low_tx].sort_values("timestamp", ascending=True).reset_index(drop=True))[
@@ -300,7 +300,7 @@ def whales_hunter(
 
     expiry_max = trading_date + relativedelta(months=max_months)
     prev_trading_date = previous_trading_date(trading_date)
-    _empty = {"whales": [], "source": "yahoo only", "trading_date": trading_date}
+    _empty = {"whales": [], "source": "yahoo", "trading_date": trading_date}
 
     # --- Step 1: crude Yahoo Finance scan ---
     all_expiries = get_expiries(underlying)
@@ -356,7 +356,7 @@ def whales_hunter(
 
     # --- Step 2: precise Polygon drill-down ---
     if not precise:
-        return {"whales": crude_records, "source": "yahoo only", "trading_date": trading_date}
+        return {"whales": crude_records, "source": "yahoo", "trading_date": trading_date}
 
     whale_dfs = _fetch_whales_parallel(candidates, sigma_z=sigma_z)
 
@@ -368,4 +368,4 @@ def whales_hunter(
             "trading_date": trading_date,
         }
 
-    return {"whales": crude_records, "source": "yahoo only", "trading_date": trading_date}
+    return {"whales": [], "source": "massive", "trading_date": trading_date}
