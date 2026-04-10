@@ -49,7 +49,7 @@ class TestWhalesHunter:
 
     def test_yahoo_only_mode_sets_source(self):
         result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=False)
-        assert result["source"] == "yahoo only"
+        assert result["source"] == "yahoo"
 
     def test_known_active_underlying_returns_whales(self):
         result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=False)
@@ -67,7 +67,7 @@ class TestWhalesHunter:
 
     def test_precise_mode_source_is_massive_or_yahoo(self):
         result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=True)
-        assert result["source"] in ("massive", "yahoo only")
+        assert result["source"] in ("massive", "yahoo")
 
     def test_precise_mode_returns_whales(self):
         result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=True)
