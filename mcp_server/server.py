@@ -40,6 +40,10 @@ from trading_skills.piotroski import calculate_piotroski_score
 from trading_skills.quote import get_quote
 from trading_skills.report import generate_report_data
 from trading_skills.risk import calculate_risk_metrics
+from trading_skills.insider_trading import (
+    get_insider_transactions,
+    get_multiple_insider_transactions,
+)
 from trading_skills.massive.whales import whales_hunter
 from trading_skills.scanner_bullish import compute_bullish_score, scan_symbols
 from trading_skills.scanner_pmcc import analyze_pmcc, format_scan_results
@@ -96,6 +100,23 @@ def news_sentiment(symbol: str, limit: int = 10) -> dict:
         limit: Number of articles to return (default 10)
     """
     return get_news(symbol.upper(), limit)
+
+
+@mcp.tool()
+def insider_trading(symbols: str, days_back: int = 90) -> dict:
+    """Get insider trading activity (SEC Form 4) for one or more stocks.
+
+    Returns transactions with insider name, role, transaction type, shares,
+    price, value, date, and net buying/selling sentiment summary.
+
+    Args:
+        symbols: Single ticker or comma-separated list (e.g., 'NVDA' or 'NVDA,PLTR,GOOG')
+        days_back: Trailing days to look back (default 90)
+    """
+    symbol_list = [s.strip().upper() for s in symbols.split(",")]
+    if len(symbol_list) == 1:
+        return get_insider_transactions(symbol_list[0], days_back)
+    return get_multiple_insider_transactions(symbol_list, days_back)
 
 
 # ============================================================================

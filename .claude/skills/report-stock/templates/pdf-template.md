@@ -136,7 +136,39 @@ Header: `Piotroski F-Score: X/9 (interpretation)`
 | 8. Higher Gross Margin | PASS/FAIL | Recent: X, Prev: Y |
 | 9. Higher Asset Turnover | PASS/FAIL | Recent: X, Prev: Y |
 
-### 7. PMCC Viability Table
+### 7. Insider Trading Activity Section
+
+> Only include this section if `insider_trading.recent_transactions` is non-empty.
+
+**Section Header** (Blue accent — same style as other section headers): `Insider Trading Activity (Last 90 Days)`
+
+#### Sentiment Summary Box
+
+Color-coded bar based on `insider_trading.summary.net_sentiment`:
+- `net_buying` → Green (#27AE60)
+- `net_selling` → Red (#E74C3C)
+- `neutral` → Gray (#BDC3C7)
+
+```
+┌─ NET INSIDER SENTIMENT: NET BUYING / NET SELLING / NEUTRAL ─────┐
+│  Buys:  X transactions  $XXX,XXX total                          │
+│  Sells: X transactions  $XXX,XXX total                          │
+│  Net:   ±$XXX,XXX                                               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Recent Transactions Table
+
+| Date | Insider | Role | Transaction | Shares | Price | Value | Own |
+|------|---------|------|-------------|--------|-------|-------|-----|
+| YYYY-MM-DD | Name | Title | Sale/Purchase/Exercise | X,XXX | $XX.XX | $XXX,XXX | D/I |
+
+- Up to 10 most recent transactions from `insider_trading.recent_transactions`
+- Color-code `Transaction` cell: Purchase rows → light green tint; Sale rows → light red tint
+- `Own` column: D = Direct, I = Indirect
+- Omit `Price` and `Value` columns entirely if all values are null/N/A
+
+### 8. PMCC Viability Table
 
 | Metric | Value | Assessment |
 |--------|-------|------------|
@@ -153,7 +185,7 @@ Header: `Piotroski F-Score: X/9 (interpretation)`
 | Short Bid/Ask | `$X.XX / $X.XX` | - |
 | Short Spread | `X.X%` | Good(<10%)/Acceptable(10-20%)/Wide(>20%) |
 
-### 8. PMCC Trade Metrics Table (Blue accent header)
+### 9. PMCC Trade Metrics Table (Blue accent header)
 
 | Metric | Value |
 |--------|-------|
@@ -164,7 +196,7 @@ Header: `Piotroski F-Score: X/9 (interpretation)`
 | ROI at Max Profit | `X.X%` |
 | Capital Required | `$X,XXX.XX` |
 
-### 9. Option Spread Strategies Section (Blue accent header)
+### 10. Option Spread Strategies Section (Blue accent header)
 
 Header: `Option Spread Strategies - Expiry: YYYY-MM-DD (X days)`
 
@@ -243,7 +275,7 @@ Data from `spread_strategies`:
 - Straddle/Strangle: Expect large move, direction uncertain
 - Iron Condor: Range-bound, collect premium
 
-### 10. Investment Summary (Final Page)
+### 11. Investment Summary (Final Page)
 
 #### Strengths Box (Green)
 ```
@@ -261,7 +293,7 @@ Data from `spread_strategies`:
 └─────────────────────────────────────────────────┘
 ```
 
-### 11. Footer (All Pages)
+### 12. Footer (All Pages)
 ```
 ─────────────────────────────────────── (1pt line, #BDC3C7)
 This analysis is for informational purposes only and does not

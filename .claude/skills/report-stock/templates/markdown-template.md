@@ -116,7 +116,29 @@ Up to 8 quarters.
 | 8. Higher Gross Margin | PASS/FAIL | Recent: X, Prev: Y |
 | 9. Higher Asset Turnover | PASS/FAIL | Recent: X, Prev: Y |
 
-### 7. PMCC Viability
+### 7. Insider Trading Activity
+
+> Only include this section if `insider_trading.recent_transactions` is non-empty.
+
+**Net Sentiment: {insider_trading.summary.net_sentiment}**  
+(map: `net_buying` → "🟢 Net Buying", `net_selling` → "🔴 Net Selling", `neutral` → "⚪ Neutral")
+
+| Metric | Value |
+|--------|-------|
+| Buys (90 days) | `buy_count` transactions, `$buy_value` total |
+| Sells (90 days) | `sell_count` transactions, `$sell_value` total |
+| Net Activity | `±$net_value` |
+
+#### Recent Transactions
+
+| Date | Insider | Role | Transaction | Shares | Price | Value | Own |
+|------|---------|------|-------------|--------|-------|-------|-----|
+| YYYY-MM-DD | Name | Title | Sale/Purchase/Exercise | X,XXX | $XX.XX | $XXX,XXX | D/I |
+
+Up to 10 most recent. Omit `price` and `value` columns if all values are N/A.  
+`Ownership` D = Direct, I = Indirect.
+
+### 8. PMCC Viability
 
 | Metric | Value | Assessment |
 |--------|-------|------------|
@@ -144,7 +166,7 @@ Up to 8 quarters.
 | ROI at Max Profit | `X.X%` |
 | Capital Required | `$X,XXX.XX` |
 
-### 8. Option Spread Strategies
+### 9. Option Spread Strategies
 
 **Expiry:** {spread_strategies.expiry} ({spread_strategies.dte} days)
 
@@ -162,7 +184,7 @@ Up to 8 quarters.
 
 For each strategy, show legs, cost, breakeven, max profit/loss.
 
-### 9. Investment Summary
+### 10. Investment Summary
 
 **Strengths:**
 - (from recommendation.strengths)

@@ -63,6 +63,15 @@ All generated notebooks, datasets, and reports **must** be saved to `sandbox/`. 
 ```
 Example: `AAPL_Analysis_Report_2026-02-06_1430.pdf`
 
+## Branching Policy
+
+All issue work MUST be done on a dedicated branch, never directly on `main`:
+
+- `feat/<short-description>` — new features or enhancements
+- `bug/<short-description>` — bug fixes
+
+Create the branch before writing any code: `git checkout -b feat/issue-N-description`
+
 ## Before Creating a PR
 
 You MUST complete all of the following steps before opening a pull request:

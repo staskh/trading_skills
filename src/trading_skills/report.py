@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import yfinance as yf
 
 from trading_skills.fundamentals import get_fundamentals
+from trading_skills.insider_trading import get_insider_transactions
 from trading_skills.piotroski import calculate_piotroski_score
 from trading_skills.scanner_bullish import compute_bullish_score
 from trading_skills.scanner_pmcc import analyze_pmcc
@@ -227,6 +228,9 @@ def fetch_data(symbol: str) -> dict:
     # Spread analysis
     spreads = analyze_spreads(symbol, ticker=ticker)
 
+    # Insider trading
+    insider = get_insider_transactions(symbol, ticker=ticker)
+
     return {
         "symbol": symbol,
         "bullish": bullish_data,
@@ -234,6 +238,7 @@ def fetch_data(symbol: str) -> dict:
         "fundamentals": fundamentals,
         "piotroski": piotroski,
         "spreads": spreads,
+        "insider": insider,
     }
 
 
@@ -420,4 +425,8 @@ def generate_report_data(symbol: str) -> dict:
             "criteria": data.get("piotroski", {}).get("criteria", {}),
         },
         "spread_strategies": data.get("spreads", {}),
+        "insider_trading": {
+            "summary": data.get("insider", {}).get("summary", {}),
+            "recent_transactions": data.get("insider", {}).get("transactions", [])[:10],
+        },
     }

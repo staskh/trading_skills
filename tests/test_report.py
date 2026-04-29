@@ -263,6 +263,7 @@ class TestFetchData:
         assert result["bullish"] == {}
         assert result["pmcc"] == {}
 
+    @patch(f"{MODULE}.get_insider_transactions")
     @patch(f"{MODULE}.analyze_spreads")
     @patch(f"{MODULE}.calculate_piotroski_score")
     @patch(f"{MODULE}.get_fundamentals")
@@ -270,7 +271,7 @@ class TestFetchData:
     @patch(f"{MODULE}.compute_bullish_score")
     @patch(f"{MODULE}.yf.Ticker")
     def test_shares_ticker_across_functions(
-        self, mock_yf, mock_bullish, mock_pmcc, mock_fund, mock_pio, mock_spreads
+        self, mock_yf, mock_bullish, mock_pmcc, mock_fund, mock_pio, mock_spreads, mock_insider
     ):
         """fetch_data creates one yf.Ticker and passes it to all analysis functions."""
         mock_ticker = MagicMock()
@@ -280,6 +281,7 @@ class TestFetchData:
         mock_fund.return_value = {}
         mock_pio.return_value = {}
         mock_spreads.return_value = {}
+        mock_insider.return_value = {}
 
         fetch_data("AAPL")
 
@@ -289,3 +291,4 @@ class TestFetchData:
         mock_fund.assert_called_once_with("AAPL", "all", ticker=mock_ticker)
         mock_pio.assert_called_once_with("AAPL", ticker=mock_ticker)
         mock_spreads.assert_called_once_with("AAPL", ticker=mock_ticker)
+        mock_insider.assert_called_once_with("AAPL", ticker=mock_ticker)
