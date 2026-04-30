@@ -6,6 +6,7 @@ import argparse
 import json
 
 from trading_skills.correlation import compute_correlation
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -17,6 +18,8 @@ def main():
     symbols = [s.strip().upper() for s in args.symbols.split(",")]
 
     result = compute_correlation(symbols, args.period)
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "15min"
     print(json.dumps(result, indent=2))
 
 

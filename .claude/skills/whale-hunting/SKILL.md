@@ -85,3 +85,8 @@ Sort by `total_invested` descending. For multi-event rows use the time range of 
 ## Requirements
 
 - `MASSIVE_API_KEY` environment variable for per-second data. Without it, falls back to Yahoo Finance daily data.
+
+
+## Timezone
+
+All timestamps and time-based calculations must use the `America/New_York` timezone. All JSON output must include `generated_at` (NY time string) and `data_delay` fields.

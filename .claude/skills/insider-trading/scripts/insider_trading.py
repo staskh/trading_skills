@@ -9,6 +9,7 @@ from trading_skills.insider_trading import (
     get_insider_transactions,
     get_multiple_insider_transactions,
 )
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -24,6 +25,8 @@ def main():
     else:
         result = get_multiple_insider_transactions(symbol_list, args.days)
 
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "EOD"
     print(json.dumps(result, indent=2, default=str))
 
 

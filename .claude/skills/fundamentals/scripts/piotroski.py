@@ -6,6 +6,7 @@ import argparse
 import json
 
 from trading_skills.piotroski import calculate_piotroski_score
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -14,6 +15,8 @@ def main():
 
     args = parser.parse_args()
     result = calculate_piotroski_score(args.symbol.upper())
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "15min"
     print(json.dumps(result, indent=2))
 
 

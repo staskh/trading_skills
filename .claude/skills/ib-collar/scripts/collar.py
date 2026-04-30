@@ -7,6 +7,7 @@ import asyncio
 import json
 
 from trading_skills.broker.collar import find_collar_candidates
+from trading_skills.utils import generated_at_str
 
 
 async def main():
@@ -23,6 +24,8 @@ async def main():
         account=args.account,
     )
 
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "real-time"
     print(json.dumps(result, indent=2, default=str))
 
 

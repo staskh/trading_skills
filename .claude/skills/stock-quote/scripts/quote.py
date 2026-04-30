@@ -6,6 +6,7 @@ import json
 import sys
 
 from trading_skills.quote import get_quote
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -15,6 +16,8 @@ def main():
 
     symbol = sys.argv[1].upper()
     result = get_quote(symbol)
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "15min"
     print(json.dumps(result, indent=2))
 
 

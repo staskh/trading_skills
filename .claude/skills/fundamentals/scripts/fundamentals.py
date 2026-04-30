@@ -6,6 +6,7 @@ import argparse
 import json
 
 from trading_skills.fundamentals import get_fundamentals
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -16,6 +17,8 @@ def main():
 
     args = parser.parse_args()
     result = get_fundamentals(args.symbol.upper(), args.type)
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "15min"
     print(json.dumps(result, indent=2))
 
 

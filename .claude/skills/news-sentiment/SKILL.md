@@ -32,3 +32,8 @@ Present key headlines and note any significant news that could impact the stock.
 ## Dependencies
 
 - `yfinance`
+
+
+## Timezone
+
+All timestamps and time-based calculations must use the `America/New_York` timezone. All JSON output must include `generated_at` (NY time string) and `data_delay` fields.

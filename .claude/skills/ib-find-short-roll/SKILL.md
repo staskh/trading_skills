@@ -88,3 +88,8 @@ uv run python scripts/roll.py TSLA --right P
 
 - `ib-async`
 - `yfinance`
+
+
+## Timezone
+
+All timestamps and time-based calculations must use the `America/New_York` timezone. All JSON output must include `generated_at` (NY time string) and `data_delay` fields.

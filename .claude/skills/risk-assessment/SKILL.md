@@ -39,3 +39,8 @@ Explain what the risk metrics mean and suggest position sizing if relevant.
 
 - `numpy`
 - `yfinance`
+
+
+## Timezone
+
+All timestamps and time-based calculations must use the `America/New_York` timezone. All JSON output must include `generated_at` (NY time string) and `data_delay` fields.

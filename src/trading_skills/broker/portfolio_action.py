@@ -16,7 +16,7 @@ from trading_skills.broker.connection import (
 )
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.technicals import compute_raw_indicators
-from trading_skills.utils import days_to_expiry
+from trading_skills.utils import _NY, days_to_expiry, generated_at_str
 
 
 def fetch_earnings_date(symbol: str) -> dict:
@@ -119,8 +119,8 @@ def get_spread_recommendation(spread: dict, earnings_date: str, today: datetime)
     earnings_days = None
     if earnings_date:
         try:
-            earn_dt = datetime.strptime(earnings_date, "%Y-%m-%d")
-            earnings_days = (earn_dt - today).days
+            earn_dt = datetime.strptime(earnings_date, "%Y-%m-%d").date()
+            earnings_days = (earn_dt - today.date()).days
         except Exception:
             pass
 
@@ -307,7 +307,7 @@ def analyze_portfolio(data: dict) -> dict:
     Fetches earnings dates and technical indicators, groups positions
     into spreads, categorizes by urgency, and generates risk assessments.
     """
-    today = datetime.now()
+    today = datetime.now(_NY)
 
     positions_by_account = data.get("positions", {})
     prices = data.get("prices", {})
@@ -395,8 +395,8 @@ def analyze_portfolio(data: dict) -> dict:
                 earnings_days = None
                 if earnings_date:
                     try:
-                        earn_dt = datetime.strptime(earnings_date, "%Y-%m-%d")
-                        earnings_days = (earn_dt - today).days
+                        earn_dt = datetime.strptime(earnings_date, "%Y-%m-%d").date()
+                        earnings_days = (earn_dt - today.date()).days
                     except Exception:
                         pass
 
@@ -481,7 +481,8 @@ def analyze_portfolio(data: dict) -> dict:
         )
 
     return {
-        "generated": today.strftime("%Y-%m-%d %H:%M"),
+        "generated_at": generated_at_str(),
+        "data_delay": "real-time",
         "accounts": data.get("accounts", []),
         "summary": {
             "red_count": red_count,

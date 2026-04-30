@@ -7,6 +7,7 @@ import json
 import sys
 
 from trading_skills.scanner_pmcc import analyze_pmcc, format_scan_results
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -48,6 +49,8 @@ def main():
         "short_target_delta": args.short_delta,
         "short_strike": "above LEAPS strike",
     }
+    output["generated_at"] = generated_at_str()
+    output["data_delay"] = "15min"
 
     if args.output:
         with open(args.output, "w") as f:

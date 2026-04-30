@@ -7,6 +7,7 @@ import asyncio
 import json
 
 from trading_skills.broker.delta_exposure import get_delta_exposure
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -15,7 +16,8 @@ def main():
 
     args = parser.parse_args()
     result = asyncio.run(get_delta_exposure(args.port))
-
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "real-time"
     print(json.dumps(result, indent=2))
 
 

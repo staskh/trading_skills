@@ -8,6 +8,7 @@ import json
 import sys
 
 from trading_skills.broker.options import get_expiries, get_option_chain
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -20,17 +21,22 @@ def main():
     args = parser.parse_args()
     symbol = args.symbol.upper()
 
+    ga = generated_at_str()
     if args.expiries:
         result = asyncio.run(get_expiries(symbol, port=args.port))
         if not result.get("success"):
             print(json.dumps(result))
             sys.exit(1)
+        result["generated_at"] = ga
+        result["data_delay"] = "real-time"
         print(json.dumps(result, indent=2))
     elif args.expiry:
         result = asyncio.run(get_option_chain(symbol, args.expiry, port=args.port))
         if not result.get("success"):
             print(json.dumps(result))
             sys.exit(1)
+        result["generated_at"] = ga
+        result["data_delay"] = "real-time"
         print(json.dumps(result, indent=2))
     else:
         # Default: show expiries
@@ -38,6 +44,8 @@ def main():
         if not result.get("success"):
             print(json.dumps(result))
             sys.exit(1)
+        result["generated_at"] = ga
+        result["data_delay"] = "real-time"
         print(json.dumps(result, indent=2))
 
 

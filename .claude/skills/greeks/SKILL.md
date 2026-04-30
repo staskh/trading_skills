@@ -55,3 +55,8 @@ Explain what each Greek means for the position.
 ## Dependencies
 
 - `scipy`
+
+
+## Timezone
+
+All timestamps and time-based calculations must use the `America/New_York` timezone. All JSON output must include `generated_at` (NY time string) and `data_delay` fields.

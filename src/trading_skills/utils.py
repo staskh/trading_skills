@@ -106,11 +106,16 @@ def get_current_price(info: dict) -> float | None:
     return info.get("currentPrice") or info.get("regularMarketPrice")
 
 
+def generated_at_str() -> str:
+    """Return current NY time formatted for JSON metadata."""
+    return datetime.now(_NY).strftime("%Y-%m-%d %H:%M ET")
+
+
 def days_to_expiry(expiry_str: str) -> int:
     """Calculate days until expiration from YYYYMMDD string."""
     try:
-        exp_date = datetime.strptime(expiry_str, "%Y%m%d")
-        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        exp_date = datetime.strptime(expiry_str, "%Y%m%d").date()
+        today = datetime.now(_NY).date()
         return (exp_date - today).days
     except Exception:
         return 999

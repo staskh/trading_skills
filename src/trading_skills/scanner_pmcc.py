@@ -2,6 +2,7 @@
 # ABOUTME: Scores delta accuracy, liquidity, spread, IV, yield, trend, and earnings proximity.
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
@@ -10,6 +11,8 @@ from trading_skills.black_scholes import black_scholes_delta, black_scholes_pric
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.technicals import compute_raw_indicators
 from trading_skills.utils import get_current_price
+
+_NY = ZoneInfo("America/New_York")
 
 
 def format_scan_results(results: list[dict]) -> dict:
@@ -28,7 +31,7 @@ def format_scan_results(results: list[dict]) -> dict:
     )
 
     return {
-        "scan_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "scan_date": datetime.now(_NY).strftime("%Y-%m-%d %H:%M ET"),
         "count": len(valid_results),
         "results": valid_results,
         "errors": [r for r in results if "error" in r],

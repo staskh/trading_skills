@@ -12,6 +12,7 @@ from trading_skills.spreads import (
     analyze_strangle,
     analyze_vertical,
 )
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -52,6 +53,8 @@ def main():
         result = analyze_iron_condor(args.symbol, args.expiry, args.put_long,
                                      args.put_short, args.call_short, args.call_long)
 
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "15min"
     print(json.dumps(result, indent=2))
 
 

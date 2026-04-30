@@ -7,6 +7,7 @@ import json
 import sys
 
 from trading_skills.report import generate_report_data
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -21,6 +22,8 @@ def main():
         print(json.dumps(result))
         sys.exit(1)
 
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "15min"
     print(json.dumps(result, indent=2))
 
 

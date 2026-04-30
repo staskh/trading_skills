@@ -38,3 +38,8 @@ If not connected, explain that TWS/Gateway needs to be running.
 ## Dependencies
 
 - `ib-async`
+
+
+## Timezone
+
+All timestamps and time-based calculations must use the `America/New_York` timezone. All JSON output must include `generated_at` (NY time string) and `data_delay` fields.

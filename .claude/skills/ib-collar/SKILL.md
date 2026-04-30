@@ -95,3 +95,8 @@ uv run python scripts/collar.py AMZN --account U790497
 # Use paper trading port instead
 uv run python scripts/collar.py NVDA --port 7497
 ```
+
+
+## Timezone
+
+All timestamps and time-based calculations must use the `America/New_York` timezone. All JSON output must include `generated_at` (NY time string) and `data_delay` fields.

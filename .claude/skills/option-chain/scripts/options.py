@@ -7,6 +7,7 @@ import json
 import sys
 
 from trading_skills.options import get_expiries, get_option_chain
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -18,14 +19,17 @@ def main():
     args = parser.parse_args()
     symbol = args.symbol.upper()
 
+    ga = generated_at_str()
     if args.expiries:
         expiries = get_expiries(symbol)
         if not expiries:
             print(json.dumps({"error": f"No options found for {symbol}"}))
             sys.exit(1)
-        print(json.dumps({"symbol": symbol, "expiries": expiries}, indent=2))
+        print(json.dumps({"symbol": symbol, "expiries": expiries, "generated_at": ga, "data_delay": "15min"}, indent=2))
     elif args.expiry:
         result = get_option_chain(symbol, args.expiry)
+        result["generated_at"] = ga
+        result["data_delay"] = "15min"
         print(json.dumps(result, indent=2))
     else:
         # Default: show expiries
@@ -33,7 +37,7 @@ def main():
         if not expiries:
             print(json.dumps({"error": f"No options found for {symbol}"}))
             sys.exit(1)
-        print(json.dumps({"symbol": symbol, "expiries": expiries}, indent=2))
+        print(json.dumps({"symbol": symbol, "expiries": expiries, "generated_at": ga, "data_delay": "15min"}, indent=2))
 
 
 if __name__ == "__main__":

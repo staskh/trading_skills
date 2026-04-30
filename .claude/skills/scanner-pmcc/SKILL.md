@@ -110,3 +110,8 @@ uv run python scripts/scan.py AAPL,MSFT,GOOGL --output pmcc_results.json
 - `pandas`
 - `scipy`
 - `yfinance`
+
+
+## Timezone
+
+All timestamps and time-based calculations must use the `America/New_York` timezone. All JSON output must include `generated_at` (NY time string) and `data_delay` fields.

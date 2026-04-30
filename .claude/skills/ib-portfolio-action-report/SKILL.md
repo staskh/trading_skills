@@ -44,7 +44,8 @@ Present critical findings to the user: red/yellow items requiring attention, top
 ## JSON Output
 
 The script returns structured JSON with:
-- `generated` - Timestamp
+- `generated_at` - NY timestamp (e.g. `"2026-04-29 19:35 ET"`)
+- `data_delay` - Data freshness (`"real-time"`)
 - `accounts` - List of account IDs
 - `summary` - Red/yellow/green counts
 - `spreads` - All positions grouped into spreads with risk level, urgency, and recommendations
@@ -83,3 +84,8 @@ uv run python scripts/report.py --port 7496 --account U790497
 - `ib-async`
 - `pandas-ta`
 - `yfinance`
+
+
+## Timezone
+
+All timestamps and time-based calculations must use the `America/New_York` timezone. All JSON output must include `generated_at` (NY time string) and `data_delay` fields.

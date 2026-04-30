@@ -6,6 +6,7 @@ import argparse
 import json
 
 from trading_skills.history import get_history
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -18,6 +19,8 @@ def main():
 
     args = parser.parse_args()
     result = get_history(args.symbol.upper(), args.period, args.interval)
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "15min"
     print(json.dumps(result, indent=2))
 
 

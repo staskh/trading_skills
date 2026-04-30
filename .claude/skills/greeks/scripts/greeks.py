@@ -6,6 +6,7 @@ import argparse
 import json
 
 from trading_skills.greeks import calculate_greeks
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -36,6 +37,8 @@ def main():
         rate=args.rate,
         volatility=args.vol,
     )
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "15min"
     print(json.dumps(result, indent=2))
 
 

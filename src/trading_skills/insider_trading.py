@@ -3,8 +3,11 @@
 
 import re
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import yfinance as yf
+
+_NY = ZoneInfo("America/New_York")
 
 
 def _parse_price_from_text(text: str) -> float | None:
@@ -80,11 +83,15 @@ def get_insider_transactions(symbol: str, days_back: int = 90, ticker=None) -> d
         return {"symbol": symbol, "transactions": [], "summary": _empty_summary()}
 
     # Filter to trailing window
-    cutoff = datetime.now() - timedelta(days=days_back)
+    cutoff = datetime.now(_NY).replace(tzinfo=None) - timedelta(days=days_back)
     df = df.copy()
-    df["_date"] = df["Start Date"].apply(
-        lambda d: d.to_pydatetime() if hasattr(d, "to_pydatetime") else datetime.min
-    )
+
+    def _to_naive(d):
+        if hasattr(d, "to_pydatetime"):
+            return d.to_pydatetime().replace(tzinfo=None)
+        return datetime.min
+
+    df["_date"] = df["Start Date"].apply(_to_naive)
     df = df[df["_date"] >= cutoff]
 
     transactions = [_row_to_transaction(row) for _, row in df.iterrows()]

@@ -104,3 +104,8 @@ This skill aggregates data from:
 - `scanner-bullish` for trend analysis
 - `scanner-pmcc` for PMCC viability
 - `fundamentals` for financial data and Piotroski score
+
+
+## Timezone
+
+All timestamps and time-based calculations must use the `America/New_York` timezone. All JSON output must include `generated_at` (NY time string) and `data_delay` fields.

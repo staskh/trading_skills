@@ -6,9 +6,8 @@ import argparse
 import json
 import sys
 
-import pandas as pd
-
 from trading_skills.scanner_bullish import compute_bullish_score, scan_symbols
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -29,11 +28,14 @@ def main():
 
     top_results = scan_symbols(symbols, args.top, args.period)
 
+    ga = generated_at_str()
     output = {
-        "scan_date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+        "scan_date": ga,
         "symbols_scanned": len(symbols),
         "top_count": len(top_results),
         "results": top_results,
+        "generated_at": ga,
+        "data_delay": "15min",
     }
 
     print(json.dumps(output, indent=2))

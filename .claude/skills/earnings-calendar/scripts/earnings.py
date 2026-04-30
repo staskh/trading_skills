@@ -6,6 +6,7 @@ import argparse
 import json
 
 from trading_skills.earnings import get_earnings_info, get_multiple_earnings
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -22,6 +23,8 @@ def main():
     else:
         result = get_multiple_earnings(symbols)
 
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "15min"
     print(json.dumps(result, indent=2))
 
 

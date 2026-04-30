@@ -7,6 +7,7 @@ import asyncio
 import json
 
 from trading_skills.broker.roll import find_roll_candidates
+from trading_skills.utils import generated_at_str
 
 
 async def main():
@@ -29,6 +30,8 @@ async def main():
         right=args.right,
     )
 
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "real-time"
     print(json.dumps(result, indent=2, default=str))
 
 

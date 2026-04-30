@@ -56,3 +56,8 @@ uv run python scripts/consolidate.py "C:\Users\avrah\OneDrive\Business\Trading\I
 # Specify custom output directory
 uv run python scripts/consolidate.py "C:\path\to\reports" --output-dir "C:\output"
 ```
+
+
+## Timezone
+
+All timestamps and time-based calculations must use the `America/New_York` timezone. All JSON output must include `generated_at` (NY time string) and `data_delay` fields.

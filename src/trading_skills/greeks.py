@@ -2,8 +2,11 @@
 # ABOUTME: Computes IV from market price via Newton-Raphson.
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from trading_skills.black_scholes import black_scholes_greeks, implied_volatility
+
+_NY = ZoneInfo("America/New_York")
 
 
 def calculate_greeks(
@@ -34,11 +37,11 @@ def calculate_greeks(
         days_to_expiry = dte
         expiry_str = f"{dte} DTE"
     elif expiry is not None:
-        expiry_date = datetime.strptime(expiry, "%Y-%m-%d")
+        expiry_date = datetime.strptime(expiry, "%Y-%m-%d").date()
         if as_of_date:
-            ref_date = datetime.strptime(as_of_date, "%Y-%m-%d")
+            ref_date = datetime.strptime(as_of_date, "%Y-%m-%d").date()
         else:
-            ref_date = datetime.now()
+            ref_date = datetime.now(_NY).date()
         days_to_expiry = (expiry_date - ref_date).days
         expiry_str = expiry
     else:

@@ -9,6 +9,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from trading_skills.broker.consolidate import (
     AGG_COLS,
@@ -18,7 +19,9 @@ from trading_skills.broker.consolidate import (
     fetch_unrealized_pnl,
     read_csv_files,
 )
-from trading_skills.utils import format_expiry_iso
+from trading_skills.utils import format_expiry_iso, generated_at_str
+
+_NY = ZoneInfo("America/New_York")
 
 
 def format_money(value: float, bold: bool = False) -> str:
@@ -42,7 +45,7 @@ def generate_markdown(
 
     lines = [
         "# Consolidated Trades Report",
-        f"**Generated:** {datetime.now().strftime('%B %d, %Y at %H:%M')}",
+        f"**Generated:** {datetime.now(_NY).strftime('%B %d, %Y at %H:%M ET')}",
         "",
         f"**Total Consolidated Rows:** {len(consolidated)}",
     ]
@@ -243,7 +246,7 @@ def generate_markdown(
 
     lines.append("---")
     lines.append("")
-    lines.append(f"*Report generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
+    lines.append(f"*Report generated on {datetime.now(_NY).strftime('%Y-%m-%d %H:%M ET')}*")
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -283,7 +286,7 @@ async def main_async(args):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate timestamp for filenames
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
+    timestamp = datetime.now(_NY).strftime("%Y-%m-%d_%H%M")
 
     # Read and consolidate
     print(f"\nReading CSV files from: {input_dir}")
@@ -324,6 +327,8 @@ async def main_async(args):
                 "has_unrealized_pnl": bool(unrealized_pnl),
                 "markdown_report": str(md_path),
                 "csv_report": str(csv_path),
+                "generated_at": generated_at_str(),
+                "data_delay": "real-time",
             }
         )
     )

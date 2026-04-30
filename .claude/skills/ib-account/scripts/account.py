@@ -7,6 +7,7 @@ import asyncio
 import json
 
 from trading_skills.broker.account import get_account_summary
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -21,6 +22,8 @@ def main():
     result = asyncio.run(
         get_account_summary(args.port, account=args.account, all_accounts=args.all_accounts)
     )
+    result["generated_at"] = generated_at_str()
+    result["data_delay"] = "real-time"
     print(json.dumps(result, indent=2))
 
 

@@ -9,6 +9,7 @@ import sys
 import pandas as pd
 
 from trading_skills.massive.whales import whales_hunter
+from trading_skills.utils import generated_at_str
 
 
 def main():
@@ -67,6 +68,8 @@ def main():
         "whales": [
             {**w, "timestamp": str(w["timestamp"]), "expiry": str(w["expiry"])} for w in whales
         ],
+        "generated_at": generated_at_str(),
+        "data_delay": "15min",
     }
 
     if args.summary and whales:

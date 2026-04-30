@@ -2,9 +2,12 @@
 # ABOUTME: Returns date, before/after market timing, and EPS estimate.
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
+
+_NY = ZoneInfo("America/New_York")
 
 
 def get_next_earnings_date(symbol: str) -> str | None:
@@ -23,7 +26,7 @@ def get_next_earnings_date(symbol: str) -> str | None:
         try:
             earnings_df = ticker.earnings_dates
             if earnings_df is not None and not earnings_df.empty:
-                today = datetime.now().date()
+                today = datetime.now(_NY).date()
                 for idx in earnings_df.index:
                     earn_date = idx.date()
                     if earn_date >= today:
