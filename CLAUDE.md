@@ -67,10 +67,12 @@ Example: `AAPL_Analysis_Report_2026-02-06_1430.pdf`
 
 All issue work MUST be done on a dedicated branch, never directly on `main`:
 
-- `feat/<short-description>` — new features or enhancements
-- `bug/<short-description>` — bug fixes
+- `feat/<short-description>` — new features or enhancements → bump **minor** version (`0.X.0`)
+- `bug/<short-description>` — bug fixes → bump **patch** version (`0.0.X`)
 
 Create the branch before writing any code: `git checkout -b feat/issue-N-description`
+
+Version is in `pyproject.toml`. Bump it as the **final commit before opening a PR** — separate from the implementation commit. No need to run tests for the version bump commit.
 
 ## Before Creating a PR
 
