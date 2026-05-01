@@ -94,12 +94,14 @@ class TestGetPortfolio:
         with (
             patch("trading_skills.broker.connection.IB") as MockIB,
             patch("trading_skills.broker.connection.fetch_with_timeout") as mock_conn_fetch,
+            patch("trading_skills.broker.connection.asyncio.sleep", new_callable=AsyncMock),
             patch("trading_skills.broker.portfolio.fetch_with_timeout") as mock_port_fetch,
         ):
             mock_ib = MagicMock()
             mock_ib.connectAsync = AsyncMock()
             mock_ib.managedAccounts.return_value = ["U123456"]
             mock_ib.disconnect = MagicMock()
+            mock_ib.cancelMktData = MagicMock()
 
             # Mock option position
             pos = MagicMock()
@@ -115,13 +117,14 @@ class TestGetPortfolio:
             pos.avgCost = 250.0  # $2.50 per share * 100
             mock_ib.positions.return_value = [pos]
 
-            # Mock spot price fetch (via connection.fetch_spot_prices)
+            # fetch_spot_prices now uses reqMktData (streaming) not reqTickersAsync
             mock_ticker = MagicMock()
             mock_ticker.contract.symbol = "AAPL"
             mock_ticker.marketPrice.return_value = 195.0
+            mock_ib.reqMktData.return_value = mock_ticker
+            # fetch_with_timeout in connection.py is only called for qualifyContracts
             mock_conn_fetch.side_effect = [
                 [pos.contract],  # qualifyContracts for stocks
-                [mock_ticker],  # reqTickers for stocks
             ]
 
             # Mock option price fetch (via portfolio's direct fetch_with_timeout)

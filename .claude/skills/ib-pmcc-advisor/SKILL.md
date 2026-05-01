@@ -19,7 +19,7 @@ TWS or IB Gateway running locally with API enabled:
 ### Step 1: Run the report script
 
 ```bash
-uv run python .claude/skills/ib-pmcc-advisor/scripts/report.py [--port PORT] [--account ACCOUNT] [--min-roll-dte N] [--price-mode mid|last]
+uv run python .claude/skills/ib-pmcc-advisor/scripts/pmcc_advisor.py [--port PORT] [--account ACCOUNT] [--min-roll-dte N] [--price-mode mid|last]
 ```
 
 The script returns JSON to stdout. Capture it and format the report.

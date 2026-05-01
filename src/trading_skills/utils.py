@@ -94,10 +94,20 @@ def safe_value(val):
 
 
 async def fetch_with_timeout(coro, timeout: float, default=None):
-    """Run coroutine with timeout, return default if timeout or error."""
+    """Run coroutine with timeout, return default if timeout or error.
+
+    Uses asyncio.wait instead of wait_for to avoid Python 3.12 deadlock where
+    wait_for awaits the cancelled task indefinitely when ib_async ignores CancelledError.
+    """
+    task = asyncio.ensure_future(coro)
     try:
-        return await asyncio.wait_for(coro, timeout=timeout)
-    except (asyncio.TimeoutError, Exception):
+        done, pending = await asyncio.wait({task}, timeout=timeout)
+        if pending:
+            task.cancel()
+            return default
+        return task.result()
+    except Exception:
+        task.cancel()
         return default
 
 

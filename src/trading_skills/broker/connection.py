@@ -93,7 +93,11 @@ def best_option_chain(chains: list):
 
 
 async def fetch_spot_prices(ib: IB, symbols: list[str], timeout: float = 15.0) -> dict[str, float]:
-    """Fetch spot prices for stock symbols. Returns {symbol: price} dict."""
+    """Fetch spot prices for stock symbols. Returns {symbol: price} dict.
+
+    Uses streaming market data (not snapshot) to avoid hanging outside trading hours
+    when IB's snapshot mode never completes for illiquid or after-hours markets.
+    """
     if not symbols:
         return {}
 
@@ -104,10 +108,15 @@ async def fetch_spot_prices(ib: IB, symbols: list[str], timeout: float = 15.0) -
     if not qualified:
         return {}
 
-    tickers = await fetch_with_timeout(ib.reqTickersAsync(*qualified), timeout=timeout, default=[])
+    tickers = [ib.reqMktData(qc, "", False, False) for qc in qualified]
+    await asyncio.sleep(3)
+    for qc in qualified:
+        ib.cancelMktData(qc)
 
     prices = {}
-    for ticker in tickers or []:
+    for ticker in tickers:
+        if not ticker.contract:
+            continue
         price = ticker.marketPrice()
         if price and price > 0:
             prices[ticker.contract.symbol] = price

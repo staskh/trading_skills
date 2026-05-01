@@ -158,21 +158,23 @@ class TestFetchSpotPrices:
     def test_fetches_prices(self):
         mock_ib = MagicMock()
 
-        # Mock qualify
         contract1 = MagicMock()
         contract1.symbol = "AAPL"
         mock_ib.qualifyContractsAsync = AsyncMock(return_value=[contract1])
 
-        # Mock tickers
+        # reqMktData returns a ticker synchronously; marketPrice is called after the sleep
         ticker1 = MagicMock()
         ticker1.contract.symbol = "AAPL"
         ticker1.marketPrice.return_value = 195.50
-        mock_ib.reqTickersAsync = AsyncMock(return_value=[ticker1])
+        mock_ib.reqMktData.return_value = ticker1
+        mock_ib.cancelMktData = MagicMock()
 
-        async def run():
-            return await fetch_spot_prices(mock_ib, ["AAPL"], timeout=5.0)
+        with patch("trading_skills.broker.connection.asyncio.sleep", new_callable=AsyncMock):
 
-        result = asyncio.run(run())
+            async def run():
+                return await fetch_spot_prices(mock_ib, ["AAPL"], timeout=5.0)
+
+            result = asyncio.run(run())
         assert result == {"AAPL": 195.50}
 
     def test_empty_symbols(self):
@@ -192,12 +194,15 @@ class TestFetchSpotPrices:
         ticker1 = MagicMock()
         ticker1.contract.symbol = "AAPL"
         ticker1.marketPrice.return_value = -1
-        mock_ib.reqTickersAsync = AsyncMock(return_value=[ticker1])
+        mock_ib.reqMktData.return_value = ticker1
+        mock_ib.cancelMktData = MagicMock()
 
-        async def run():
-            return await fetch_spot_prices(mock_ib, ["AAPL"], timeout=5.0)
+        with patch("trading_skills.broker.connection.asyncio.sleep", new_callable=AsyncMock):
 
-        result = asyncio.run(run())
+            async def run():
+                return await fetch_spot_prices(mock_ib, ["AAPL"], timeout=5.0)
+
+            result = asyncio.run(run())
         assert result == {}
 
     def test_timeout_returns_empty(self):

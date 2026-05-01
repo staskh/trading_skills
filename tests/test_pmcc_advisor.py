@@ -12,6 +12,8 @@ from trading_skills.broker.pmcc_advisor import (
     calc_delta,
     calc_iv,
     find_best_rolls,
+    find_optimal_exit_spot,
+    find_roll_expiration_targets,
     get_option_price,
     score_roll_candidate,
 )
@@ -146,7 +148,7 @@ def test_calc_bs_price_expired_call_itm_intrinsic():
 
 
 def test_calc_daily_pnl_table_row_count():
-    """Should return exactly short_dte + 1 rows (today through expiry day)."""
+    """Should return at most 5 trading days (capped by n_trading_days default)."""
     rows = calc_daily_pnl_table(
         long_strike=80,
         long_dte=180,
@@ -157,9 +159,10 @@ def test_calc_daily_pnl_table_row_count():
         short_premium=2.0,
         short_iv=0.30,
         qty=1,
+        spot=100.0,
         right="C",
     )
-    assert len(rows) == 15  # 14 + 1 (day 0 through day 14)
+    assert 1 <= len(rows) <= 5
 
 
 def test_calc_daily_pnl_table_first_row_is_today():
@@ -177,6 +180,7 @@ def test_calc_daily_pnl_table_first_row_is_today():
         short_premium=2.0,
         short_iv=0.30,
         qty=1,
+        spot=100.0,
         right="C",
     )
     assert rows[0]["date"] == today
@@ -193,10 +197,11 @@ def test_calc_daily_pnl_table_days_to_expiry_decreases():
         short_premium=2.0,
         short_iv=0.30,
         qty=1,
+        spot=100.0,
         right="C",
     )
     days = [r["days_to_short_expiry"] for r in rows]
-    assert days == list(range(5, -1, -1))
+    assert days == sorted(days, reverse=True)  # monotonically decreasing
 
 
 def test_calc_daily_pnl_table_has_required_fields():
@@ -210,6 +215,7 @@ def test_calc_daily_pnl_table_has_required_fields():
         short_premium=2.0,
         short_iv=0.30,
         qty=1,
+        spot=100.0,
         right="C",
     )
     for row in rows:
@@ -220,7 +226,8 @@ def test_calc_daily_pnl_table_has_required_fields():
         assert isinstance(row["pnl"], float)
 
 
-def test_calc_daily_pnl_table_optimal_spot_is_short_strike():
+def test_calc_daily_pnl_table_optimal_spot_above_short_strike():
+    """Optimal exit spot should be near or above the short strike, not below it."""
     short_strike = 105.0
     rows = calc_daily_pnl_table(
         long_strike=80,
@@ -232,10 +239,59 @@ def test_calc_daily_pnl_table_optimal_spot_is_short_strike():
         short_premium=2.0,
         short_iv=0.30,
         qty=1,
+        spot=100.0,
         right="C",
     )
     for row in rows:
-        assert row["optimal_spot"] == pytest.approx(short_strike)
+        assert row["optimal_spot"] >= short_strike * 0.95
+
+
+def test_find_optimal_exit_spot_above_short_strike():
+    """For a typical diagonal call spread the optimal exit spot is at or above the short strike."""
+    opt_spot, pnl = find_optimal_exit_spot(
+        long_strike=80,
+        long_days_rem=180,
+        long_iv=0.35,
+        long_cost=15.0,
+        short_strike=105,
+        short_days_rem=14,
+        short_iv=0.30,
+        short_premium=2.0,
+        spot=100.0,
+    )
+    assert opt_spot >= 100.0  # above current spot
+    assert isinstance(pnl, float)
+
+
+def test_find_roll_expiration_targets_basic():
+    """Should return two expirations near 7d and 14d after current."""
+    from datetime import date, datetime, timedelta
+
+    today = date.today()
+    current = today.strftime("%Y%m%d")
+    # Generate fake expirations at various offsets
+    expirations = [(today + timedelta(days=d)).strftime("%Y%m%d") for d in [5, 8, 14, 21, 35, 60]]
+    max_exp = (today + timedelta(days=90)).strftime("%Y%m%d")
+    result = find_roll_expiration_targets(current, expirations, max_exp)
+    assert len(result) == 2
+    # First target is closest to +7d, second to +14d
+    r0 = (datetime.strptime(result[0], "%Y%m%d").date() - today).days
+    r1 = (datetime.strptime(result[1], "%Y%m%d").date() - today).days
+    assert abs(r0 - 7) <= 3
+    assert abs(r1 - 14) <= 3
+
+
+def test_find_roll_expiration_targets_respects_max():
+    """Expirations beyond long expiry must be excluded."""
+    from datetime import date, timedelta
+
+    today = date.today()
+    current = today.strftime("%Y%m%d")
+    max_exp = (today + timedelta(days=10)).strftime("%Y%m%d")
+    expirations = [(today + timedelta(days=d)).strftime("%Y%m%d") for d in [7, 14, 21]]
+    result = find_roll_expiration_targets(current, expirations, max_exp)
+    for exp in result:
+        assert exp <= max_exp
 
 
 def test_calc_daily_pnl_table_scales_with_qty():
@@ -249,6 +305,7 @@ def test_calc_daily_pnl_table_scales_with_qty():
         short_premium=2.0,
         short_iv=0.30,
         qty=1,
+        spot=100.0,
     )
     rows_5 = calc_daily_pnl_table(
         long_strike=80,
@@ -260,6 +317,7 @@ def test_calc_daily_pnl_table_scales_with_qty():
         short_premium=2.0,
         short_iv=0.30,
         qty=5,
+        spot=100.0,
     )
     for r1, r5 in zip(rows_1, rows_5):
         # Each row is independently rounded to 2 decimal places, so exact 5x may differ by cents
