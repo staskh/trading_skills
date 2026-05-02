@@ -29,6 +29,13 @@ async def main():
         dest="price_mode",
         help="Option pricing mode: mid (default) or last",
     )
+    parser.add_argument(
+        "--symbols",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Analyze only these symbols (e.g. --symbols NVDA WMT)",
+    )
 
     args = parser.parse_args()
 
@@ -38,6 +45,7 @@ async def main():
         account=args.account,
         min_roll_dte=args.min_roll_dte,
         price_mode=args.price_mode,
+        symbols=args.symbols,
     )
 
     print(json.dumps(result, indent=2, default=str))

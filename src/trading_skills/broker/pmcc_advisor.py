@@ -190,6 +190,57 @@ def calc_daily_pnl_table(
     return results
 
 
+def calc_profit_per_day(
+    avg_cost: float,
+    dte: float,
+    current_price: float | None = None,
+) -> float:
+    """Original premium captured per remaining day.
+
+    (avg_cost - current_price) / dte: profit already locked in relative to
+    remaining time. Negative when the short is underwater (current_price > avg_cost).
+    Falls back to avg_cost / dte when current price is unavailable.
+    """
+    if current_price is not None and current_price >= 0:
+        return (avg_cost - current_price) / max(dte, 1 / 24)
+    return avg_cost / max(dte, 1 / 24)
+
+
+def check_earnings_warning(
+    earnings_date: str | None,
+    earnings_timing: str | None,
+    short_expiry: str,
+    roll_candidates: list[dict],
+) -> dict:
+    """Check if earnings fall in risky windows relative to the short leg or roll candidates.
+
+    Warns on current short if earnings fall within the last 7 days before short expiry.
+    Warns on roll candidates (1-based indices) if earnings fall between today and roll expiry.
+    """
+    if not earnings_date:
+        return {"date": None, "timing": None, "warning_short": False, "warning_roll_indices": []}
+
+    today = datetime.now(_NY).date()
+    earn_dt = datetime.strptime(earnings_date, "%Y-%m-%d").date()
+    short_exp_dt = datetime.strptime(short_expiry, "%Y%m%d").date()
+
+    in_window = (short_exp_dt - timedelta(days=7)) <= earn_dt <= short_exp_dt
+    warning_short = today <= earn_dt and in_window
+
+    warning_roll_indices = []
+    for i, roll in enumerate(roll_candidates, 1):
+        roll_exp_dt = datetime.strptime(roll["expiry"], "%Y%m%d").date()
+        if today <= earn_dt <= roll_exp_dt:
+            warning_roll_indices.append(i)
+
+    return {
+        "date": earnings_date,
+        "timing": earnings_timing,
+        "warning_short": warning_short,
+        "warning_roll_indices": warning_roll_indices,
+    }
+
+
 def score_roll_candidate(current_delta: float, candidate: dict) -> float:
     """Score a roll candidate. Higher = better.
 
@@ -252,7 +303,7 @@ def find_best_rolls(
             if net_credit < NET_CREDIT_MIN:
                 continue
 
-            profit_per_day = price / max(dte, 1 / 24)
+            profit_per_day = net_credit / max(dte, 1 / 24)
             spread_width = strike - long_strike
             pnl_if_assigned = (spread_width - long_cost + price) * 100
 
@@ -451,6 +502,18 @@ async def _fetch_yf_option_chain_batch(symbol: str, expiry_ibkr: str, spot: floa
     return await asyncio.to_thread(_sync)
 
 
+async def _fetch_earnings_dates(symbols: list[str]) -> dict[str, dict]:
+    """Fetch next earnings date and timing for all symbols in parallel via Yahoo Finance."""
+    from trading_skills.earnings import get_earnings_info
+
+    async def _one(sym: str) -> tuple[str, dict]:
+        info = await asyncio.to_thread(get_earnings_info, sym)
+        return sym, {"date": info.get("earnings_date"), "timing": info.get("timing")}
+
+    pairs = await asyncio.gather(*[_one(sym) for sym in symbols])
+    return dict(pairs)
+
+
 async def _fetch_yf_chain_expirations(symbol: str) -> list[str]:
     """Return available option expirations in YYYYMMDD format from Yahoo Finance."""
 
@@ -564,6 +627,19 @@ async def _fetch_option_quotes_batch(
     return sorted(results, key=lambda x: x["strike"])
 
 
+def filter_spreads_by_symbols(
+    spreads: list[dict], symbols: list[str] | None
+) -> list[dict]:
+    """Return only spreads whose symbol is in the given list (case-insensitive).
+
+    Returns all spreads unchanged when symbols is None.
+    """
+    if symbols is None:
+        return spreads
+    upper = {s.upper() for s in symbols}
+    return [s for s in spreads if s["symbol"].upper() in upper]
+
+
 def _identify_pmcc_spreads(normalized: list[dict]) -> list[dict]:
     """Identify PMCC (diagonal call) spreads: long LEAPS + short near-term call, same qty."""
     by_symbol = defaultdict(list)
@@ -635,6 +711,7 @@ async def get_pmcc_data(
     account: str | None = None,
     min_roll_dte: int = 7,
     price_mode: str = "mid",
+    symbols: list[str] | None = None,
 ) -> dict:
     """Fetch all PMCC positions then run analytics.
 
@@ -662,17 +739,19 @@ async def get_pmcc_data(
             raw = await fetch_positions(ib, account=account)
             normalized = normalize_positions(raw)
             spreads = _identify_pmcc_spreads(normalized)
+            spreads = filter_spreads_by_symbols(spreads, symbols)
 
             if not spreads:
                 return {
                     "generated_at": generated_at_str(),
                     "data_delay": "real-time",
                     "accounts": accounts,
+                    "symbols_filter": [s.upper() for s in symbols] if symbols else None,
                     "spreads": [],
                     "message": "No PMCC (diagonal call spread) positions found",
                 }
 
-            symbols = list({s["symbol"] for s in spreads})
+            unique_symbols = list({s["symbol"] for s in spreads})
             n = len(spreads)
             live = is_trading_now()
 
@@ -681,7 +760,7 @@ async def get_pmcc_data(
             # ----------------------------------------------------------------
             if live:
                 phase1 = await asyncio.gather(
-                    fetch_spot_prices(ib, symbols),
+                    fetch_spot_prices(ib, unique_symbols),
                     *[
                         _fetch_single_option_quote(
                             ib, s["symbol"], s["short"]["strike"], s["short"]["expiry"], "C"
@@ -694,11 +773,12 @@ async def get_pmcc_data(
                         )
                         for s in spreads
                     ],
-                    *[_get_chain_params(ib, sym) for sym in symbols],
+                    *[_get_chain_params(ib, sym) for sym in unique_symbols],
+                    _fetch_earnings_dates(unique_symbols),
                 )
             else:
                 phase1 = await asyncio.gather(
-                    _fetch_yf_spot_prices(symbols),
+                    _fetch_yf_spot_prices(unique_symbols),
                     *[
                         _fetch_yf_option_quote(
                             s["symbol"], s["short"]["expiry"], s["short"]["strike"], "C"
@@ -711,15 +791,17 @@ async def get_pmcc_data(
                         )
                         for s in spreads
                     ],
-                    *[_fetch_yf_chain_expirations(sym) for sym in symbols],
+                    *[_fetch_yf_chain_expirations(sym) for sym in unique_symbols],
+                    _fetch_earnings_dates(unique_symbols),
                 )
 
             spot_prices: dict[str, float] = phase1[0]
             short_quotes: list = list(phase1[1 : n + 1])
             long_quotes: list = list(phase1[n + 1 : 2 * n + 1])
             chain_data_by_symbol: dict = {
-                sym: phase1[2 * n + 1 + i] for i, sym in enumerate(symbols)
+                sym: phase1[2 * n + 1 + i] for i, sym in enumerate(unique_symbols)
             }
+            earnings_by_symbol: dict[str, dict] = phase1[2 * n + 1 + len(unique_symbols)]
 
             # ----------------------------------------------------------------
             # Determine roll expiration targets (7d / 14d windows)
@@ -842,7 +924,7 @@ async def get_pmcc_data(
                         right="C",
                     )
 
-                # Roll candidates — from 7d/14d roll windows only
+                # Roll candidates — from 7d/14d roll windows only, capped by LEAPS expiry
                 rolls = []
                 if short_price is not None:
                     rolls = find_best_rolls(
@@ -859,6 +941,14 @@ async def get_pmcc_data(
                         price_mode=price_mode,
                     )
 
+                earnings_info = earnings_by_symbol.get(symbol, {})
+                earnings_warn = check_earnings_warning(
+                    earnings_date=earnings_info.get("date"),
+                    earnings_timing=earnings_info.get("timing"),
+                    short_expiry=short_pos["expiry"],
+                    roll_candidates=rolls,
+                )
+
                 current_short_summary = {
                     "strike": short_pos["strike"],
                     "expiry": short_pos["expiry"],
@@ -866,7 +956,9 @@ async def get_pmcc_data(
                     "delta": round(abs(short_delta), 4),
                     "assignment_prob": round(short_assign_prob * 100, 1),
                     "price": round(short_price, 2) if short_price else None,
-                    "profit_per_day": round(abs(short_pos["avg_cost"]) / max(short_dte, 1 / 24), 4),
+                    "profit_per_day": round(
+                        calc_profit_per_day(abs(short_pos["avg_cost"]), short_dte, short_price), 4
+                    ),
                     "total_premium": abs(short_pos["avg_cost"]),
                 }
                 comparison = build_comparison_table(
@@ -881,6 +973,8 @@ async def get_pmcc_data(
                         "account": account or accounts[0],
                         "qty": qty,
                         "underlying_price": round(spot, 2),
+                        "leaps_expiry": long_pos["expiry"],
+                        "earnings": earnings_warn,
                         "long": {
                             "strike": long_pos["strike"],
                             "expiry": long_pos["expiry"],
@@ -913,6 +1007,7 @@ async def get_pmcc_data(
                 "generated_at": generated_at_str(),
                 "data_delay": data_delay,
                 "accounts": accounts,
+                "symbols_filter": [s.upper() for s in symbols] if symbols else None,
                 "price_mode": price_mode,
                 "min_roll_dte": min_roll_dte,
                 "spreads": results,

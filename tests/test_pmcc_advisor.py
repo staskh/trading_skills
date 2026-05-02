@@ -5,15 +5,19 @@
 import pytest
 
 from trading_skills.broker.pmcc_advisor import (
+    _identify_pmcc_spreads,
     build_comparison_table,
     calc_assignment_prob,
     calc_bs_price,
     calc_daily_pnl_table,
     calc_delta,
     calc_iv,
+    calc_profit_per_day,
+    check_earnings_warning,
     find_best_rolls,
     find_optimal_exit_spot,
     find_roll_expiration_targets,
+    filter_spreads_by_symbols,
     get_option_price,
     score_roll_candidate,
 )
@@ -445,6 +449,31 @@ def test_find_best_rolls_result_fields():
         assert "profit_per_day" in roll
 
 
+def test_find_best_rolls_profit_per_day_is_net_credit_per_day():
+    """profit_per_day = net_credit / dte, not roll_price / dte."""
+    # current short price = $2.00, roll mid = $3.10 → net_credit = $1.10
+    roll_chains = {
+        "20260601": [_make_quote(120, 3.0, 3.20, "20260601")],
+    }
+    rolls = find_best_rolls(
+        current_short_strike=110,
+        current_short_expiry="20260501",
+        current_short_dte=1,
+        current_short_price=2.00,
+        current_delta=0.45,
+        roll_chains=roll_chains,
+        spot=108.0,
+        long_strike=90.0,
+        long_cost=18.0,
+        min_roll_dte=7,
+        price_mode="mid",
+    )
+    assert len(rolls) == 1
+    dte = rolls[0]["dte"]
+    expected = round((3.10 - 2.00) / dte, 4)
+    assert rolls[0]["profit_per_day"] == pytest.approx(expected, rel=1e-3)
+
+
 # ---------------------------------------------------------------------------
 # build_comparison_table
 # ---------------------------------------------------------------------------
@@ -520,6 +549,38 @@ def test_build_comparison_table_pnl_if_assigned():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# calc_profit_per_day
+# ---------------------------------------------------------------------------
+
+
+def test_calc_profit_per_day_normal_short():
+    """(avg_cost - current_price) / dte — profit locked in per remaining day."""
+    # received $8.71, now worth $4.20 → $4.51 locked in over 6.2 days
+    assert calc_profit_per_day(avg_cost=8.71, current_price=4.20, dte=6.2) == pytest.approx(
+        (8.71 - 4.20) / 6.2, rel=1e-4
+    )
+
+
+def test_calc_profit_per_day_underwater_is_negative():
+    """Negative when short is underwater (current_price > avg_cost)."""
+    # NBIS-style: received $2.64, now worth $5.47 → position is a loss
+    result = calc_profit_per_day(avg_cost=2.64, current_price=5.47, dte=6.2)
+    assert result < 0
+    assert result == pytest.approx((2.64 - 5.47) / 6.2, rel=1e-4)
+
+
+def test_calc_profit_per_day_falls_back_when_no_price():
+    """Falls back to avg_cost / dte when current price is unavailable."""
+    assert calc_profit_per_day(avg_cost=5.00, current_price=None, dte=10) == pytest.approx(0.5)
+
+
+def test_calc_profit_per_day_clamps_zero_dte():
+    """Near-zero DTE uses 1-hour minimum to avoid division by zero."""
+    result = calc_profit_per_day(avg_cost=1.0, current_price=0.5, dte=0)
+    assert result > 0
+
+
 def test_score_roll_candidate_lower_delta_scores_higher():
     c1 = {"delta": 0.20, "net_credit": 0.50, "dte": 30}
     c2 = {"delta": 0.35, "net_credit": 0.50, "dte": 30}
@@ -534,3 +595,131 @@ def test_score_roll_candidate_more_credit_scores_higher():
     s1 = score_roll_candidate(current_delta=0.40, candidate=c1)
     s2 = score_roll_candidate(current_delta=0.40, candidate=c2)
     assert s1 > s2
+
+
+# ---------------------------------------------------------------------------
+# check_earnings_warning
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# filter_spreads_by_symbols
+# ---------------------------------------------------------------------------
+
+
+def _make_spread(symbol: str) -> dict:
+    return {"symbol": symbol, "long": {}, "short": {}, "qty": 1}
+
+
+def test_filter_spreads_by_symbols_returns_all_when_none():
+    spreads = [_make_spread("NVDA"), _make_spread("CAT"), _make_spread("WMT")]
+    assert filter_spreads_by_symbols(spreads, None) == spreads
+
+
+def test_filter_spreads_by_symbols_filters_case_insensitive():
+    spreads = [_make_spread("NVDA"), _make_spread("CAT"), _make_spread("WMT")]
+    result = filter_spreads_by_symbols(spreads, ["nvda", "cat"])
+    assert [s["symbol"] for s in result] == ["NVDA", "CAT"]
+
+
+def test_filter_spreads_by_symbols_unknown_symbol_ignored():
+    spreads = [_make_spread("NVDA"), _make_spread("CAT")]
+    result = filter_spreads_by_symbols(spreads, ["NVDA", "AAPL"])
+    assert [s["symbol"] for s in result] == ["NVDA"]
+
+
+def test_filter_spreads_by_symbols_empty_list_returns_empty():
+    spreads = [_make_spread("NVDA"), _make_spread("CAT")]
+    assert filter_spreads_by_symbols(spreads, []) == []
+
+
+def test_check_earnings_warning_no_date():
+    result = check_earnings_warning(
+        earnings_date=None,
+        earnings_timing=None,
+        short_expiry="20260508",
+        roll_candidates=[],
+    )
+    assert result["date"] is None
+    assert result["warning_short"] is False
+    assert result["warning_roll_indices"] == []
+
+
+def test_check_earnings_warning_within_short_window():
+    """Earnings within 7 days before short expiry should flag warning_short."""
+    result = check_earnings_warning(
+        earnings_date="2026-05-05",
+        earnings_timing="AMC",
+        short_expiry="20260508",
+        roll_candidates=[],
+    )
+    assert result["warning_short"] is True
+    assert result["date"] == "2026-05-05"
+    assert result["timing"] == "AMC"
+
+
+def test_check_earnings_warning_outside_short_window():
+    """Earnings more than 7 days before short expiry should not flag warning_short."""
+    result = check_earnings_warning(
+        earnings_date="2026-04-20",
+        earnings_timing=None,
+        short_expiry="20260508",
+        roll_candidates=[],
+    )
+    assert result["warning_short"] is False
+
+
+def test_check_earnings_warning_past_date_no_warning():
+    """Past earnings should never trigger warnings."""
+    result = check_earnings_warning(
+        earnings_date="2020-01-01",
+        earnings_timing=None,
+        short_expiry="20260508",
+        roll_candidates=[{"expiry": "20260522", "strike": 110}],
+    )
+    assert result["warning_short"] is False
+    assert result["warning_roll_indices"] == []
+
+
+def test_check_earnings_warning_on_expiry_day():
+    """Earnings on exact expiry date is within the window."""
+    result = check_earnings_warning(
+        earnings_date="2026-05-08",
+        earnings_timing="BMO",
+        short_expiry="20260508",
+        roll_candidates=[],
+    )
+    assert result["warning_short"] is True
+
+
+def test_check_earnings_warning_roll_overlap():
+    """Earnings falling before a roll expiry should flag that roll's index."""
+    rolls = [
+        {"expiry": "20260515", "strike": 210},  # roll 1
+        {"expiry": "20260522", "strike": 215},  # roll 2
+    ]
+    result = check_earnings_warning(
+        earnings_date="2026-05-12",
+        earnings_timing=None,
+        short_expiry="20260508",
+        roll_candidates=rolls,
+    )
+    # earnings on May 12 → before May 15 (roll 1) and before May 22 (roll 2)
+    assert 1 in result["warning_roll_indices"]
+    assert 2 in result["warning_roll_indices"]
+
+
+def test_check_earnings_warning_roll_partial_overlap():
+    """Only rolls whose expiry is on or after earnings date are flagged."""
+    rolls = [
+        {"expiry": "20260510", "strike": 210},  # roll 1: expires before earnings
+        {"expiry": "20260522", "strike": 215},  # roll 2: expires after earnings
+    ]
+    result = check_earnings_warning(
+        earnings_date="2026-05-14",
+        earnings_timing=None,
+        short_expiry="20260508",
+        roll_candidates=rolls,
+    )
+    assert 1 not in result["warning_roll_indices"]
+    assert 2 in result["warning_roll_indices"]
