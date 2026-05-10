@@ -143,14 +143,16 @@ def test_short_decay_pct_zero_premium():
 
 
 def test_no_alerts_when_all_ok():
+    # spot $180 is 14% below short strike $210 — outside 5% threshold
     alerts = check_alerts(
         short_premium_received=30.0,
-        short_current_price=25.0,  # 16.7% captured, 11.9% of $210 strike — all below thresholds
+        short_current_price=25.0,
         short_strike=210.0,
+        spot=180.0,
         leaps_current_price=38.0,
         leaps_avg_cost=35.0,
         stop_pct=50.0,
-        short_near_strike_pct=10.0,
+        short_near_strike_pct=5.0,
     )
     assert alerts == []
 
@@ -160,24 +162,43 @@ def test_alert_short_premium_decay():
         short_premium_received=5.0,
         short_current_price=0.40,  # 92% captured
         short_strike=210.0,
+        spot=180.0,
         leaps_current_price=38.0,
         leaps_avg_cost=35.0,
         stop_pct=50.0,
-        short_near_strike_pct=10.0,
+        short_near_strike_pct=5.0,
     )
     types = [a["type"] for a in alerts]
     assert "short_premium_decay" in types
 
 
-def test_alert_short_near_strike():
+def test_alert_short_near_strike_spot_above():
+    # spot $215 is above short strike $210 → gap = -2.4% ≤ 5% → fires
     alerts = check_alerts(
         short_premium_received=5.0,
-        short_current_price=20.0,  # 20/210 ≈ 9.5% of strike
+        short_current_price=8.0,
         short_strike=210.0,
+        spot=215.0,
         leaps_current_price=38.0,
         leaps_avg_cost=35.0,
         stop_pct=50.0,
-        short_near_strike_pct=10.0,
+        short_near_strike_pct=5.0,
+    )
+    types = [a["type"] for a in alerts]
+    assert "short_near_strike" in types
+
+
+def test_alert_short_near_strike_spot_within_threshold():
+    # spot $200 is 4.8% below short strike $210 → within 5% → fires
+    alerts = check_alerts(
+        short_premium_received=5.0,
+        short_current_price=8.0,
+        short_strike=210.0,
+        spot=200.0,
+        leaps_current_price=38.0,
+        leaps_avg_cost=35.0,
+        stop_pct=50.0,
+        short_near_strike_pct=5.0,
     )
     types = [a["type"] for a in alerts]
     assert "short_near_strike" in types
@@ -185,45 +206,52 @@ def test_alert_short_near_strike():
 
 def test_alert_leaps_early_warning():
     # basis=max(25, 35)=35; loss=(35-25)/35≈28.6% > 25% (stop_pct/2) → fires
-    # short: 25/210=11.9% > 10% threshold so no near-strike alert
+    # spot $180 is 14% below $210 strike → no near-strike alert
     alerts = check_alerts(
         short_premium_received=30.0,
         short_current_price=25.0,
         short_strike=210.0,
+        spot=180.0,
         leaps_current_price=25.0,
         leaps_avg_cost=35.0,
         stop_pct=50.0,
-        short_near_strike_pct=10.0,
+        short_near_strike_pct=5.0,
     )
     types = [a["type"] for a in alerts]
     assert "leaps_early_warning" in types
 
 
 def test_multiple_alerts_can_fire():
+    # 94% premium captured → short_premium_decay
+    # LEAPS down 51% → leaps_early_warning
+    # spot $215 above $210 strike → short_near_strike
     alerts = check_alerts(
         short_premium_received=5.0,
-        short_current_price=0.30,  # 94% captured → short_premium_decay
+        short_current_price=0.30,
         short_strike=210.0,
-        leaps_current_price=17.0,  # basis=35, loss=(35-17)/35≈51% > 25% → leaps_early_warning
+        spot=215.0,
+        leaps_current_price=17.0,  # basis=35, loss=(35-17)/35≈51% > 25%
         leaps_avg_cost=35.0,
         stop_pct=50.0,
-        short_near_strike_pct=10.0,
+        short_near_strike_pct=5.0,
     )
     types = [a["type"] for a in alerts]
     assert "short_premium_decay" in types
     assert "leaps_early_warning" in types
+    assert "short_near_strike" in types
 
 
-def test_alert_near_strike_threshold_configurable():
-    # With threshold at 5%, price at 9.5% of strike should NOT fire
+def test_alert_near_strike_not_fired_when_spot_far():
+    # spot $180 is 14% below $210 strike — outside 5% threshold
     alerts = check_alerts(
         short_premium_received=5.0,
-        short_current_price=20.0,  # 20/210 ≈ 9.5%
+        short_current_price=8.0,
         short_strike=210.0,
+        spot=180.0,
         leaps_current_price=38.0,
         leaps_avg_cost=35.0,
         stop_pct=50.0,
-        short_near_strike_pct=5.0,  # stricter threshold
+        short_near_strike_pct=5.0,
     )
     types = [a["type"] for a in alerts]
     assert "short_near_strike" not in types

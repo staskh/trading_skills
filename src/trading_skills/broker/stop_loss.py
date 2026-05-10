@@ -112,10 +112,11 @@ def check_alerts(
     short_premium_received: float,
     short_current_price: float | None,
     short_strike: float,
+    spot: float,
     leaps_current_price: float | None,
     leaps_avg_cost: float,
     stop_pct: float,
-    short_near_strike_pct: float = 10.0,
+    short_near_strike_pct: float = 5.0,
 ) -> list[dict]:
     """Compute informational alerts for a spread position.
 
@@ -137,18 +138,19 @@ def check_alerts(
                 }
             )
 
-    # Short leg price at or below X% of strike
-    if short_current_price is not None and short_strike > 0:
-        pct_of_strike = (short_current_price / short_strike) * 100.0
-        if pct_of_strike <= short_near_strike_pct:
+    # Spot within X% below (or above) the short strike — assignment risk zone
+    if short_strike > 0:
+        gap_pct = (short_strike - spot) / short_strike * 100.0
+        if gap_pct <= short_near_strike_pct:
+            direction = "above" if spot >= short_strike else "below"
             alerts.append(
                 {
                     "type": "short_near_strike",
                     "message": (
-                        f"Short trading at {pct_of_strike:.1f}% of strike ${short_strike:.2f} "
-                        f"(threshold {short_near_strike_pct:.0f}%)"
+                        f"Spot ${spot:.2f} is {abs(gap_pct):.1f}% {direction} "
+                        f"short strike ${short_strike:.2f} (threshold {short_near_strike_pct:.0f}%)"
                     ),
-                    "current_pct": round(pct_of_strike, 1),
+                    "gap_pct": round(gap_pct, 1),
                     "threshold_pct": short_near_strike_pct,
                 }
             )
@@ -277,6 +279,7 @@ def build_stop_analysis(
         short_premium_received=abs(short_pos["avg_cost"]),
         short_current_price=short_price,
         short_strike=short_pos["strike"],
+        spot=spot,
         leaps_current_price=long_price,
         leaps_avg_cost=long_pos["avg_cost"],
         stop_pct=stop_pct,
@@ -531,7 +534,7 @@ async def get_stop_loss_data(
     account: str | None = None,
     symbols: list[str] | None = None,
     stop_pct: float = 50.0,
-    short_near_strike_pct: float = 10.0,
+    short_near_strike_pct: float = 5.0,
     price_mode: str = "mid",
     dry_run: bool = True,
     forced: bool = False,

@@ -33,9 +33,9 @@ async def main():
     parser.add_argument(
         "--short-near-strike-pct",
         type=float,
-        default=10.0,
+        default=5.0,
         dest="short_near_strike_pct",
-        help="Alert when short price is at or below this %% of strike (default: 10)",
+        help="Alert when spot is within this %% of (or above) the short strike (default: 5)",
     )
     parser.add_argument(
         "--price-mode",
