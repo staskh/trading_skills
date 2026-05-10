@@ -2,6 +2,8 @@
 # ABOUTME: All tests run without IBKR dependency — pure calculation coverage.
 
 
+from datetime import date, timedelta
+
 import pytest
 
 from trading_skills.broker.pmcc_advisor import (
@@ -646,14 +648,19 @@ def test_check_earnings_warning_no_date():
 
 def test_check_earnings_warning_within_short_window():
     """Earnings within 7 days before short expiry should flag warning_short."""
+    today = date.today()
+    earn_dt = today + timedelta(days=3)
+    exp_dt = today + timedelta(days=6)
+    earn_str = earn_dt.strftime("%Y-%m-%d")
+    exp_str = exp_dt.strftime("%Y%m%d")
     result = check_earnings_warning(
-        earnings_date="2026-05-05",
+        earnings_date=earn_str,
         earnings_timing="AMC",
-        short_expiry="20260508",
+        short_expiry=exp_str,
         roll_candidates=[],
     )
     assert result["warning_short"] is True
-    assert result["date"] == "2026-05-05"
+    assert result["date"] == earn_str
     assert result["timing"] == "AMC"
 
 
@@ -682,10 +689,13 @@ def test_check_earnings_warning_past_date_no_warning():
 
 def test_check_earnings_warning_on_expiry_day():
     """Earnings on exact expiry date is within the window."""
+    exp_dt = date.today() + timedelta(days=5)
+    exp_str = exp_dt.strftime("%Y%m%d")
+    earn_str = exp_dt.strftime("%Y-%m-%d")
     result = check_earnings_warning(
-        earnings_date="2026-05-08",
+        earnings_date=earn_str,
         earnings_timing="BMO",
-        short_expiry="20260508",
+        short_expiry=exp_str,
         roll_candidates=[],
     )
     assert result["warning_short"] is True
