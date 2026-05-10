@@ -340,8 +340,7 @@ async def _fetch_open_orders(ib) -> list[dict]:
 
     Explicitly requests open orders so IB pushes them before we read the cache.
     """
-    ib.reqAllOpenOrders()
-    await asyncio.sleep(2)
+    await fetch_with_timeout(ib.reqAllOpenOrdersAsync(), timeout=5, default=[])
     trades = ib.openTrades()
     result = []
     for trade in trades:
