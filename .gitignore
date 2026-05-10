@@ -40,3 +40,4 @@ sandbox/*
 # Data files
 *.csv
 .claude/settings.local.json
+trading_skills.code-workspace
