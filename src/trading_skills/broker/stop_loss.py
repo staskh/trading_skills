@@ -336,8 +336,12 @@ def build_stop_analysis(
 
 
 async def _fetch_open_orders(ib) -> list[dict]:
-    """Fetch all open orders from IB, normalized to plain dicts."""
+    """Fetch all open orders from IB, normalized to plain dicts.
 
+    Explicitly requests open orders so IB pushes them before we read the cache.
+    """
+    ib.reqAllOpenOrders()
+    await asyncio.sleep(2)
     trades = ib.openTrades()
     result = []
     for trade in trades:
@@ -366,6 +370,38 @@ async def _fetch_open_orders(ib) -> list[dict]:
             }
         )
     return result
+
+
+def summarize_existing_sl_orders(open_orders: list[dict]) -> list[dict]:
+    """Return a human-readable summary of all active SL_ orders from IB."""
+    summary = []
+    for order in open_orders:
+        ref = order.get("order_ref", "")
+        if not ref.startswith(_SL_PREFIX):
+            continue
+        parts = ref.split("_")
+        if len(parts) < 5:
+            continue
+        direction = parts[1]  # RISE or FALL
+        sym = parts[2]
+        conditions = order.get("conditions", [])
+        cond_price = conditions[0]["price"] if conditions else None
+        is_more = conditions[0]["is_more"] if conditions else None
+        summary.append(
+            {
+                "symbol": sym,
+                "order_ref": ref,
+                "order_id": order.get("order_id"),
+                "action": order.get("action"),
+                "qty": order.get("qty"),
+                "direction": direction,
+                "strike": order.get("strike"),
+                "expiry": order.get("expiry"),
+                "condition_price": cond_price,
+                "condition_is_more": is_more,
+            }
+        )
+    return summary
 
 
 def _parse_existing_watermarks(open_orders: list[dict]) -> dict[str, dict]:
@@ -538,12 +574,14 @@ async def get_stop_loss_data(
     price_mode: str = "mid",
     dry_run: bool = True,
     forced: bool = False,
+    alerts_only: bool = False,
 ) -> dict:
     """Analyze PMCC positions and manage stop-loss conditional orders.
 
     dry_run=True (default): compute and report; do not submit any orders.
     dry_run=False: submit conditional orders to IB.
     forced=True: overwrite existing watermarks even if the new one is lower.
+    alerts_only=True: report alerts only; skip watermark/stop-price computation and orders.
     """
     try:
         async with ib_connection(port, CLIENT_IDS.get("stop_loss", 14)) as ib:
@@ -568,6 +606,7 @@ async def get_stop_loss_data(
             # --- Open orders (for orphan detection + existing watermarks) ---
             await asyncio.sleep(1)
             open_orders = await _fetch_open_orders(ib)
+            existing_sl_orders = summarize_existing_sl_orders(open_orders)
             orphan_orders = detect_orphan_orders(open_orders, spreads)
             existing_watermarks = _parse_existing_watermarks(open_orders)
 
@@ -576,8 +615,10 @@ async def get_stop_loss_data(
                     "generated_at": generated_at_str(),
                     "data_delay": "real-time",
                     "dry_run": dry_run,
+                    "alerts_only": alerts_only,
                     "forced": forced,
                     "accounts": accounts,
+                    "existing_sl_orders": existing_sl_orders,
                     "orphan_orders": orphan_orders,
                     "stop_actions": [],
                     "message": "No PMCC (diagonal call spread) positions found",
@@ -688,6 +729,29 @@ async def get_stop_loss_data(
                     or None
                 )
 
+                if alerts_only:
+                    # Skip watermark/stop computation — only collect alerts
+                    alerts = check_alerts(
+                        short_premium_received=abs(short_pos["avg_cost"]),
+                        short_current_price=short_price,
+                        short_strike=short_pos["strike"],
+                        spot=spot,
+                        leaps_current_price=long_price,
+                        leaps_avg_cost=long_pos["avg_cost"],
+                        stop_pct=stop_pct,
+                        short_near_strike_pct=short_near_strike_pct,
+                    )
+                    stop_actions.append(
+                        {
+                            "symbol": symbol,
+                            "account": account or accounts[0],
+                            "qty": qty,
+                            "underlying_price": round(spot, 2),
+                            "alerts": alerts,
+                        }
+                    )
+                    continue
+
                 short_key = f"{symbol}_{short_pos['strike']}_{short_pos['expiry']}"
                 long_key = f"{symbol}_{long_pos['strike']}_{long_pos['expiry']}"
                 spread_wm = existing_watermarks.get(short_key, {})
@@ -731,11 +795,13 @@ async def get_stop_loss_data(
                 "generated_at": generated_at_str(),
                 "data_delay": data_delay,
                 "dry_run": dry_run,
+                "alerts_only": alerts_only,
                 "forced": forced,
                 "stop_pct": stop_pct,
                 "short_near_strike_pct": short_near_strike_pct,
                 "accounts": accounts,
                 "symbols_filter": [s.upper() for s in symbols] if symbols else None,
+                "existing_sl_orders": existing_sl_orders,
                 "orphan_orders": orphan_orders,
                 "stop_actions": stop_actions,
             }

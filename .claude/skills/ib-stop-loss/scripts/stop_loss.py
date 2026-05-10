@@ -57,6 +57,13 @@ async def main():
         default=False,
         help="Overwrite existing watermarks even if new watermark is lower (requires --execute)",
     )
+    parser.add_argument(
+        "--alerts-only",
+        action="store_true",
+        default=False,
+        dest="alerts_only",
+        help="Report alerts only — skip watermark/stop-price computation and order proposals",
+    )
 
     args = parser.parse_args()
 
@@ -66,8 +73,18 @@ async def main():
             "Warning: --forced has no effect in dry-run mode. Add --execute to submit orders.",
             file=sys.stderr,
         )
+    if args.alerts_only and args.execute:
+        print(
+            "Warning: --alerts-only disables order submission. --execute ignored.",
+            file=sys.stderr,
+        )
 
-    mode = "DRY RUN" if dry_run else ("EXECUTE FORCED" if args.forced else "EXECUTE")
+    if args.alerts_only:
+        mode = "ALERTS ONLY"
+    elif dry_run:
+        mode = "DRY RUN"
+    else:
+        mode = "EXECUTE FORCED" if args.forced else "EXECUTE"
     print(f"[{mode}] Connecting to IB on port {args.port}...", file=sys.stderr)
 
     result = await get_stop_loss_data(
@@ -77,8 +94,9 @@ async def main():
         stop_pct=args.stop_pct,
         short_near_strike_pct=args.short_near_strike_pct,
         price_mode=args.price_mode,
-        dry_run=dry_run,
+        dry_run=dry_run or args.alerts_only,
         forced=args.forced,
+        alerts_only=args.alerts_only,
     )
 
     print(json.dumps(result, indent=2, default=str))
