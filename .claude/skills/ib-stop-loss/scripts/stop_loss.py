@@ -49,42 +49,42 @@ async def main():
         "--execute",
         action="store_true",
         default=False,
-        help="Submit conditional orders to IB (default: dry-run only)",
+        help="Connect live and run full analysis (default: dry-run only)",
+    )
+    parser.add_argument(
+        "--set-orders",
+        action="store_true",
+        default=False,
+        dest="set_orders",
+        help="Submit conditional stop-loss orders to IB (requires --execute)",
     )
     parser.add_argument(
         "--forced",
         action="store_true",
         default=False,
-        help="Overwrite existing watermarks even if new watermark is lower (requires --execute)",
-    )
-    parser.add_argument(
-        "--alerts-only",
-        action="store_true",
-        default=False,
-        dest="alerts_only",
-        help="Report alerts only — skip watermark/stop-price computation and order proposals",
+        help="Overwrite existing watermarks even if new watermark is lower (requires --set-orders)",
     )
 
     args = parser.parse_args()
 
     dry_run = not args.execute
-    if args.forced and dry_run:
+    if args.set_orders and dry_run:
         print(
-            "Warning: --forced has no effect in dry-run mode. Add --execute to submit orders.",
+            "Warning: --set-orders has no effect in dry-run mode. Add --execute to submit orders.",
             file=sys.stderr,
         )
-    if args.alerts_only and args.execute:
+    if args.forced and not args.set_orders:
         print(
-            "Warning: --alerts-only disables order submission. --execute ignored.",
+            "Warning: --forced has no effect without --set-orders.",
             file=sys.stderr,
         )
 
-    if args.alerts_only:
-        mode = "ALERTS ONLY"
-    elif dry_run:
+    if dry_run:
         mode = "DRY RUN"
+    elif args.set_orders:
+        mode = "EXECUTE + SET ORDERS (FORCED)" if args.forced else "EXECUTE + SET ORDERS"
     else:
-        mode = "EXECUTE FORCED" if args.forced else "EXECUTE"
+        mode = "EXECUTE (analysis only)"
     print(f"[{mode}] Connecting to IB on port {args.port}...", file=sys.stderr)
 
     result = await get_stop_loss_data(
@@ -94,9 +94,9 @@ async def main():
         stop_pct=args.stop_pct,
         short_near_strike_pct=args.short_near_strike_pct,
         price_mode=args.price_mode,
-        dry_run=dry_run or args.alerts_only,
+        dry_run=dry_run,
+        set_orders=args.set_orders,
         forced=args.forced,
-        alerts_only=args.alerts_only,
     )
 
     print(json.dumps(result, indent=2, default=str))

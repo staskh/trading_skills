@@ -28,8 +28,10 @@ from trading_skills.utils import (
 
 RISK_FREE_RATE = 0.045
 
-# OrderRef prefix for stop-loss orders placed by this module
+# OrderRef prefixes for orders placed by this module
 _SL_PREFIX = "SL_"
+_ALRT_PREFIX = "ALRT_"
+_MODULE_PREFIXES = (_SL_PREFIX, _ALRT_PREFIX)
 
 
 # ===========================================================================
@@ -206,6 +208,25 @@ def detect_orphan_orders(
                 orphans.append(order)
 
     return orphans
+
+
+def summarize_all_conditional_orders(open_orders: list[dict]) -> dict:
+    """Split all conditional IB orders into module-managed and manually placed.
+
+    Only orders that have at least one condition are included.
+    Module orders have order refs starting with SL_ or ALRT_.
+    """
+    module_orders: list[dict] = []
+    manual_orders: list[dict] = []
+    for order in open_orders:
+        if not order.get("conditions"):
+            continue
+        ref = order.get("order_ref", "")
+        if any(ref.startswith(p) for p in _MODULE_PREFIXES):
+            module_orders.append(order)
+        else:
+            manual_orders.append(order)
+    return {"module": module_orders, "manual": manual_orders}
 
 
 def _sl_order_ref(direction: str, symbol: str, strike: float, expiry: str) -> str:
@@ -483,6 +504,123 @@ async def _place_conditional_order(
     return {"ok": True, "order_id": trade.order.orderId, "order_ref": order_ref}
 
 
+async def _place_alert_order(
+    ib,
+    stock_symbol: str,
+    stock_con_id: int,
+    condition_con_id: int,
+    condition_price: float,
+    is_more: bool,
+    order_ref: str,
+) -> dict:
+    """Place a GTC LMT BUY of 1 share at $0.01 as an IB alert notification proxy.
+
+    The order will never fill at this price; IB fires a notification when the condition triggers.
+    """
+    from ib_async import Order, PriceCondition, Stock
+
+    stock_contract = Stock(stock_symbol, "SMART", "USD")
+    qualified = await fetch_with_timeout(
+        ib.qualifyContractsAsync(stock_contract), timeout=10, default=[]
+    )
+    if not qualified:
+        return {"ok": False, "error": f"Could not qualify stock {stock_symbol}"}
+
+    condition = PriceCondition()
+    condition.conId = condition_con_id
+    condition.exch = "SMART"
+    condition.isMore = is_more
+    condition.price = condition_price
+
+    order = Order()
+    order.action = "BUY"
+    order.orderType = "LMT"
+    order.lmtPrice = 0.01
+    order.totalQuantity = 1
+    order.conditions = [condition]
+    order.conditionsIgnoreRth = True
+    order.orderRef = order_ref
+    order.tif = "GTC"
+
+    trade = ib.placeOrder(qualified[0], order)
+    return {"ok": True, "order_id": trade.order.orderId, "order_ref": order_ref}
+
+
+async def _execute_alert_orders(
+    ib,
+    analysis: dict,
+    stock_con_id: int,
+    existing_alert_refs: set[str],
+    stop_pct: float,
+    short_near_strike_pct: float,
+) -> list[dict]:
+    """Place IB alert (ALRT_) notification orders for all three alert conditions.
+
+    Skips any condition whose ALRT_ order already exists in IB.
+    """
+    from ib_async import Option
+
+    results = []
+    symbol = analysis["symbol"]
+    long_info = analysis["long"]
+    short_info = analysis["short"]
+
+    # 1. Near-strike: stock price >= short_strike * (1 - threshold/100)
+    near_ref = f"ALRT_NEAR_{symbol}_{short_info['strike']}_{short_info['expiry']}"
+    if near_ref not in existing_alert_refs:
+        near_threshold = round(short_info["strike"] * (1 - short_near_strike_pct / 100), 2)
+        res = await _place_alert_order(
+            ib, symbol, stock_con_id,
+            condition_con_id=stock_con_id,
+            condition_price=near_threshold,
+            is_more=True,
+            order_ref=near_ref,
+        )
+        results.append({"alert": "near_strike", **res})
+
+    # 2. LEAPS early warning: LEAPS price <= basis * (1 - stop_pct/200)
+    leaps_ref = f"ALRT_LEAPS_{symbol}_{long_info['strike']}_{long_info['expiry']}"
+    if leaps_ref not in existing_alert_refs:
+        early_warning_price = round(long_info["stop_basis"] * (1 - stop_pct / 200), 2)
+        leaps_contract = Option(
+            symbol, long_info["expiry"], long_info["strike"], "C", "SMART", currency="USD"
+        )
+        qualified_leaps = await fetch_with_timeout(
+            ib.qualifyContractsAsync(leaps_contract), timeout=10, default=[]
+        )
+        if qualified_leaps:
+            res = await _place_alert_order(
+                ib, symbol, stock_con_id,
+                condition_con_id=qualified_leaps[0].conId,
+                condition_price=early_warning_price,
+                is_more=False,
+                order_ref=leaps_ref,
+            )
+            results.append({"alert": "leaps_early_warning", **res})
+
+    # 3. Short premium decay: short price <= premium_received * 10%
+    decay_ref = f"ALRT_DECAY_{symbol}_{short_info['strike']}_{short_info['expiry']}"
+    if decay_ref not in existing_alert_refs:
+        decay_threshold = round(short_info["premium_received"] * 0.10, 2)
+        short_contract = Option(
+            symbol, short_info["expiry"], short_info["strike"], "C", "SMART", currency="USD"
+        )
+        qualified_short = await fetch_with_timeout(
+            ib.qualifyContractsAsync(short_contract), timeout=10, default=[]
+        )
+        if qualified_short:
+            res = await _place_alert_order(
+                ib, symbol, stock_con_id,
+                condition_con_id=qualified_short[0].conId,
+                condition_price=decay_threshold,
+                is_more=False,
+                order_ref=decay_ref,
+            )
+            results.append({"alert": "short_premium_decay", **res})
+
+    return results
+
+
 async def _execute_stop_orders(
     ib,
     analysis: dict,
@@ -572,15 +710,15 @@ async def get_stop_loss_data(
     short_near_strike_pct: float = 5.0,
     price_mode: str = "mid",
     dry_run: bool = True,
+    set_orders: bool = False,
     forced: bool = False,
-    alerts_only: bool = False,
 ) -> dict:
     """Analyze PMCC positions and manage stop-loss conditional orders.
 
     dry_run=True (default): compute and report; do not submit any orders.
-    dry_run=False: submit conditional orders to IB.
+    dry_run=False (--execute): connect live, full analysis, place ALRT_ alert orders.
+    set_orders=True (--set-orders, requires dry_run=False): also submit SL_ conditional orders.
     forced=True: overwrite existing watermarks even if the new one is lower.
-    alerts_only=True: report alerts only; skip watermark/stop-price computation and orders.
     """
     try:
         async with ib_connection(port, CLIENT_IDS.get("stop_loss", 14)) as ib:
@@ -605,7 +743,7 @@ async def get_stop_loss_data(
             # --- Open orders (for orphan detection + existing watermarks) ---
             await asyncio.sleep(1)
             open_orders = await _fetch_open_orders(ib)
-            existing_sl_orders = summarize_existing_sl_orders(open_orders)
+            all_conditional_orders = summarize_all_conditional_orders(open_orders)
             orphan_orders = detect_orphan_orders(open_orders, spreads)
             existing_watermarks = _parse_existing_watermarks(open_orders)
 
@@ -614,10 +752,11 @@ async def get_stop_loss_data(
                     "generated_at": generated_at_str(),
                     "data_delay": "real-time",
                     "dry_run": dry_run,
-                    "alerts_only": alerts_only,
+                    "set_orders": set_orders,
                     "forced": forced,
                     "accounts": accounts,
-                    "existing_sl_orders": existing_sl_orders,
+                    "symbols_filter": [s.upper() for s in symbols] if symbols else None,
+                    "all_conditional_orders": all_conditional_orders,
                     "orphan_orders": orphan_orders,
                     "stop_actions": [],
                     "message": "No PMCC (diagonal call spread) positions found",
@@ -673,7 +812,7 @@ async def get_stop_loss_data(
             long_quotes: list = list(phase1[n + 1 : 2 * n + 1])
             data_delay = "real-time" if live else "stalled - using last price"
 
-            # --- Stock conIds for conditional orders (only needed for EXECUTE) ---
+            # --- Stock conIds (needed for alert orders in execute mode + SL orders) ---
             stock_con_ids: dict[str, int] = {}
             if not dry_run:
                 from ib_async import Stock
@@ -683,6 +822,12 @@ async def get_stop_loss_data(
                     ib.qualifyContractsAsync(*stock_contracts), timeout=15, default=[]
                 )
                 stock_con_ids = {qc.symbol: qc.conId for qc in qualified_stocks}
+
+            existing_alert_refs: set[str] = {
+                o["order_ref"]
+                for o in open_orders
+                if o.get("order_ref", "").startswith(_ALRT_PREFIX)
+            }
 
             # --- Per-spread analysis ---
             stop_actions = []
@@ -728,29 +873,6 @@ async def get_stop_loss_data(
                     or None
                 )
 
-                if alerts_only:
-                    # Skip watermark/stop computation — only collect alerts
-                    alerts = check_alerts(
-                        short_premium_received=abs(short_pos["avg_cost"]),
-                        short_current_price=short_price,
-                        short_strike=short_pos["strike"],
-                        spot=spot,
-                        leaps_current_price=long_price,
-                        leaps_avg_cost=long_pos["avg_cost"],
-                        stop_pct=stop_pct,
-                        short_near_strike_pct=short_near_strike_pct,
-                    )
-                    stop_actions.append(
-                        {
-                            "symbol": symbol,
-                            "account": account or accounts[0],
-                            "qty": qty,
-                            "underlying_price": round(spot, 2),
-                            "alerts": alerts,
-                        }
-                    )
-                    continue
-
                 short_key = f"{symbol}_{short_pos['strike']}_{short_pos['expiry']}"
                 long_key = f"{symbol}_{long_pos['strike']}_{long_pos['expiry']}"
                 spread_wm = existing_watermarks.get(short_key, {})
@@ -778,29 +900,39 @@ async def get_stop_loss_data(
                 )
                 stop_actions.append(analysis)
 
-                if not dry_run:
-                    stock_con_id = stock_con_ids.get(symbol)
-                    if stock_con_id:
-                        results = await _execute_stop_orders(
+                stock_con_id = stock_con_ids.get(symbol)
+                if not dry_run and stock_con_id:
+                    alert_res = await _execute_alert_orders(
+                        ib=ib,
+                        analysis=analysis,
+                        stock_con_id=stock_con_id,
+                        existing_alert_refs=existing_alert_refs,
+                        stop_pct=stop_pct,
+                        short_near_strike_pct=short_near_strike_pct,
+                    )
+                    order_results.setdefault(symbol, []).extend(alert_res)
+
+                    if set_orders:
+                        sl_res = await _execute_stop_orders(
                             ib=ib,
                             analysis=analysis,
                             stock_con_id=stock_con_id,
                             price_mode=price_mode,
                             forced=forced,
                         )
-                        order_results[symbol] = results
+                        order_results[symbol].extend(sl_res)
 
             output = {
                 "generated_at": generated_at_str(),
                 "data_delay": data_delay,
                 "dry_run": dry_run,
-                "alerts_only": alerts_only,
+                "set_orders": set_orders,
                 "forced": forced,
                 "stop_pct": stop_pct,
                 "short_near_strike_pct": short_near_strike_pct,
                 "accounts": accounts,
                 "symbols_filter": [s.upper() for s in symbols] if symbols else None,
-                "existing_sl_orders": existing_sl_orders,
+                "all_conditional_orders": all_conditional_orders,
                 "orphan_orders": orphan_orders,
                 "stop_actions": stop_actions,
             }

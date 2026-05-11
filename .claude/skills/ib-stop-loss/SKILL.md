@@ -24,19 +24,24 @@ TWS or IB Gateway running locally with API enabled:
 uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py [OPTIONS]
 ```
 
-Dry-run (default — no orders placed):
+Dry-run (default — no IB connection needed):
 ```bash
 uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496
 ```
 
-Execute (submit conditional orders, preserve existing higher watermarks):
+Execute — live analysis + place IB alert (ALRT_) notification orders:
 ```bash
 uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496 --execute
 ```
 
-Execute forced (overwrite all existing watermarks):
+Execute + set orders (alert orders + conditional stop-loss orders):
 ```bash
-uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496 --execute --forced
+uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496 --execute --set-orders
+```
+
+Execute + set orders forced (overwrite all existing watermarks):
+```bash
+uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496 --execute --set-orders --forced
 ```
 
 ### Step 2: Format the report
@@ -86,12 +91,13 @@ List all alerts grouped by symbol. Alert types and their meaning:
 |------|---------|-------------|
 | `--port` | 7496 | IB Gateway/TWS port |
 | `--account` | all | Specific account ID |
-| `--symbols` | all | Analyze only these symbols |
+| `--symbols` | all | Analyze only these symbols (e.g. `--symbols NVDA WMT`) |
 | `--stop-pct` | 50 | LEAPS loss % that triggers exit |
-| `--short-near-strike-pct` | 10 | Alert when short price ≤ X% of strike |
+| `--short-near-strike-pct` | 5 | Alert when spot is within X% of (or above) short strike |
 | `--price-mode` | mid | Option pricing: `mid` or `last` |
-| `--execute` | off | Submit conditional orders to IB |
-| `--forced` | off | Overwrite existing watermarks (requires `--execute`) |
+| `--execute` | off | Connect live — place ALRT_ alert orders (default: dry-run) |
+| `--set-orders` | off | Also submit SL_ conditional stop-loss orders (requires `--execute`) |
+| `--forced` | off | Overwrite existing watermarks (requires `--set-orders`) |
 
 ## JSON Output Structure
 
@@ -100,11 +106,13 @@ List all alerts grouped by symbol. Alert types and their meaning:
   "generated_at": "2026-05-10 10:30 ET",
   "data_delay": "real-time",
   "dry_run": true,
+  "set_orders": false,
   "forced": false,
   "stop_pct": 50.0,
-  "short_near_strike_pct": 10.0,
+  "short_near_strike_pct": 5.0,
   "accounts": ["U1234567"],
   "symbols_filter": null,
+  "all_conditional_orders": {"module": [], "manual": []},
   "orphan_orders": [],
   "stop_actions": [
     {
@@ -173,11 +181,14 @@ uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496
 # Dry-run specific symbols
 uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496 --symbols NVDA WMT
 
-# Execute with 40% LEAPS stop
-uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496 --execute --stop-pct 40
+# Live analysis + place alert orders for specific symbols
+uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496 --execute --symbols NVDA WMT
+
+# Set conditional stop-loss orders with 40% LEAPS stop
+uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496 --execute --set-orders --stop-pct 40
 
 # Force overwrite all watermarks
-uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496 --execute --forced
+uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496 --execute --set-orders --forced
 ```
 
 ## Architecture

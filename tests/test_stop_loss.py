@@ -10,6 +10,7 @@ from trading_skills.broker.stop_loss import (
     check_alerts,
     detect_orphan_orders,
     find_delta_neutral_spot,
+    summarize_all_conditional_orders,
 )
 
 # ---------------------------------------------------------------------------
@@ -313,3 +314,46 @@ def test_detect_orphan_mixed():
     orphans = detect_orphan_orders(orders, spreads)
     assert len(orphans) == 1
     assert orphans[0]["symbol"] == "NVDA"
+
+
+# ---------------------------------------------------------------------------
+# summarize_all_conditional_orders
+# ---------------------------------------------------------------------------
+
+
+def _make_cond_order(order_ref, conditions=None):
+    return {
+        "order_ref": order_ref,
+        "conditions": conditions or [],
+        "symbol": "NVDA",
+        "order_id": 1,
+        "action": "BUY",
+        "qty": 1,
+    }
+
+
+def test_all_conditional_orders_splits_module_and_manual():
+    orders = [
+        _make_cond_order("SL_RISE_NVDA_210.0_20260618", [{"price": 218.5, "is_more": True}]),
+        _make_cond_order("MANUAL_COND", [{"price": 200.0, "is_more": False}]),
+    ]
+    result = summarize_all_conditional_orders(orders)
+    assert len(result["module"]) == 1
+    assert len(result["manual"]) == 1
+    assert result["module"][0]["order_ref"] == "SL_RISE_NVDA_210.0_20260618"
+    assert result["manual"][0]["order_ref"] == "MANUAL_COND"
+
+
+def test_all_conditional_orders_excludes_no_conditions():
+    orders = [
+        _make_cond_order("SL_RISE_NVDA_210.0_20260618", []),
+        _make_cond_order("MANUAL_COND", []),
+    ]
+    result = summarize_all_conditional_orders(orders)
+    assert len(result["module"]) == 0
+    assert len(result["manual"]) == 0
+
+
+def test_all_conditional_orders_empty_input():
+    result = summarize_all_conditional_orders([])
+    assert result == {"module": [], "manual": []}
