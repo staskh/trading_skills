@@ -158,7 +158,7 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 - "Generate portfolio action report" (requires IB)
 - "Find roll candidates for my GOOG short call" (requires IB)
 
-## Available Skills (22)
+## Available Skills (25)
 
 ### Market Data
 | Skill | Description |
@@ -169,6 +169,7 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 | `fundamentals` | Financials, earnings, key metrics, Piotroski F-Score |
 | `news-sentiment` | Recent headlines and sentiment |
 | `earnings-calendar` | Upcoming earnings dates with BMO/AMC timing and EPS estimates |
+| `insider-trading` | SEC Form 4 insider transactions — executive buys/sells and sentiment |
 
 ### Analysis
 | Skill | Description |
@@ -186,6 +187,11 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 | `whale-hunting` | Detect institutional option whale activity for an underlying (requires Massive API key) |
 
 ### Portfolio (requires TWS/Gateway)
+
+> **TWS API access levels:**
+> - **Read-only** — fetches positions, prices, and Greeks; places no orders: `ib-account`, `ib-portfolio`, `ib-option-chain`, `ib-find-short-roll`, `ib-collar`, `ib-pmcc-advisor`, `ib-portfolio-action-report`, `ib-create-consolidated-report`, `ib-report-delta-adjusted-notional-exposure`
+> - **Read-write** — can place and cancel conditional orders in TWS: `ib-stop-loss` (only when `--execute` is passed; dry-run by default)
+
 | Skill | Description |
 |-------|-------------|
 | `ib-account` | Account summary (cash, buying power, margin) |
@@ -193,6 +199,8 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 | `ib-option-chain` | Real-time option chain data from IB *(under development)* |
 | `ib-find-short-roll` | Roll candidates for short positions or covered call/put selection |
 | `ib-collar` | Tactical collar strategy for earnings/event protection |
+| `ib-pmcc-advisor` | PMCC position analysis: assignment risk, P&L projections, ranked roll candidates |
+| `ib-stop-loss` | Conditional stop-loss management for PMCC, naked LEAPS, and stock positions |
 | `ib-portfolio-action-report` | Portfolio review with earnings risk and action items |
 | `ib-create-consolidated-report` | Consolidate IBRK trade CSVs into summary reports |
 | `ib-report-delta-adjusted-notional-exposure` | Delta-adjusted notional exposure across accounts |
@@ -202,19 +210,26 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 |-------|-------------|
 | `report-stock` | Comprehensive PDF/markdown report with trend, PMCC, and fundamental analysis |
 
-## MCP Server Tools (24 tools)
+## MCP Server Tools (32 tools)
 
-The MCP server exposes a subset of skills as tools for Claude Desktop:
+The MCP server exposes skills as tools for Claude Desktop:
+
+> **TWS API access levels for MCP tools:**
+> - **Read-only**: `ib_account`, `ib_portfolio`, `ib_option_expiries`, `ib_option_chain`, `ib_find_short_roll`, `ib_collar`, `ib_pmcc_advisor`, `ib_portfolio_action_report`, `ib_delta_exposure`
+> - **Read-write** (places/cancels orders): `ib_stop_loss` when `execute=True`
 
 | Category | Tools |
 |----------|-------|
-| **Market Data** | `stock_quote`, `price_history`, `news_sentiment`, `fundamentals`, `piotroski_score`, `earnings_calendar` |
+| **Market Data** | `stock_quote`, `price_history`, `news_sentiment`, `insider_trading`, `fundamentals`, `piotroski_score`, `earnings_calendar` |
 | **Technical** | `technical_indicators`, `price_correlation`, `risk_assessment` |
 | **Options** | `option_expiries`, `option_chain`, `option_greeks` |
 | **Spreads** | `spread_vertical`, `spread_diagonal`, `spread_straddle`, `spread_strangle`, `spread_iron_condor` |
 | **Scanners** | `scan_bullish`, `scan_pmcc` |
 | **Whale Hunting** | `whale_hunting` |
-| **IB Portfolio** | `ib_account`, `ib_portfolio`, `ib_find_short_roll`, `ib_portfolio_action_report` |
+| **Reports** | `report_stock` |
+| **IB Portfolio** | `ib_account`, `ib_portfolio`, `ib_option_expiries`†, `ib_option_chain`, `ib_find_short_roll`, `ib_collar`, `ib_pmcc_advisor`, `ib_stop_loss`, `ib_portfolio_action_report`, `ib_delta_exposure` |
+
+† MCP-only helper — not a standalone skill. Used in Claude Desktop to discover available expiry dates before calling `ib_option_chain`.
 
 ## Sandbox Outputs (Not Committed)
 
@@ -305,7 +320,10 @@ The MCP server (`mcp_server/server.py`) wraps the same Python scripts as tools f
 
 ## Data Sources
 
-Market data is provided by [Yahoo Finance](https://finance.yahoo.com/) and may be delayed up to 15 minutes.
+| Source | Used by | Notes |
+|--------|---------|-------|
+| [Yahoo Finance](https://finance.yahoo.com/) | All market data, fundamental, and options skills | Free; up to 15-minute delay |
+| [Massive](https://massive.com/) (formerly Polygon.io) | `whale-hunting` (`whale_hunting` MCP tool) | Paid API key required; see setup section below |
 
 ## License
 
