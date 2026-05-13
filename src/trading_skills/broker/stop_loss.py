@@ -844,6 +844,9 @@ async def get_stop_loss_data(
                     )
                     order_results.append(res)
 
+            if not dry_run and order_results:
+                await asyncio.sleep(3)
+
             alert_soon_symbols = sorted(
                 {p["symbol"] for p in analyzed_positions if p["alert_soon"]}
             )
