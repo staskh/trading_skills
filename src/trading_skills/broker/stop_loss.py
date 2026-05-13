@@ -565,8 +565,12 @@ async def _execute_position_stop(
     analysis: dict,
     leaps_con_id: int | None,
     stock_con_id: int | None,
+    open_orders: list[dict] | None = None,
 ) -> dict:
-    """Place the stop-loss order for one position based on analysis."""
+    """Place the stop-loss order for one position based on analysis.
+
+    On overwrite: cancels the existing order before placing the new one.
+    """
     ptype = analysis["type"]
     symbol = analysis["symbol"]
     qty = analysis["qty"]
@@ -577,6 +581,15 @@ async def _execute_position_stop(
         return {"symbol": symbol, "skipped": True, "reason": action}
 
     order_ref = f"{_SL_FALL_PREFIX}{_sl_fall_key(analysis)}"
+
+    if action == "overwrite" and open_orders:
+        trades_by_id = {t.order.orderId: t for t in ib.openTrades()}
+        for o in open_orders:
+            if o.get("order_ref") == order_ref:
+                oid = o.get("order_id")
+                if oid and oid in trades_by_id:
+                    ib.cancelOrder(trades_by_id[oid].order)
+                break
 
     if ptype == "pmcc":
         if not leaps_con_id:
@@ -651,16 +664,19 @@ async def get_stop_loss_data(
             # --- Positions ---
             raw = await fetch_positions(ib, account=account)
             normalized = normalize_positions(raw)
-            all_positions = identify_positions(normalized)
+            unfiltered_positions = identify_positions(normalized)
             if symbols:
                 sym_set = {s.upper() for s in symbols}
-                all_positions = [p for p in all_positions if p["symbol"].upper() in sym_set]
+                all_positions = [p for p in unfiltered_positions if p["symbol"].upper() in sym_set]
+            else:
+                all_positions = unfiltered_positions
 
             # --- Open orders ---
             await asyncio.sleep(1)
             open_orders = await _fetch_open_orders(ib)
             all_conditional_orders = summarize_all_conditional_orders(open_orders)
-            orphan_orders = detect_orphan_orders(open_orders, all_positions)
+            # Orphans are SL_ orders with no matching position in the full portfolio
+            orphan_orders = detect_orphan_orders(open_orders, unfiltered_positions)
             existing_stops = _parse_existing_stops(open_orders)
 
             if not all_positions:
@@ -841,6 +857,7 @@ async def get_stop_loss_data(
                         analysis=analysis,
                         leaps_con_id=leaps_con_id,
                         stock_con_id=stock_con_id,
+                        open_orders=open_orders,
                     )
                     order_results.append(res)
 
