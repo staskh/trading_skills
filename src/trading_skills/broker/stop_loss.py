@@ -290,6 +290,7 @@ def build_position_analysis(
         result["leaps"] = {
             "strike": position["leaps"]["strike"],
             "expiry": position["leaps"]["expiry"],
+            "right": position["leaps"]["right"],
             "avg_cost": avg_cost,
             "current_price": round(current_mid, 2) if current_mid is not None else None,
             "stop_basis": round(basis, 2),
@@ -310,6 +311,8 @@ def build_position_analysis(
                 {
                     "strike": short["strike"],
                     "expiry": short["expiry"],
+                    "right": short["right"],
+                    "qty": short["qty"],
                     "premium_received": short["premium_received"],
                     "current_price": round(sp, 2) if sp is not None else None,
                     "decay_pct": decay,
@@ -460,11 +463,9 @@ async def _place_combo_stop_order(
     leaps = position["leaps"]
     shorts = position["shorts"]
 
-    leaps_contract = Option(
-        symbol, leaps["expiry"], leaps["strike"], leaps["right"], "SMART", "USD"
-    )
+    leaps_contract = Option(symbol, leaps["expiry"], leaps["strike"], leaps["right"], "SMART")
     short_contracts = [
-        Option(symbol, s["expiry"], s["strike"], s["right"], "SMART", "USD") for s in shorts
+        Option(symbol, s["expiry"], s["strike"], s["right"], "SMART") for s in shorts
     ]
     all_contracts = [leaps_contract] + short_contracts
 
@@ -532,7 +533,7 @@ async def _place_simple_stop_order(
 
     if ptype == "leaps":
         leaps = position["leaps"]
-        contract = Option(symbol, leaps["expiry"], leaps["strike"], leaps["right"], "SMART", "USD")
+        contract = Option(symbol, leaps["expiry"], leaps["strike"], leaps["right"], "SMART")
     else:
         contract = Stock(symbol, "SMART", "USD")
 
@@ -778,7 +779,7 @@ async def get_stop_loss_data(
                     qs = await fetch_with_timeout(
                         ib.qualifyContractsAsync(*stock_contracts), timeout=15, default=[]
                     )
-                    stock_con_ids = {qc.symbol: qc.conId for qc in qs}
+                    stock_con_ids = {qc.symbol: qc.conId for qc in qs if qc is not None}
 
                 from ib_async import Option as IBOption
 
@@ -790,12 +791,11 @@ async def get_stop_loss_data(
                         leaps["strike"],
                         leaps["right"],
                         "SMART",
-                        "USD",
                     )
                     ql = await fetch_with_timeout(
                         ib.qualifyContractsAsync(leaps_contract), timeout=10, default=[]
                     )
-                    if ql:
+                    if ql and ql[0] is not None:
                         leaps_con_ids[id(pos)] = ql[0].conId
 
             # --- Per-position analysis ---
