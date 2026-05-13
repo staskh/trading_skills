@@ -582,7 +582,7 @@ async def _execute_position_stop(
 
     order_ref = f"{_SL_FALL_PREFIX}{_sl_fall_key(analysis)}"
 
-    if action == "overwrite" and open_orders:
+    if open_orders:
         trades_by_id = {t.order.orderId: t for t in ib.openTrades()}
         for o in open_orders:
             if o.get("order_ref") == order_ref:
