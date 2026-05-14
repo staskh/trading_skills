@@ -19,6 +19,7 @@ from trading_skills.broker.stop_loss import (
     calc_stop_basis,
     calc_stop_price,
     detect_orphan_orders,
+    filter_orders_by_account,
     get_stop_loss_data,
     identify_positions,
     summarize_all_conditional_orders,
@@ -387,6 +388,75 @@ def test_detect_orphan_stock_position():
     orphans = detect_orphan_orders(orders, positions)
     assert len(orphans) == 1
     assert orphans[0]["order_ref"] == "SL_FALL_NVDA_200.0_20270115"
+
+
+# ---------------------------------------------------------------------------
+# filter_orders_by_account  (issue #37)
+# ---------------------------------------------------------------------------
+
+
+def _acct_order(order_ref, account, order_id=1):
+    return {
+        "order_ref": order_ref,
+        "account": account,
+        "order_id": order_id,
+        "symbol": "X",
+        "conditions": [{"price": 1.0, "is_more": False}],
+    }
+
+
+def test_filter_orders_by_account_single_account():
+    orders = [
+        _acct_order("SL_FALL_A", "U1", order_id=1),
+        _acct_order("SL_FALL_B", "U2", order_id=2),
+        _acct_order("SL_FALL_C", "U1", order_id=3),
+    ]
+    result = filter_orders_by_account(orders, ["U1"])
+    assert [o["order_id"] for o in result] == [1, 3]
+
+
+def test_filter_orders_by_account_multi_account():
+    orders = [
+        _acct_order("SL_FALL_A", "U1", order_id=1),
+        _acct_order("SL_FALL_B", "U2", order_id=2),
+        _acct_order("SL_FALL_C", "U3", order_id=3),
+    ]
+    result = filter_orders_by_account(orders, ["U1", "U2"])
+    assert [o["order_id"] for o in result] == [1, 2]
+
+
+def test_filter_orders_by_account_empty_accounts_drops_all():
+    orders = [_acct_order("SL_FALL_A", "U1")]
+    assert filter_orders_by_account(orders, []) == []
+
+
+def test_filter_orders_by_account_drops_orders_without_account():
+    orders = [
+        _acct_order("SL_FALL_A", "U1", order_id=1),
+        {"order_ref": "SL_FALL_B", "order_id": 2},  # no account field
+        _acct_order("SL_FALL_C", "", order_id=3),  # empty account
+    ]
+    result = filter_orders_by_account(orders, ["U1"])
+    assert [o["order_id"] for o in result] == [1]
+
+
+def test_filter_then_detect_orphan_protects_other_accounts():
+    """Regression for issue #37: scoping orphan detection to queried accounts must
+    leave SL_ orders in other accounts untouched, even when the position list is
+    empty for the queried account."""
+    orders = [
+        _acct_order("SL_FALL_NVDA_200.0_20270115", "U2", order_id=10),
+        _acct_order("SL_FALL_AAPL_STK", "U1", order_id=11),
+    ]
+    # Querying U1 with no AAPL position would, before the fix, see both orders as
+    # orphans because positions are scoped to U1 but orders weren't.
+    positions_in_u1: list[dict] = []
+    scoped = filter_orders_by_account(orders, ["U1"])
+    orphans = detect_orphan_orders(scoped, positions_in_u1)
+    # The U2 order must NOT be in the orphan list.
+    assert all(o.get("account") != "U2" for o in orphans)
+    # The U1 AAPL order with no matching position is still a correct orphan.
+    assert [o["order_id"] for o in orphans] == [11]
 
 
 # ---------------------------------------------------------------------------

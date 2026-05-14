@@ -331,6 +331,17 @@ def build_position_analysis(
     return result
 
 
+def filter_orders_by_account(orders: list[dict], accounts: list[str]) -> list[dict]:
+    """Keep only orders whose ``account`` field matches one of the given accounts.
+
+    Used to scope orphan detection to the queried account(s) so that SL_ orders in
+    other accounts are not incorrectly cancelled when running with ``--account``.
+    Orders missing or with an empty ``account`` field are excluded.
+    """
+    accounts_set = {a for a in accounts if a}
+    return [o for o in orders if o.get("account") in accounts_set]
+
+
 def detect_orphan_orders(
     open_orders: list[dict],
     active_positions: list[dict],
@@ -392,6 +403,7 @@ async def _fetch_open_orders(ib) -> list[dict]:
             {
                 "order_id": o.orderId,
                 "order_ref": getattr(o, "orderRef", "") or "",
+                "account": getattr(o, "account", "") or "",
                 "action": o.action,
                 "order_type": o.orderType,
                 "qty": o.totalQuantity,
@@ -674,8 +686,11 @@ async def get_stop_loss_data(
             await asyncio.sleep(1)
             open_orders = await _fetch_open_orders(ib)
             all_conditional_orders = summarize_all_conditional_orders(open_orders)
-            # Orphans are SL_ orders with no matching position in the full portfolio
-            orphan_orders = detect_orphan_orders(open_orders, unfiltered_positions)
+            # Orphan detection must be scoped to the queried accounts, otherwise SL_
+            # orders in other accounts (whose positions aren't loaded here) are
+            # incorrectly flagged as orphans and cancelled in execute mode (issue #37).
+            account_scoped_orders = filter_orders_by_account(open_orders, accounts)
+            orphan_orders = detect_orphan_orders(account_scoped_orders, unfiltered_positions)
             existing_stops = _parse_existing_stops(open_orders)
 
             if not all_positions:
