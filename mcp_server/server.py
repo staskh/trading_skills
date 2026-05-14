@@ -31,6 +31,7 @@ from trading_skills.broker.portfolio_action import (
 )
 from trading_skills.broker.roll import find_roll_candidates
 from trading_skills.broker.stop_loss import get_stop_loss_data
+from trading_skills.broker.trades import get_trades
 from trading_skills.correlation import compute_correlation
 from trading_skills.earnings import get_earnings_info, get_multiple_earnings
 from trading_skills.fundamentals import get_fundamentals
@@ -782,6 +783,44 @@ async def ib_stop_loss(
         price_mode=price_mode,
         dry_run=not execute,
         forced=forced,
+    )
+
+
+@mcp.tool()
+async def ib_trades(
+    port: int = 7496,
+    account: str | None = None,
+    symbol: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    flex_token: str | None = None,
+    flex_query_id: str | None = None,
+) -> dict:
+    """Fetch trade executions from Interactive Brokers.
+
+    Returns individual trade executions with fills, commissions, and realized P&L,
+    plus aggregated summary by symbol. Uses live API (~7 days history) by default,
+    or FlexReport for full history when token and query ID are provided.
+    Requires TWS or IB Gateway running locally.
+
+    Args:
+        port: IB port (7496 for live, 7497 for paper)
+        account: Specific account ID (optional, fetches all if not specified)
+        symbol: Filter trades by symbol (e.g., AAPL)
+        start_date: Start date in YYYY-MM-DD format (default: Jan 1 of current year)
+        end_date: End date in YYYY-MM-DD format (default: today)
+        flex_token: FlexReport token for extended history beyond ~7 days
+        flex_query_id: FlexReport query ID (required with flex_token)
+    """
+    return await get_trades(
+        port=port,
+        account=account,
+        all_accounts=True,
+        symbol=symbol.upper() if symbol else None,
+        start_date=start_date,
+        end_date=end_date,
+        flex_token=flex_token,
+        flex_query_id=flex_query_id,
     )
 
 
