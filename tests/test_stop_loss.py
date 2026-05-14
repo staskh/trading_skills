@@ -754,6 +754,59 @@ class TestPlaceComboStopOrder:
         assert result["ok"] is False
         assert "error" in result
 
+    def test_sets_order_account_from_position(self):
+        """Regression for issue #39: combo order must be tagged with the
+        position's account so IB routes execution to the holding account."""
+        mock_ib = MagicMock()
+        mock_trade = MagicMock()
+        mock_trade.order.orderId = 101
+        mock_ib.placeOrder.return_value = mock_trade
+
+        pos = {
+            "type": "pmcc",
+            "symbol": "NVDA",
+            "account": "U790497",
+            "leaps": {"strike": 200.0, "expiry": "20270115", "right": "C", "avg_cost": 44.27},
+            "shorts": [{"strike": 235.0, "expiry": "20260515", "right": "C", "qty": 3}],
+        }
+        qualified = [self._make_qualified(111), self._make_qualified(222)]
+        with patch(
+            "trading_skills.broker.stop_loss.fetch_with_timeout",
+            new=AsyncMock(return_value=qualified),
+        ):
+            asyncio.run(
+                _place_combo_stop_order(mock_ib, pos, 3, 111, 22.0, "SL_FALL_NVDA_200.0_20270115")
+            )
+
+        placed_order = mock_ib.placeOrder.call_args[0][1]
+        assert placed_order.account == "U790497"
+
+    def test_does_not_set_order_account_when_position_lacks_it(self):
+        """Backward-compat: omitting account leaves Order.account at default."""
+        mock_ib = MagicMock()
+        mock_trade = MagicMock()
+        mock_trade.order.orderId = 101
+        mock_ib.placeOrder.return_value = mock_trade
+
+        pos = {
+            "type": "pmcc",
+            "symbol": "NVDA",
+            "leaps": {"strike": 200.0, "expiry": "20270115", "right": "C", "avg_cost": 44.27},
+            "shorts": [{"strike": 235.0, "expiry": "20260515", "right": "C", "qty": 3}],
+        }
+        qualified = [self._make_qualified(111), self._make_qualified(222)]
+        with patch(
+            "trading_skills.broker.stop_loss.fetch_with_timeout",
+            new=AsyncMock(return_value=qualified),
+        ):
+            asyncio.run(
+                _place_combo_stop_order(mock_ib, pos, 3, 111, 22.0, "SL_FALL_NVDA_200.0_20270115")
+            )
+
+        placed_order = mock_ib.placeOrder.call_args[0][1]
+        # ib_async Order default for account is empty string
+        assert placed_order.account == ""
+
 
 # ---------------------------------------------------------------------------
 # _place_simple_stop_order
@@ -823,6 +876,49 @@ class TestPlaceSimpleStopOrder:
             )
 
         assert result["ok"] is False
+
+    def test_sets_order_account_from_position_leaps(self):
+        """Regression for issue #39: naked LEAPS order must carry position account."""
+        mock_ib = MagicMock()
+        mock_trade = MagicMock()
+        mock_trade.order.orderId = 202
+        mock_ib.placeOrder.return_value = mock_trade
+
+        pos = {
+            "type": "leaps",
+            "symbol": "NVDA",
+            "account": "U790497",
+            "leaps": {"strike": 200.0, "expiry": "20270115", "right": "C", "avg_cost": 44.27},
+        }
+        qualified = [self._make_qualified(333)]
+        with patch(
+            "trading_skills.broker.stop_loss.fetch_with_timeout",
+            new=AsyncMock(return_value=qualified),
+        ):
+            asyncio.run(
+                _place_simple_stop_order(mock_ib, pos, 3, 333, 22.0, "SL_FALL_NVDA_200.0_20270115")
+            )
+
+        placed_order = mock_ib.placeOrder.call_args[0][1]
+        assert placed_order.account == "U790497"
+
+    def test_sets_order_account_from_position_stock(self):
+        """Regression for issue #39: stock order must carry position account."""
+        mock_ib = MagicMock()
+        mock_trade = MagicMock()
+        mock_trade.order.orderId = 303
+        mock_ib.placeOrder.return_value = mock_trade
+
+        pos = {"type": "stock", "symbol": "AAPL", "account": "U790497", "avg_cost": 175.0}
+        qualified = [self._make_qualified(444)]
+        with patch(
+            "trading_skills.broker.stop_loss.fetch_with_timeout",
+            new=AsyncMock(return_value=qualified),
+        ):
+            asyncio.run(_place_simple_stop_order(mock_ib, pos, 100, 444, 87.5, "SL_FALL_AAPL_STK"))
+
+        placed_order = mock_ib.placeOrder.call_args[0][1]
+        assert placed_order.account == "U790497"
 
 
 # ---------------------------------------------------------------------------

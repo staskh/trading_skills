@@ -524,6 +524,11 @@ async def _place_combo_stop_order(
     order.conditionsIgnoreRth = True
     order.orderRef = order_ref
     order.tif = "GTC"
+    # Pin order to the position's account so IB routes execution to the account
+    # that actually holds the legs. Without this, multi-account connections
+    # default to a single account and the conditional order fails at trigger.
+    if position.get("account"):
+        order.account = position["account"]
 
     trade = ib.placeOrder(combo, order)
     return {"ok": True, "order_id": trade.order.orderId, "order_ref": order_ref}
@@ -567,6 +572,8 @@ async def _place_simple_stop_order(
     order.conditionsIgnoreRth = True
     order.orderRef = order_ref
     order.tif = "GTC"
+    if position.get("account"):
+        order.account = position["account"]
 
     trade = ib.placeOrder(qualified[0], order)
     return {"ok": True, "order_id": trade.order.orderId, "order_ref": order_ref}
