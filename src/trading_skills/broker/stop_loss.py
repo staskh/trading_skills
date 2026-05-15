@@ -66,6 +66,69 @@ def calc_short_premium_decay_pct(
     return ((premium_received - current_price) / premium_received) * 100.0
 
 
+def parse_legs_spec(legs: list[str] | None) -> set[tuple[str, float, str, str]] | None:
+    """Parse leg specs like 'IBKR:70C:20270115' into (sym, strike, expiry, right) tuples.
+
+    Format: SYMBOL:STRIKE[C|P]:EXPIRY. Right is the last char of the strike token
+    and defaults to C if omitted. Expiry is YYYYMMDD.
+    Returns None for None/empty input. Raises ValueError on malformed input.
+    """
+    if not legs:
+        return None
+    out: set[tuple[str, float, str, str]] = set()
+    for spec in legs:
+        parts = spec.split(":")
+        if len(parts) != 3:
+            raise ValueError(f"Invalid leg spec {spec!r}: expected SYMBOL:STRIKE[C|P]:EXPIRY")
+        sym, strike_right, expiry = parts
+        strike_right = strike_right.upper()
+        if strike_right and strike_right[-1] in ("C", "P"):
+            right = strike_right[-1]
+            strike_str = strike_right[:-1]
+        else:
+            right = "C"
+            strike_str = strike_right
+        try:
+            strike = float(strike_str)
+        except ValueError as e:
+            raise ValueError(f"Invalid strike in leg spec {spec!r}") from e
+        if len(expiry) != 8 or not expiry.isdigit():
+            raise ValueError(f"Invalid expiry in leg spec {spec!r}: expected YYYYMMDD")
+        out.add((sym.upper(), strike, expiry, right))
+    return out
+
+
+def calc_pmcc_bag_qty(leaps_qty: int, short_qtys: list[int]) -> int:
+    """Bag order quantity for a PMCC = the smallest leg (limiting leg).
+
+    A 1:1 combo (1 LEAPS + 1 of each short) of size N closes N LEAPS plus N of
+    each short. If any leg has fewer than N contracts, the order would fail or
+    fill partially at trigger time. So bag qty = min(leaps_qty, *short_qtys).
+    If no shorts, returns leaps_qty (caller shouldn't be using this for non-PMCC).
+    """
+    if not short_qtys:
+        return leaps_qty
+    return min(leaps_qty, *short_qtys)
+
+
+def filter_normalized_by_legs(
+    normalized: list[dict],
+    legs_set: set[tuple[str, float, str, str]],
+) -> list[dict]:
+    """Keep only OPT positions whose (symbol, strike, expiry, right) matches a leg.
+
+    Stocks are dropped (legs filter is option-specific).
+    """
+    out = []
+    for pos in normalized:
+        if pos["sec_type"] != "OPT":
+            continue
+        key = (pos["symbol"].upper(), pos["strike"], pos["expiry"], pos["right"])
+        if key in legs_set:
+            out.append(pos)
+    return out
+
+
 def identify_positions(normalized: list[dict]) -> list[dict]:
     """Classify normalized IB positions into pmcc, leaps, and stock groups.
 
@@ -319,6 +382,7 @@ def build_position_analysis(
                 }
             )
         result["shorts"] = shorts_out
+        result["bag_qty"] = calc_pmcc_bag_qty(qty, [s["qty"] for s in position["shorts"]])
 
     if ptype == "stock":
         result["stock"] = {
@@ -620,10 +684,14 @@ async def _execute_position_stop(
     if ptype == "pmcc":
         if not leaps_con_id:
             return {"symbol": symbol, "ok": False, "error": "no LEAPS conId"}
+        # Bag order qty is bounded by the limiting leg. If LEAPS qty > shorts,
+        # the bag must size to shorts or it will fail / fill partially at trigger.
+        short_qtys = [s["qty"] for s in analysis.get("shorts", [])]
+        bag_qty = calc_pmcc_bag_qty(qty, short_qtys)
         return await _place_combo_stop_order(
             ib=ib,
             position=analysis,
-            qty=qty,
+            qty=bag_qty,
             condition_con_id=leaps_con_id,
             condition_price=stop_price,
             order_ref=order_ref,
@@ -661,6 +729,7 @@ async def get_stop_loss_data(
     port: int = 7496,
     account: str | None = None,
     symbols: list[str] | None = None,
+    legs: list[str] | None = None,
     stop_pct: float = 40.0,
     short_near_strike_pct: float = 5.0,
     price_mode: str = "mid",
@@ -672,7 +741,11 @@ async def get_stop_loss_data(
     dry_run=True (default): analyze and report; no orders placed, no IB connection.
     dry_run=False (--execute): cancel orphan orders, place SL_ conditional orders.
     forced=True: basis = current_mid_price (can lower existing stops).
+    legs: list of SYMBOL:STRIKE[C|P]:EXPIRY specs. Narrows analysis to those
+    option legs only (takes precedence over ``symbols``). Orphan detection still
+    runs against the full position set so unrelated SL_ orders aren't cancelled.
     """
+    legs_set = parse_legs_spec(legs)
     try:
         async with ib_connection(port, CLIENT_IDS.get("stop_loss", 14)) as ib:
             ib.reqMarketDataType(4)
@@ -691,7 +764,12 @@ async def get_stop_loss_data(
             raw = await fetch_positions(ib, account=account)
             normalized = normalize_positions(raw)
             unfiltered_positions = identify_positions(normalized)
-            if symbols:
+            if legs_set:
+                # Filter at the leg level (before grouping) so we can target a
+                # specific LEAPS/short pair when multiple coexist on the same symbol.
+                filtered_normalized = filter_normalized_by_legs(normalized, legs_set)
+                all_positions = identify_positions(filtered_normalized)
+            elif symbols:
                 sym_set = {s.upper() for s in symbols}
                 all_positions = [p for p in unfiltered_positions if p["symbol"].upper() in sym_set]
             else:
@@ -719,6 +797,7 @@ async def get_stop_loss_data(
                     "forced": forced,
                     "accounts": accounts,
                     "symbols_filter": [s.upper() for s in symbols] if symbols else None,
+                    "legs_filter": legs if legs else None,
                     "all_conditional_orders": all_conditional_orders,
                     "orphan_orders": orphan_orders,
                     "alert_soon": [],
@@ -736,58 +815,38 @@ async def get_stop_loss_data(
             live = is_trading_now()
 
             option_positions = [p for p in all_positions if p["type"] in ("pmcc", "leaps")]
-            if live:
-                from trading_skills.broker.pmcc_advisor import _fetch_single_option_quote
+            pmcc_positions = [p for p in all_positions if p["type"] == "pmcc"]
 
-                phase1_tasks = [fetch_spot_prices(ib, unique_symbols)]
-                for pos in option_positions:
-                    phase1_tasks.append(
-                        _fetch_single_option_quote(
-                            ib, pos["symbol"], pos["leaps"]["strike"], pos["leaps"]["expiry"], "C"
-                        )
-                    )
-                # Also fetch short quotes for PMCC positions
-                pmcc_positions = [p for p in all_positions if p["type"] == "pmcc"]
-                short_quote_tasks = []
-                for pos in pmcc_positions:
-                    for short in pos["shorts"]:
-                        short_quote_tasks.append(
-                            _fetch_single_option_quote(
-                                ib, pos["symbol"], short["strike"], short["expiry"], "C"
-                            )
-                        )
+            # Option quotes always come from IB: after hours IB still returns the
+            # session's last trade, while yfinance can return stale prices from
+            # earlier in the day that don't reflect today's market move.
+            from trading_skills.broker.pmcc_advisor import _fetch_single_option_quote
 
-                results = await asyncio.gather(*phase1_tasks, *short_quote_tasks)
-                spot_prices: dict[str, float] = results[0]
-                leaps_quotes = list(results[1 : 1 + len(option_positions)])
-                short_quotes_flat = list(results[1 + len(option_positions) :])
-            else:
-                from trading_skills.broker.pmcc_advisor import (
-                    _fetch_yf_option_quote,
-                    _fetch_yf_spot_prices,
+            leaps_quote_tasks = [
+                _fetch_single_option_quote(
+                    ib, pos["symbol"], pos["leaps"]["strike"], pos["leaps"]["expiry"], "C"
                 )
+                for pos in option_positions
+            ]
+            short_quote_tasks = [
+                _fetch_single_option_quote(ib, pos["symbol"], short["strike"], short["expiry"], "C")
+                for pos in pmcc_positions
+                for short in pos["shorts"]
+            ]
 
-                phase1_tasks = [_fetch_yf_spot_prices(unique_symbols)]
-                for pos in option_positions:
-                    phase1_tasks.append(
-                        _fetch_yf_option_quote(
-                            pos["symbol"], pos["leaps"]["expiry"], pos["leaps"]["strike"], "C"
-                        )
-                    )
-                pmcc_positions = [p for p in all_positions if p["type"] == "pmcc"]
-                short_quote_tasks = []
-                for pos in pmcc_positions:
-                    for short in pos["shorts"]:
-                        short_quote_tasks.append(
-                            _fetch_yf_option_quote(
-                                pos["symbol"], short["expiry"], short["strike"], "C"
-                            )
-                        )
+            # Spot: IB while live, yfinance fallback when market is closed and IB
+            # bid/ask are unavailable.
+            if live:
+                spot_task = fetch_spot_prices(ib, unique_symbols)
+            else:
+                from trading_skills.broker.pmcc_advisor import _fetch_yf_spot_prices
 
-                results = await asyncio.gather(*phase1_tasks, *short_quote_tasks)
-                spot_prices: dict[str, float] = results[0]
-                leaps_quotes = list(results[1 : 1 + len(option_positions)])
-                short_quotes_flat = list(results[1 + len(option_positions) :])
+                spot_task = _fetch_yf_spot_prices(unique_symbols)
+
+            results = await asyncio.gather(spot_task, *leaps_quote_tasks, *short_quote_tasks)
+            spot_prices: dict[str, float] = results[0]
+            leaps_quotes = list(results[1 : 1 + len(option_positions)])
+            short_quotes_flat = list(results[1 + len(option_positions) :])
 
             data_delay = "real-time" if live else "stalled - using last price"
             for q in leaps_quotes:
@@ -909,6 +968,7 @@ async def get_stop_loss_data(
                 "short_near_strike_pct": short_near_strike_pct,
                 "accounts": accounts,
                 "symbols_filter": [s.upper() for s in symbols] if symbols else None,
+                "legs_filter": legs if legs else None,
                 "all_conditional_orders": all_conditional_orders,
                 "orphan_orders": orphan_orders,
                 "alert_soon": alert_soon_symbols,
