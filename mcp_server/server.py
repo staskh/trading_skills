@@ -787,7 +787,7 @@ async def ib_stop_loss(
 
 
 @mcp.tool()
-async def ib_trades(
+async def ib_trades_history(
     port: int = 7496,
     account: str | None = None,
     symbol: str | None = None,

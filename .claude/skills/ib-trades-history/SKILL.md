@@ -1,10 +1,10 @@
 ---
-name: ib-trades
+name: ib-trades-history
 description: Fetch trade executions from Interactive Brokers filtered by account, date range, or symbol. Supports live API (~7 days history) and FlexReport (full history). Use when user asks about their trades, executions, or transaction history. Requires TWS or IB Gateway running locally.
 dependencies: ["trading-skills"]
 ---
 
-# IB Trades
+# IB Trades History
 
 Fetch trade executions from Interactive Brokers.
 
