@@ -1055,32 +1055,64 @@ class TestExecutePositionStop:
         )
         assert result["ok"] is False
 
-    def test_cancels_all_symbol_orders_before_placing_new(self):
-        # Any existing conditional order for the symbol (manual or SL_) must be
-        # cancelled before placing the new SL_ order, not just the exact-ref match.
+    def test_cancels_only_matching_sl_fall_order_in_same_account(self):
+        # Regression: pre-cancel must match by order_ref AND account, not by
+        # symbol. Otherwise SL_ orders on the same underlying in OTHER accounts
+        # are cancelled when placing a stop in one account, and manual
+        # conditional orders are wiped too.
         mock_ib = MagicMock()
+        matching_trade = MagicMock()
+        matching_trade.order.orderId = 78
+        other_account_trade = MagicMock()
+        other_account_trade.order.orderId = 79
         manual_trade = MagicMock()
         manual_trade.order.orderId = 77
-        sl_trade = MagicMock()
-        sl_trade.order.orderId = 78
-        mock_ib.openTrades.return_value = [manual_trade, sl_trade]
+        different_key_trade = MagicMock()
+        different_key_trade.order.orderId = 80
+        mock_ib.openTrades.return_value = [
+            manual_trade,
+            matching_trade,
+            other_account_trade,
+            different_key_trade,
+        ]
 
         open_orders = [
-            # Manual order for same symbol (empty order_ref)
+            # Manual conditional order on same symbol/account — must NOT be cancelled
             {
                 "order_id": 77,
                 "order_ref": "",
+                "account": "U_A",
                 "symbol": "NVDA",
                 "conditions": [{"price": 1000.0, "is_more": True}],
             },
-            # Stale SL_ order for same symbol with different key
+            # The SL_FALL_ we're about to replace — same ref, same account — MUST be cancelled
             {
                 "order_id": 78,
+                "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U_A",
+                "symbol": "NVDA",
+                "conditions": [{"price": 18.0, "is_more": False}],
+            },
+            # Same SL_FALL_ key but DIFFERENT account — must NOT be cancelled
+            {
+                "order_id": 79,
+                "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U_B",
+                "symbol": "NVDA",
+                "conditions": [{"price": 19.0, "is_more": False}],
+            },
+            # Different SL_FALL_ key (different LEAPS) in same account — must NOT be cancelled
+            {
+                "order_id": 80,
                 "order_ref": "SL_FALL_NVDA_190.0_20270115",
+                "account": "U_A",
                 "symbol": "NVDA",
                 "conditions": [{"price": 10.0, "is_more": False}],
             },
         ]
+
+        analysis = self._pmcc_analysis("place_new")
+        analysis["account"] = "U_A"
 
         expected = {"ok": True, "order_id": 99, "order_ref": "SL_FALL_NVDA_200.0_20270115"}
         with patch(
@@ -1090,17 +1122,15 @@ class TestExecutePositionStop:
             asyncio.run(
                 _execute_position_stop(
                     mock_ib,
-                    self._pmcc_analysis("place_new"),
+                    analysis,
                     leaps_con_id=111,
                     stock_con_id=None,
                     open_orders=open_orders,
                 )
             )
 
-        # Both orders for the symbol must be cancelled
-        cancelled_orders = [call.args[0] for call in mock_ib.cancelOrder.call_args_list]
-        cancelled_ids = {o.orderId for o in cancelled_orders}
-        assert cancelled_ids == {77, 78}
+        cancelled_ids = {call.args[0].orderId for call in mock_ib.cancelOrder.call_args_list}
+        assert cancelled_ids == {78}
 
 
 # ---------------------------------------------------------------------------

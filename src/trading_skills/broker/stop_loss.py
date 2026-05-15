@@ -600,14 +600,22 @@ async def _execute_position_stop(
         return {"symbol": symbol, "skipped": True, "reason": action}
 
     order_ref = f"{_SL_FALL_PREFIX}{_sl_fall_key(analysis)}"
+    position_account = analysis.get("account") or ""
 
     if open_orders:
         trades_by_id = {t.order.orderId: t for t in ib.openTrades()}
         for o in open_orders:
-            if o.get("symbol") == symbol and o.get("conditions"):
-                oid = o.get("order_id")
-                if oid and oid in trades_by_id:
-                    ib.cancelOrder(trades_by_id[oid].order)
+            # Only cancel the prior SL_FALL_ order that we'd be replacing: same
+            # order_ref AND same account. Symbol-only matching cancels orders on
+            # the same underlying in *other* accounts, and matching any
+            # conditional order would wipe manual orders too.
+            if o.get("order_ref") != order_ref:
+                continue
+            if (o.get("account") or "") != position_account:
+                continue
+            oid = o.get("order_id")
+            if oid and oid in trades_by_id:
+                ib.cancelOrder(trades_by_id[oid].order)
 
     if ptype == "pmcc":
         if not leaps_con_id:
@@ -698,7 +706,10 @@ async def get_stop_loss_data(
             # incorrectly flagged as orphans and cancelled in execute mode (issue #37).
             account_scoped_orders = filter_orders_by_account(open_orders, accounts)
             orphan_orders = detect_orphan_orders(account_scoped_orders, unfiltered_positions)
-            existing_stops = _parse_existing_stops(open_orders)
+            # Existing-stop lookup must also be account-scoped: a SL_FALL_ on the
+            # same {symbol, strike, expiry} in a different account is not "our"
+            # existing stop and would otherwise leak its price into stop_action.
+            existing_stops = _parse_existing_stops(account_scoped_orders)
 
             if not all_positions:
                 return {
