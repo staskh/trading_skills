@@ -815,7 +815,7 @@ async def ib_trades_history(
     return await get_trades(
         port=port,
         account=account,
-        all_accounts=True,
+        all_accounts=(account is None),
         symbol=symbol.upper() if symbol else None,
         start_date=start_date,
         end_date=end_date,
