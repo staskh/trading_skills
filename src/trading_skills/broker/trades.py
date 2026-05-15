@@ -2,16 +2,59 @@
 # ABOUTME: Supports live API, FlexReport web service, and local FlexReport XML files.
 
 import asyncio
+import json
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-import requests
 from ib_async import ExecutionFilter
 
 from trading_skills.broker.connection import CLIENT_IDS, ib_connection
+
+
+class _UrllibResponse:
+    def __init__(self, status_code: int, content: bytes, headers=None):
+        self.status_code = status_code
+        self.content = content
+        self.headers = headers or {}
+        self.text = content.decode("utf-8")
+        self.ok = 200 <= status_code < 400
+
+    def raise_for_status(self) -> None:
+        if not self.ok:
+            raise urllib.error.HTTPError(
+                url="",
+                code=self.status_code,
+                msg=f"HTTP request failed with status {self.status_code}",
+                hdrs=self.headers,
+                fp=None,
+            )
+
+    def json(self):
+        return json.loads(self.text)
+
+
+class _UrllibRequestsCompat:
+    @staticmethod
+    def get(url: str, params: dict | None = None, timeout: float | None = None) -> _UrllibResponse:
+        if params:
+            query = urllib.parse.urlencode(params, doseq=True)
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}{query}"
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return _UrllibResponse(
+                status_code=response.getcode(),
+                content=response.read(),
+                headers=response.headers,
+            )
+
+
+requests = _UrllibRequestsCompat()
 
 
 async def get_trades(
