@@ -738,15 +738,16 @@ async def get_stop_loss_data(
 ) -> dict:
     """Analyze positions and manage downside stop-loss orders.
 
-    dry_run=True (default): analyze and report; no orders placed, no IB connection.
+    dry_run=True (default): analyze and report; no orders placed (still connects to IB
+        to fetch positions/quotes).
     dry_run=False (--execute): cancel orphan orders, place SL_ conditional orders.
     forced=True: basis = current_mid_price (can lower existing stops).
     legs: list of SYMBOL:STRIKE[C|P]:EXPIRY specs. Narrows analysis to those
     option legs only (takes precedence over ``symbols``). Orphan detection still
     runs against the full position set so unrelated SL_ orders aren't cancelled.
     """
-    legs_set = parse_legs_spec(legs)
     try:
+        legs_set = parse_legs_spec(legs)
         async with ib_connection(port, CLIENT_IDS.get("stop_loss", 14)) as ib:
             ib.reqMarketDataType(4)
             await asyncio.sleep(2)
@@ -979,6 +980,12 @@ async def get_stop_loss_data(
                 output["order_results"] = order_results
             return output
 
+    except ValueError as e:
+        return {
+            "generated_at": generated_at_str(),
+            "data_delay": "unknown",
+            "error": f"Invalid --legs spec: {e}",
+        }
     except ConnectionError as e:
         return {
             "generated_at": generated_at_str(),

@@ -287,7 +287,7 @@ async def _fetch_via_flex(
     the results are merged and deduplicated by tradeID.
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         # Fetch all queries (could be parallelized, but IBKR rate-limits)
         raw_trades = []
