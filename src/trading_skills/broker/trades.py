@@ -89,6 +89,9 @@ async def get_trades(
     if not end_date:
         end_date = today.strftime("%Y-%m-%d")
 
+    if symbol:
+        symbol = symbol.upper()
+
     if files:
         return _fetch_from_files(
             files=files,
@@ -143,7 +146,18 @@ def _fetch_from_files(
                 "connected": False,
                 "error": f"File not found: {file_path}",
             }
-        trades = _parse_flex_xml(path)
+        try:
+            trades = _parse_flex_xml(path)
+        except ET.ParseError as e:
+            return {
+                "connected": False,
+                "error": f"Malformed FlexReport XML in {file_path}: {e}",
+            }
+        except OSError as e:
+            return {
+                "connected": False,
+                "error": f"Could not read {file_path}: {e}",
+            }
         raw_trades.extend(trades)
         loaded_files.append(str(path.name))
 
@@ -164,7 +178,7 @@ def _fetch_from_files(
     all_executions = _filter_by_date(all_executions, start_date, end_date)
 
     if symbol:
-        all_executions = [e for e in all_executions if e["symbol"] == symbol.upper()]
+        all_executions = [e for e in all_executions if e["symbol"] == symbol]
 
     if account:
         all_executions = [e for e in all_executions if e["account"] == account]
@@ -319,7 +333,7 @@ async def _fetch_via_flex(
         all_executions = _filter_by_date(all_executions, start_date, end_date)
 
         if symbol:
-            all_executions = [e for e in all_executions if e["symbol"] == symbol.upper()]
+            all_executions = [e for e in all_executions if e["symbol"] == symbol]
 
         if account:
             all_executions = [e for e in all_executions if e["account"] == account]

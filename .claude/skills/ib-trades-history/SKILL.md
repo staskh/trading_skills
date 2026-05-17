@@ -22,25 +22,25 @@ For full trade history beyond ~7 days, the user needs a Flex Web Service token a
 
 ```bash
 # Recent trades (last ~7 days via API)
-uv run python scripts/trades.py --all-accounts
+uv run python .claude/skills/ib-trades-history/scripts/trades.py --all-accounts
 
 # Filter by symbol
-uv run python scripts/trades.py --all-accounts --symbol AAPL
+uv run python .claude/skills/ib-trades-history/scripts/trades.py --all-accounts --symbol AAPL
 
 # Full history via FlexReport
-uv run python scripts/trades.py --all-accounts --flex-token YOUR_TOKEN --flex-query-id YOUR_QUERY_ID
+uv run python .claude/skills/ib-trades-history/scripts/trades.py --all-accounts --flex-token YOUR_TOKEN --flex-query-id YOUR_QUERY_ID
 
 # Custom date range (FlexReport)
-uv run python scripts/trades.py --all-accounts --flex-token TOKEN --flex-query-id QID --start-date 2025-01-01 --end-date 2025-12-31
+uv run python .claude/skills/ib-trades-history/scripts/trades.py --all-accounts --flex-token TOKEN --flex-query-id QID --start-date 2025-01-01 --end-date 2025-12-31
 
 # Multiple queries (e.g., one per year to exceed 365-day limit)
-uv run python scripts/trades.py --all-accounts --flex-token TOKEN --flex-query-id QID_2025 --flex-query-id QID_2026 --start-date 2025-01-01 --end-date 2026-12-31
+uv run python .claude/skills/ib-trades-history/scripts/trades.py --all-accounts --flex-token TOKEN --flex-query-id QID_2025 --flex-query-id QID_2026 --start-date 2025-01-01 --end-date 2026-12-31
 
 # From local FlexReport XML files (no TWS/Gateway needed)
-uv run python scripts/trades.py --file trades_2024.xml --file trades_2025.xml --symbol TSLA
+uv run python .claude/skills/ib-trades-history/scripts/trades.py --file trades_2024.xml --file trades_2025.xml --symbol TSLA
 
 # Mix files with date filtering
-uv run python scripts/trades.py --file exports/2025.xml --start-date 2025-06-01 --end-date 2025-12-31
+uv run python .claude/skills/ib-trades-history/scripts/trades.py --file exports/2025.xml --start-date 2025-06-01 --end-date 2025-12-31
 ```
 
 ## Arguments

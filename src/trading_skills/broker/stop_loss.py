@@ -410,8 +410,16 @@ def detect_orphan_orders(
     open_orders: list[dict],
     active_positions: list[dict],
 ) -> list[dict]:
-    """Find SL_FALL_ orders with no matching active position."""
-    active_keys: set[str] = {_sl_fall_key(p) for p in active_positions}
+    """Find SL_FALL_ orders with no matching active position.
+
+    Matching is account-aware: an order in account A only matches a position in
+    account A, even when the same {symbol, strike, expiry} exists in another
+    account. Without this, a true orphan in one account would be hidden by a
+    lookalike position in another when multiple accounts are queried at once.
+    """
+    active_keys: set[tuple[str, str]] = {
+        (p.get("account", "") or "", _sl_fall_key(p)) for p in active_positions
+    }
 
     orphans = []
     for order in open_orders:
@@ -419,7 +427,8 @@ def detect_orphan_orders(
         if not ref.startswith(_SL_FALL_PREFIX):
             continue
         key = ref[len(_SL_FALL_PREFIX) :]
-        if key not in active_keys:
+        account = order.get("account", "") or ""
+        if (account, key) not in active_keys:
             orphans.append(order)
     return orphans
 
@@ -482,24 +491,29 @@ async def _fetch_open_orders(ib) -> list[dict]:
     return result
 
 
-def _parse_existing_stops(open_orders: list[dict]) -> dict[str, float]:
-    """Extract existing SL_FALL_ stop prices keyed by position key.
+def _parse_existing_stops(open_orders: list[dict]) -> dict[tuple[str, str], float]:
+    """Extract existing SL_FALL_ stop prices keyed by (account, position key).
 
-    Returns {position_key: highest_stop_price}.
+    Returns {(account, position_key): highest_stop_price}.
     A higher stop price is more protective; keep the max if duplicates exist.
+    Account is part of the key so that a SL_FALL_ on the same {symbol, strike,
+    expiry} in a different account does not leak its stop price into this
+    account's analysis when multiple accounts are queried at once.
     """
-    stops: dict[str, float] = {}
+    stops: dict[tuple[str, str], float] = {}
     for order in open_orders:
         ref = order.get("order_ref", "")
         if not ref.startswith(_SL_FALL_PREFIX):
             continue
         key = ref[len(_SL_FALL_PREFIX) :]
+        account = order.get("account", "") or ""
         conditions = order.get("conditions", [])
         if not conditions:
             continue
         price = conditions[0]["price"]
-        if key not in stops or price > stops[key]:
-            stops[key] = price
+        composite = (account, key)
+        if composite not in stops or price > stops[composite]:
+            stops[composite] = price
     return stops
 
 
@@ -927,7 +941,9 @@ async def get_stop_loss_data(
                     current_mid = spot
                     short_mids = []
 
-                existing_stop = existing_stops.get(_sl_fall_key(pos))
+                existing_stop = existing_stops.get(
+                    (pos.get("account", "") or "", _sl_fall_key(pos))
+                )
 
                 analysis = build_position_analysis(
                     position=pos,

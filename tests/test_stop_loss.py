@@ -353,17 +353,18 @@ def test_build_forced_uses_current_mid_as_basis():
 # ---------------------------------------------------------------------------
 
 
-def _sl_order(order_ref, symbol="NVDA", order_id=1):
+def _sl_order(order_ref, symbol="NVDA", order_id=1, account="U123"):
     return {
         "order_ref": order_ref,
         "symbol": symbol,
         "order_id": order_id,
+        "account": account,
         "conditions": [{"price": 20.0, "is_more": False}],
     }
 
 
 def test_detect_orphan_no_orphans():
-    positions = [_pmcc_pos()]  # NVDA 200.0 20270115
+    positions = [_pmcc_pos()]  # NVDA 200.0 20270115, account U123
     orders = [_sl_order("SL_FALL_NVDA_200.0_20270115")]
     assert detect_orphan_orders(orders, positions) == []
 
@@ -383,7 +384,7 @@ def test_detect_orphan_ignores_non_sl_orders():
 
 
 def test_detect_orphan_stock_position():
-    positions = [_stock_pos()]  # AAPL stock
+    positions = [_stock_pos()]  # AAPL stock, account U123
     orders = [
         _sl_order("SL_FALL_AAPL_STK", symbol="AAPL"),
         _sl_order("SL_FALL_NVDA_200.0_20270115", symbol="NVDA"),  # orphan
@@ -391,6 +392,19 @@ def test_detect_orphan_stock_position():
     orphans = detect_orphan_orders(orders, positions)
     assert len(orphans) == 1
     assert orphans[0]["order_ref"] == "SL_FALL_NVDA_200.0_20270115"
+
+
+def test_detect_orphan_account_aware_when_same_key_in_two_accounts():
+    """An order in account A must not be matched by a position in account B,
+    even if the {symbol, strike, expiry} key is identical. Otherwise true
+    orphans in A would be hidden by lookalike positions in B when running
+    without --account."""
+    positions = [_pmcc_pos(account="U2")]  # NVDA 200.0 20270115 in U2 only
+    orders = [_sl_order("SL_FALL_NVDA_200.0_20270115", account="U1")]  # orphan in U1
+    orphans = detect_orphan_orders(orders, positions)
+    assert len(orphans) == 1
+    assert orphans[0]["order_ref"] == "SL_FALL_NVDA_200.0_20270115"
+    assert orphans[0]["account"] == "U1"
 
 
 # ---------------------------------------------------------------------------
@@ -584,25 +598,50 @@ class TestParseExistingStops:
         orders = [
             {
                 "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U1",
                 "conditions": [{"price": 22.0, "is_more": False}],
             }
         ]
         result = _parse_existing_stops(orders)
-        assert result == {"NVDA_200.0_20270115": 22.0}
+        assert result == {("U1", "NVDA_200.0_20270115"): 22.0}
 
     def test_keeps_max_when_duplicate_keys(self):
         orders = [
             {
                 "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U1",
                 "conditions": [{"price": 20.0, "is_more": False}],
             },
             {
                 "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U1",
                 "conditions": [{"price": 25.0, "is_more": False}],
             },
         ]
         result = _parse_existing_stops(orders)
-        assert result["NVDA_200.0_20270115"] == 25.0
+        assert result[("U1", "NVDA_200.0_20270115")] == 25.0
+
+    def test_same_key_different_accounts_kept_separate(self):
+        """A SL_FALL_ on the same {symbol, strike, expiry} in two accounts
+        must produce two distinct entries — otherwise account B's stop price
+        could leak into account A's analysis when querying both at once."""
+        orders = [
+            {
+                "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U1",
+                "conditions": [{"price": 20.0, "is_more": False}],
+            },
+            {
+                "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U2",
+                "conditions": [{"price": 30.0, "is_more": False}],
+            },
+        ]
+        result = _parse_existing_stops(orders)
+        assert result == {
+            ("U1", "NVDA_200.0_20270115"): 20.0,
+            ("U2", "NVDA_200.0_20270115"): 30.0,
+        }
 
     def test_ignores_non_sl_fall_orders(self):
         orders = [{"order_ref": "MANUAL_ORDER", "conditions": [{"price": 100.0, "is_more": False}]}]

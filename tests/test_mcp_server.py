@@ -2,6 +2,9 @@
 # ABOUTME: Tests for MCP server tools.
 # ABOUTME: Verifies all trading tools are accessible and return expected data.
 
+import asyncio
+from unittest.mock import AsyncMock, patch
+
 
 class TestMCPServerImport:
     """Test that MCP server imports correctly."""
@@ -215,6 +218,24 @@ class TestIBTools:
 
         result = asyncio.run(ib_collar("AAPL", port=7497))
         assert "error" in result
+
+    def test_ib_trades_history_forwards_flex_query_id_list(self):
+        """A list of flex_query_ids must be forwarded unchanged so MCP clients
+        can span more than 365 days (FlexReport's per-query limit) in one call.
+        Previously the parameter was typed str | None and dropped the list form."""
+        from mcp_server.server import ib_trades_history
+
+        ids = ["Q_2024", "Q_2025"]
+        with patch(
+            "mcp_server.server.get_trades", new=AsyncMock(return_value={"connected": True})
+        ) as mock:
+            asyncio.run(
+                ib_trades_history(
+                    flex_token="TOK",
+                    flex_query_id=ids,
+                )
+            )
+            assert mock.call_args.kwargs["flex_query_id"] == ids
 
 
 class TestReportTools:

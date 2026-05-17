@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from trading_skills.broker.trades import (
     _aggregate_executions,
+    _fetch_from_files,
     _filter_by_date,
     _normalize_fill,
     get_trades,
@@ -299,6 +300,25 @@ class TestGetTradesAPI:
             assert result["connected"] is True
             assert result["filters"]["symbol"] == "AAPL"
 
+    def test_lowercase_symbol_normalized_to_upper_on_api_path(self):
+        """Lowercase --symbol must be normalized before it reaches
+        ExecutionFilter.symbol, otherwise IB returns no matches (IB symbols are
+        uppercase). The filters echo must report the normalized value too, so
+        result shape is consistent regardless of input casing or source."""
+        with patch("trading_skills.broker.connection.IB") as MockIB:
+            mock_ib = MagicMock()
+            mock_ib.connectAsync = AsyncMock()
+            mock_ib.managedAccounts.return_value = ["U123456"]
+            mock_ib.disconnect = MagicMock()
+            mock_ib.reqExecutionsAsync = AsyncMock(return_value=[])
+            MockIB.return_value = mock_ib
+
+            result = asyncio.run(get_trades(port=7497, symbol="aapl"))
+            assert result["filters"]["symbol"] == "AAPL"
+            # ExecutionFilter must receive the uppercased symbol.
+            exec_filter = mock_ib.reqExecutionsAsync.call_args.args[0]
+            assert exec_filter.symbol == "AAPL"
+
     def test_date_filtering(self):
         with patch("trading_skills.broker.connection.IB") as MockIB:
             mock_ib = MagicMock()
@@ -426,3 +446,36 @@ class TestGetTradesFlex:
                     assert result["connected"] is True
                     assert result["source"] == "FlexReport"
                     assert result["execution_count"] == 1
+
+
+class TestFetchFromFiles:
+    """Tests for _fetch_from_files error handling on bad XML inputs."""
+
+    def test_missing_file_returns_structured_error(self, tmp_path):
+        missing = tmp_path / "nope.xml"
+        result = _fetch_from_files(
+            files=[str(missing)],
+            account=None,
+            all_accounts=False,
+            symbol=None,
+            start_date="2026-01-01",
+            end_date="2026-12-31",
+        )
+        assert result["connected"] is False
+        assert "File not found" in result["error"]
+        assert str(missing) in result["error"]
+
+    def test_malformed_xml_returns_structured_error(self, tmp_path):
+        bad = tmp_path / "bad.xml"
+        bad.write_text("<FlexQueryResponse><Trade tradeID='1'", encoding="utf-8")
+        result = _fetch_from_files(
+            files=[str(bad)],
+            account=None,
+            all_accounts=False,
+            symbol=None,
+            start_date="2026-01-01",
+            end_date="2026-12-31",
+        )
+        assert result["connected"] is False
+        assert "Malformed FlexReport XML" in result["error"]
+        assert str(bad) in result["error"]

@@ -794,7 +794,7 @@ async def ib_trades_history(
     start_date: str | None = None,
     end_date: str | None = None,
     flex_token: str | None = None,
-    flex_query_id: str | None = None,
+    flex_query_id: str | list[str] | None = None,
 ) -> dict:
     """Fetch trade executions from Interactive Brokers.
 
@@ -810,7 +810,9 @@ async def ib_trades_history(
         start_date: Start date in YYYY-MM-DD format (default: Jan 1 of current year)
         end_date: End date in YYYY-MM-DD format (default: today)
         flex_token: FlexReport token for extended history beyond ~7 days
-        flex_query_id: FlexReport query ID (required with flex_token)
+        flex_query_id: FlexReport query ID (required with flex_token). Pass a list
+            of IDs to merge and deduplicate results from multiple queries — useful
+            for spans exceeding the FlexReport 365-day per-query limit.
     """
     return await get_trades(
         port=port,
