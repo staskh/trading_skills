@@ -500,10 +500,12 @@ class TestFindStrikeByDeltaOffHours:
             spot, strike, expiry_days / 365, 0.05, iv_from_last, "call"
         )
 
+        wrong_iv_delta = black_scholes_delta(
+            spot, strike, expiry_days / 365, 0.05, wrong_avg_iv, "call"
+        )
         assert abs(option["calculated_delta"] - expected_delta) < 0.02, (
             f"Delta {option['calculated_delta']:.3f} should be close to lastPrice-derived "
-            f"{expected_delta:.3f}, not avg_iv-derived "
-            f"{black_scholes_delta(spot, strike, expiry_days / 365, 0.05, wrong_avg_iv, 'call'):.3f}"
+            f"{expected_delta:.3f}, not avg_iv-derived {wrong_iv_delta:.3f}"
         )
 
 
