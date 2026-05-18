@@ -7,7 +7,11 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 
-from trading_skills.black_scholes import black_scholes_delta, black_scholes_price
+from trading_skills.black_scholes import (
+    black_scholes_delta,
+    black_scholes_price,
+    implied_volatility,
+)
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.technicals import compute_raw_indicators
 from trading_skills.utils import get_current_price
@@ -41,7 +45,10 @@ def format_scan_results(results: list[dict]) -> dict:
 def find_strike_by_delta(
     chain, current_price, target_delta, expiry_days, iv, r=0.05, min_strike=None, max_strike=None
 ):
-    """Find strike closest to target delta with optional strike constraints."""
+    """Find strike closest to target delta with optional strike constraints.
+
+    Falls back to lastPrice when bid=ask=0 (e.g. off-market hours).
+    """
     T = expiry_days / 365
     best_strike = None
     best_delta_diff = float("inf")
@@ -50,7 +57,19 @@ def find_strike_by_delta(
     for _, row in chain.iterrows():
         strike = row["strike"]
 
-        if pd.isna(row.get("bid")) or row.get("bid", 0) <= 0:
+        bid = row.get("bid", 0) or 0
+        ask = row.get("ask", 0) or 0
+        last = row.get("lastPrice", 0) or 0
+
+        if pd.isna(bid):
+            bid = 0.0
+        if pd.isna(ask):
+            ask = 0.0
+        if pd.isna(last):
+            last = 0.0
+
+        # Skip if no price reference at all
+        if bid <= 0 and ask <= 0 and last <= 0:
             continue
 
         if min_strike is not None and strike < min_strike:
@@ -58,8 +77,14 @@ def find_strike_by_delta(
         if max_strike is not None and strike > max_strike:
             continue
 
+        # Use bid/ask mid when available, else fall back to lastPrice
+        if bid > 0 or ask > 0:
+            effective_mid = (bid + ask) / 2
+        else:
+            effective_mid = last
+
         option_iv = row.get("impliedVolatility", iv)
-        if pd.isna(option_iv) or option_iv <= 0:
+        if pd.isna(option_iv) or option_iv <= 0 or option_iv < 0.01:
             option_iv = iv
 
         delta = black_scholes_delta(current_price, strike, T, r, option_iv, "call")
@@ -70,8 +95,52 @@ def find_strike_by_delta(
             best_strike = strike
             best_option = row.copy()
             best_option["calculated_delta"] = delta
+            best_option["effective_mid"] = effective_mid
 
     return best_strike, best_option
+
+
+def compute_atm_iv(
+    atm_calls: pd.DataFrame, current_price: float, expiry_date: str, r: float = 0.05
+) -> float:
+    """Compute average ATM implied volatility from option chain data.
+
+    If yfinance's impliedVolatility is unreliable (< 1%), falls back to computing
+    IV from lastPrice using the Black-Scholes solver, with T measured from
+    lastTradeDate to expiry.
+
+    Returns 0.30 as a default when no valid IV can be computed.
+    """
+    if atm_calls.empty:
+        return 0.30
+
+    raw_iv = atm_calls["impliedVolatility"].mean()
+    if not pd.isna(raw_iv) and raw_iv >= 0.01:
+        return raw_iv
+
+    # Fallback: compute IV from lastPrice at lastTradeDate
+    expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d").date()
+    ivs = []
+
+    for _, row in atm_calls.iterrows():
+        last_price = row.get("lastPrice", 0) or 0
+        if pd.isna(last_price) or last_price <= 0:
+            continue
+
+        last_trade = row.get("lastTradeDate")
+        if last_trade is None or (hasattr(last_trade, "__bool__") and pd.isna(last_trade)):
+            continue
+
+        trade_date = last_trade.date() if hasattr(last_trade, "date") else last_trade
+        T = (expiry_dt - trade_date).days / 365
+        if T <= 0:
+            continue
+
+        iv = implied_volatility(last_price, current_price, row["strike"], T, r, "call")
+        if iv is not None and iv >= 0.01:
+            ivs.append(iv)
+
+    return sum(ivs) / len(ivs) if ivs else 0.30
 
 
 def compute_trend_score(price: float, raw: dict) -> tuple[float, dict]:
@@ -356,15 +425,12 @@ def analyze_pmcc(
         leaps_chain = ticker.option_chain(leaps_expiry)
         short_chain = ticker.option_chain(short_expiry)
 
-        # Estimate IV from ATM options
+        # Estimate IV from ATM options, with fallback to lastPrice-based IV
         atm_calls = leaps_chain.calls[
             (leaps_chain.calls["strike"] >= current_price * 0.95)
             & (leaps_chain.calls["strike"] <= current_price * 1.05)
         ]
-        if not atm_calls.empty:
-            avg_iv = atm_calls["impliedVolatility"].mean()
-        else:
-            avg_iv = 0.3
+        avg_iv = compute_atm_iv(atm_calls, current_price, leaps_expiry)
 
         # Find LEAPS call
         leaps_strike, leaps_option = find_strike_by_delta(
@@ -398,16 +464,22 @@ def analyze_pmcc(
                 "error": f"Could not find short strike > LEAPS strike ${leaps_strike}",
             }
 
-        # Calculate metrics
-        leaps_mid = (leaps_option["bid"] + leaps_option["ask"]) / 2
-        leaps_spread_pct = (
-            (leaps_option["ask"] - leaps_option["bid"]) / leaps_mid * 100 if leaps_mid > 0 else 100
-        )
+        # Calculate metrics — use effective_mid (falls back to lastPrice off-hours)
+        leaps_mid = leaps_option["effective_mid"]
+        leaps_bid = leaps_option.get("bid", 0) or 0
+        leaps_ask = leaps_option.get("ask", 0) or 0
+        if leaps_bid > 0 and leaps_ask > 0 and leaps_mid > 0:
+            leaps_spread_pct = (leaps_ask - leaps_bid) / leaps_mid * 100
+        else:
+            leaps_spread_pct = 100  # unknown spread when using lastPrice
 
-        short_mid = (short_option["bid"] + short_option["ask"]) / 2
-        short_spread_pct = (
-            (short_option["ask"] - short_option["bid"]) / short_mid * 100 if short_mid > 0 else 100
-        )
+        short_mid = short_option["effective_mid"]
+        short_bid = short_option.get("bid", 0) or 0
+        short_ask = short_option.get("ask", 0) or 0
+        if short_bid > 0 and short_ask > 0 and short_mid > 0:
+            short_spread_pct = (short_ask - short_bid) / short_mid * 100
+        else:
+            short_spread_pct = 100  # unknown spread when using lastPrice
 
         leaps_intrinsic = max(0, current_price - leaps_strike)
         leaps_extrinsic = leaps_mid - leaps_intrinsic
@@ -476,8 +548,8 @@ def analyze_pmcc(
                 "days": leaps_days,
                 "strike": leaps_strike,
                 "delta": round(actual_leaps_delta, 3),
-                "bid": round(leaps_option["bid"], 2),
-                "ask": round(leaps_option["ask"], 2),
+                "bid": round(leaps_bid, 2),
+                "ask": round(leaps_ask, 2),
                 "mid": round(leaps_mid, 2),
                 "intrinsic": round(leaps_intrinsic, 2),
                 "extrinsic": round(leaps_extrinsic, 2),
@@ -490,8 +562,8 @@ def analyze_pmcc(
                 "days": short_days,
                 "strike": short_strike,
                 "delta": round(actual_short_delta, 3),
-                "bid": round(short_option["bid"], 2),
-                "ask": round(short_option["ask"], 2),
+                "bid": round(short_bid, 2),
+                "ask": round(short_ask, 2),
                 "mid": round(short_mid, 2),
                 "spread_pct": round(short_spread_pct, 1),
                 "volume": int(short_option.get("volume", 0) or 0),

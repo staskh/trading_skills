@@ -4,12 +4,16 @@
 
 from datetime import date, timedelta
 
+import pandas as pd
+
 from trading_skills.black_scholes import black_scholes_price
 from trading_skills.scanner_pmcc import (
     analyze_pmcc,
+    compute_atm_iv,
     compute_base_score,
     compute_earnings_score,
     compute_trend_score,
+    find_strike_by_delta,
     format_scan_results,
 )
 
@@ -408,3 +412,99 @@ class TestFormatScanResults:
         assert output["count"] == 0
         assert output["results"] == []
         assert output["errors"] == []
+
+
+def _make_chain(strikes, bids, asks, last_prices, ivs, last_trade="2026-05-16"):
+    return pd.DataFrame(
+        {
+            "strike": strikes,
+            "bid": bids,
+            "ask": asks,
+            "lastPrice": last_prices,
+            "impliedVolatility": ivs,
+            "volume": [0] * len(strikes),
+            "openInterest": [100] * len(strikes),
+            "lastTradeDate": [pd.Timestamp(last_trade)] * len(strikes),
+        }
+    )
+
+
+class TestFindStrikeByDeltaOffHours:
+    """find_strike_by_delta must use lastPrice when bid=ask=0 (off-hours)."""
+
+    def test_finds_strike_when_only_last_price_available(self):
+        chain = _make_chain(
+            strikes=[80.0, 90.0, 100.0, 110.0, 120.0],
+            bids=[0.0] * 5,
+            asks=[0.0] * 5,
+            last_prices=[22.0, 14.0, 7.0, 2.5, 0.5],
+            ivs=[0.30] * 5,
+        )
+        strike, option = find_strike_by_delta(chain, 100.0, 0.80, 365, 0.30)
+        assert option is not None, "Should find a strike using lastPrice as fallback"
+
+    def test_returns_none_when_all_prices_zero(self):
+        chain = _make_chain(
+            strikes=[80.0, 90.0, 100.0, 110.0, 120.0],
+            bids=[0.0] * 5,
+            asks=[0.0] * 5,
+            last_prices=[0.0] * 5,
+            ivs=[0.30] * 5,
+        )
+        strike, option = find_strike_by_delta(chain, 100.0, 0.80, 365, 0.30)
+        assert option is None
+
+    def test_prefers_bid_ask_over_last_price(self):
+        """When both are available, bid/ask mid should take precedence."""
+        chain = _make_chain(
+            strikes=[85.0, 90.0],
+            bids=[14.0, 10.0],
+            asks=[15.0, 11.0],
+            last_prices=[5.0, 5.0],  # stale last price
+            ivs=[0.30, 0.30],
+        )
+        strike, option = find_strike_by_delta(chain, 100.0, 0.80, 365, 0.30)
+        assert option is not None
+        # mid should be from bid/ask, not lastPrice
+        assert option["effective_mid"] == (option["bid"] + option["ask"]) / 2
+
+
+class TestComputeAtmIv:
+    """compute_atm_iv must fall back to lastPrice-based IV when impliedVolatility is near zero."""
+
+    def test_returns_valid_iv_from_implied_volatility(self):
+        calls = _make_chain(
+            strikes=[95.0, 100.0, 105.0],
+            bids=[5.0, 2.5, 0.8],
+            asks=[5.5, 3.0, 1.2],
+            last_prices=[5.2, 2.7, 1.0],
+            ivs=[0.30, 0.28, 0.32],
+        )
+        iv = compute_atm_iv(calls, 100.0, "2027-05-18")
+        assert iv is not None
+        assert 0.25 <= iv <= 0.35
+
+    def test_falls_back_when_iv_near_zero(self):
+        """Near-zero impliedVolatility should trigger lastPrice-based recalculation."""
+        calls = _make_chain(
+            strikes=[95.0, 100.0, 105.0],
+            bids=[0.0, 0.0, 0.0],
+            asks=[0.0, 0.0, 0.0],
+            last_prices=[8.0, 5.0, 2.5],
+            ivs=[0.001, 0.001, 0.001],  # bad yfinance data
+            last_trade="2026-05-16",
+        )
+        iv = compute_atm_iv(calls, 100.0, "2027-05-18")
+        assert iv is not None
+        assert iv >= 0.01, f"Fallback IV should be meaningful, got {iv}"
+
+    def test_returns_default_when_no_last_price_either(self):
+        calls = _make_chain(
+            strikes=[95.0, 100.0, 105.0],
+            bids=[0.0, 0.0, 0.0],
+            asks=[0.0, 0.0, 0.0],
+            last_prices=[0.0, 0.0, 0.0],
+            ivs=[0.001, 0.001, 0.001],
+        )
+        iv = compute_atm_iv(calls, 100.0, "2027-05-18")
+        assert iv == 0.30  # default fallback
