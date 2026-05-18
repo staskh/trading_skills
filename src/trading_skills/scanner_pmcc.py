@@ -101,8 +101,14 @@ def find_strike_by_delta(
             if last > 0:
                 last_trade = row.get("lastTradeDate")
                 if last_trade is not None and not pd.isna(last_trade):
-                    trade_date = last_trade.date() if hasattr(last_trade, "date") else last_trade
-                    days_since_trade = (datetime.now().date() - trade_date).days
+                    trade_ts = pd.Timestamp(last_trade)
+                    if trade_ts.tzinfo is not None:
+                        trade_ts = trade_ts.tz_convert(_NY)
+                    else:
+                        trade_ts = trade_ts.tz_localize(_NY)
+                    trade_date = trade_ts.date()
+                    current_date = datetime.now(_NY).date()
+                    days_since_trade = (current_date - trade_date).days
                     T_for_iv = T + days_since_trade / 365
                     if T_for_iv > 0:
                         iv_from_last = implied_volatility(
