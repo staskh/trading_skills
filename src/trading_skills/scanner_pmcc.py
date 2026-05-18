@@ -19,6 +19,13 @@ from trading_skills.utils import get_current_price
 _NY = ZoneInfo("America/New_York")
 
 
+def _to_int(val, default=0) -> int:
+    """Convert option field to int, treating None and NaN as default."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return default
+    return int(val) if val else default
+
+
 def format_scan_results(results: list[dict]) -> dict:
     """Sort and wrap PMCC scan results into output dict.
 
@@ -511,11 +518,11 @@ def analyze_pmcc(
         max_profit = leaps_value_at_short_expiry + short_mid - leaps_mid
         roi_pct = (max_profit / leaps_mid * 100) if leaps_mid > 0 else 0
 
-        leaps_liquidity = (leaps_option.get("volume", 0) or 0) + (
-            leaps_option.get("openInterest", 0) or 0
+        leaps_liquidity = _to_int(leaps_option.get("volume")) + _to_int(
+            leaps_option.get("openInterest")
         )
-        short_liquidity = (short_option.get("volume", 0) or 0) + (
-            short_option.get("openInterest", 0) or 0
+        short_liquidity = _to_int(short_option.get("volume")) + _to_int(
+            short_option.get("openInterest")
         )
 
         actual_leaps_delta = leaps_option.get("calculated_delta", 0)
@@ -571,8 +578,8 @@ def analyze_pmcc(
                 "intrinsic": round(leaps_intrinsic, 2),
                 "extrinsic": round(leaps_extrinsic, 2),
                 "spread_pct": round(leaps_spread_pct, 1),
-                "volume": int(leaps_option.get("volume", 0) or 0),
-                "oi": int(leaps_option.get("openInterest", 0) or 0),
+                "volume": _to_int(leaps_option.get("volume")),
+                "oi": _to_int(leaps_option.get("openInterest")),
             },
             "short": {
                 "expiry": short_expiry,
@@ -583,8 +590,8 @@ def analyze_pmcc(
                 "ask": round(short_ask, 2),
                 "mid": round(short_mid, 2),
                 "spread_pct": round(short_spread_pct, 1),
-                "volume": int(short_option.get("volume", 0) or 0),
-                "oi": int(short_option.get("openInterest", 0) or 0),
+                "volume": _to_int(short_option.get("volume")),
+                "oi": _to_int(short_option.get("openInterest")),
             },
             "metrics": {
                 "net_debit": round(leaps_mid - short_mid, 2),

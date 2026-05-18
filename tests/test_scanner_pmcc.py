@@ -507,6 +507,74 @@ class TestFindStrikeByDeltaOffHours:
         )
 
 
+class TestNaNOptionData:
+    """analyze_pmcc must handle NaN volume/OI without crashing."""
+
+    def _make_mock_ticker(self):
+        from datetime import date, timedelta
+        from unittest.mock import MagicMock
+
+        today = date.today()
+        leaps_exp = (today + timedelta(days=300)).strftime("%Y-%m-%d")
+        short_exp = (today + timedelta(days=10)).strftime("%Y-%m-%d")
+
+        nan = float("nan")
+        leaps_calls = pd.DataFrame(
+            {
+                "strike": [100.0, 110.0, 120.0, 130.0, 140.0],
+                "bid": [50.0, 42.0, 35.0, 28.0, 20.0],
+                "ask": [52.0, 44.0, 37.0, 30.0, 22.0],
+                "lastPrice": [51.0, 43.0, 36.0, 29.0, 21.0],
+                "impliedVolatility": [0.30] * 5,
+                "volume": [nan] * 5,
+                "openInterest": [nan] * 5,
+                "lastTradeDate": [pd.Timestamp("2026-05-16")] * 5,
+            }
+        )
+        short_calls = pd.DataFrame(
+            {
+                "strike": [120.0, 125.0, 130.0, 135.0, 140.0],
+                "bid": [3.0, 1.5, 0.8, 0.4, 0.2],
+                "ask": [3.5, 2.0, 1.2, 0.8, 0.5],
+                "lastPrice": [3.2, 1.7, 1.0, 0.6, 0.3],
+                "impliedVolatility": [0.30] * 5,
+                "volume": [nan] * 5,
+                "openInterest": [nan] * 5,
+                "lastTradeDate": [pd.Timestamp("2026-05-16")] * 5,
+            }
+        )
+
+        mock = MagicMock()
+        mock.info = {"currentPrice": 150.0}
+        mock.options = [leaps_exp, short_exp]
+
+        chain_leaps = MagicMock()
+        chain_leaps.calls = leaps_calls
+        chain_short = MagicMock()
+        chain_short.calls = short_calls
+
+        def option_chain(exp):
+            return chain_leaps if exp == leaps_exp else chain_short
+
+        mock.option_chain = option_chain
+        mock.history = MagicMock(
+            return_value=pd.DataFrame(
+                {"Close": [145.0] * 90, "Volume": [1_000_000] * 90},
+                index=pd.date_range("2025-02-17", periods=90),
+            )
+        )
+        return mock
+
+    def test_nan_volume_oi_does_not_crash(self):
+        result = analyze_pmcc("TEST", ticker=self._make_mock_ticker())
+        assert result is not None
+        assert "pmcc_score" in result, f"Expected valid result, got error: {result.get('error')}"
+        assert result["leaps"]["volume"] == 0
+        assert result["leaps"]["oi"] == 0
+        assert result["short"]["volume"] == 0
+        assert result["short"]["oi"] == 0
+
+
 class TestComputeAtmIv:
     """compute_atm_iv must fall back to lastPrice-based IV when impliedVolatility is near zero."""
 
