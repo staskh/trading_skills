@@ -24,6 +24,17 @@ async def main():
         help="Analyze only these symbols (e.g. --symbols NVDA WMT)",
     )
     parser.add_argument(
+        "--legs",
+        type=str,
+        nargs="+",
+        default=None,
+        help=(
+            "Filter to specific option legs: SYMBOL:STRIKE[C|P]:EXPIRY "
+            "(e.g. --legs IBKR:70C:20270115 IBKR:100C:20260918). "
+            "Right defaults to C. Takes precedence over --symbols."
+        ),
+    )
+    parser.add_argument(
         "--stop-pct",
         type=float,
         default=40.0,
@@ -79,6 +90,7 @@ async def main():
         port=args.port,
         account=args.account,
         symbols=args.symbols,
+        legs=args.legs,
         stop_pct=args.stop_pct,
         short_near_strike_pct=args.short_near_strike_pct,
         price_mode=args.price_mode,

@@ -84,6 +84,7 @@ Group alerts by symbol. Types:
 | `--port` | 7496 | IB Gateway/TWS port |
 | `--account` | all | Specific account ID |
 | `--symbols` | all | Analyze only these symbols |
+| `--legs` | none | Specific option legs: `SYMBOL:STRIKE[C\|P]:EXPIRY` (e.g. `IBKR:70C:20270115 IBKR:100C:20260918`). Right defaults to `C`. Takes precedence over `--symbols`. Use when multiple PMCC/LEAPS coexist on the same symbol and only one pairing should get a stop. |
 | `--stop-pct` | 40 | Loss % that triggers exit |
 | `--short-near-strike-pct` | 5 | Near-strike alert threshold |
 | `--price-mode` | mid | Option pricing: `mid` or `last` |

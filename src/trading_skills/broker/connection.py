@@ -20,6 +20,7 @@ CLIENT_IDS = {
     "options_chain": 21,
     "roll": 30,
     "stop_loss": 14,
+    "trades": 40,
     "consolidate": 99,
 }
 

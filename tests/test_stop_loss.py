@@ -15,13 +15,16 @@ from trading_skills.broker.stop_loss import (
     _place_combo_stop_order,
     _place_simple_stop_order,
     build_position_analysis,
+    calc_pmcc_bag_qty,
     calc_short_premium_decay_pct,
     calc_stop_basis,
     calc_stop_price,
     detect_orphan_orders,
+    filter_normalized_by_legs,
     filter_orders_by_account,
     get_stop_loss_data,
     identify_positions,
+    parse_legs_spec,
     summarize_all_conditional_orders,
 )
 
@@ -350,17 +353,18 @@ def test_build_forced_uses_current_mid_as_basis():
 # ---------------------------------------------------------------------------
 
 
-def _sl_order(order_ref, symbol="NVDA", order_id=1):
+def _sl_order(order_ref, symbol="NVDA", order_id=1, account="U123"):
     return {
         "order_ref": order_ref,
         "symbol": symbol,
         "order_id": order_id,
+        "account": account,
         "conditions": [{"price": 20.0, "is_more": False}],
     }
 
 
 def test_detect_orphan_no_orphans():
-    positions = [_pmcc_pos()]  # NVDA 200.0 20270115
+    positions = [_pmcc_pos()]  # NVDA 200.0 20270115, account U123
     orders = [_sl_order("SL_FALL_NVDA_200.0_20270115")]
     assert detect_orphan_orders(orders, positions) == []
 
@@ -380,7 +384,7 @@ def test_detect_orphan_ignores_non_sl_orders():
 
 
 def test_detect_orphan_stock_position():
-    positions = [_stock_pos()]  # AAPL stock
+    positions = [_stock_pos()]  # AAPL stock, account U123
     orders = [
         _sl_order("SL_FALL_AAPL_STK", symbol="AAPL"),
         _sl_order("SL_FALL_NVDA_200.0_20270115", symbol="NVDA"),  # orphan
@@ -388,6 +392,19 @@ def test_detect_orphan_stock_position():
     orphans = detect_orphan_orders(orders, positions)
     assert len(orphans) == 1
     assert orphans[0]["order_ref"] == "SL_FALL_NVDA_200.0_20270115"
+
+
+def test_detect_orphan_account_aware_when_same_key_in_two_accounts():
+    """An order in account A must not be matched by a position in account B,
+    even if the {symbol, strike, expiry} key is identical. Otherwise true
+    orphans in A would be hidden by lookalike positions in B when running
+    without --account."""
+    positions = [_pmcc_pos(account="U2")]  # NVDA 200.0 20270115 in U2 only
+    orders = [_sl_order("SL_FALL_NVDA_200.0_20270115", account="U1")]  # orphan in U1
+    orphans = detect_orphan_orders(orders, positions)
+    assert len(orphans) == 1
+    assert orphans[0]["order_ref"] == "SL_FALL_NVDA_200.0_20270115"
+    assert orphans[0]["account"] == "U1"
 
 
 # ---------------------------------------------------------------------------
@@ -581,25 +598,50 @@ class TestParseExistingStops:
         orders = [
             {
                 "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U1",
                 "conditions": [{"price": 22.0, "is_more": False}],
             }
         ]
         result = _parse_existing_stops(orders)
-        assert result == {"NVDA_200.0_20270115": 22.0}
+        assert result == {("U1", "NVDA_200.0_20270115"): 22.0}
 
     def test_keeps_max_when_duplicate_keys(self):
         orders = [
             {
                 "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U1",
                 "conditions": [{"price": 20.0, "is_more": False}],
             },
             {
                 "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U1",
                 "conditions": [{"price": 25.0, "is_more": False}],
             },
         ]
         result = _parse_existing_stops(orders)
-        assert result["NVDA_200.0_20270115"] == 25.0
+        assert result[("U1", "NVDA_200.0_20270115")] == 25.0
+
+    def test_same_key_different_accounts_kept_separate(self):
+        """A SL_FALL_ on the same {symbol, strike, expiry} in two accounts
+        must produce two distinct entries — otherwise account B's stop price
+        could leak into account A's analysis when querying both at once."""
+        orders = [
+            {
+                "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U1",
+                "conditions": [{"price": 20.0, "is_more": False}],
+            },
+            {
+                "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U2",
+                "conditions": [{"price": 30.0, "is_more": False}],
+            },
+        ]
+        result = _parse_existing_stops(orders)
+        assert result == {
+            ("U1", "NVDA_200.0_20270115"): 20.0,
+            ("U2", "NVDA_200.0_20270115"): 30.0,
+        }
 
     def test_ignores_non_sl_fall_orders(self):
         orders = [{"order_ref": "MANUAL_ORDER", "conditions": [{"price": 100.0, "is_more": False}]}]
@@ -961,6 +1003,62 @@ class TestExecutePositionStop:
 
         assert result["ok"] is True
 
+    def test_pmcc_bag_qty_uses_short_leg_when_asymmetric(self):
+        """When LEAPS qty > short qty, bag qty must equal the short qty (limiting leg)."""
+        mock_ib = MagicMock()
+        analysis = {
+            "type": "pmcc",
+            "symbol": "IBKR",
+            "qty": 30,  # LEAPS qty
+            "leaps": {"strike": 70.0, "expiry": "20270115", "right": "C"},
+            "shorts": [{"strike": 100.0, "expiry": "20260918", "right": "C", "qty": 10}],
+            "stop_loss": {"stop_price": 20.10, "action": "place_new"},
+        }
+        captured = {}
+
+        async def fake_place(**kwargs):
+            captured.update(kwargs)
+            return {"ok": True, "order_id": 1, "order_ref": "SL_FALL_IBKR_70.0_20270115"}
+
+        with patch(
+            "trading_skills.broker.stop_loss._place_combo_stop_order",
+            new=AsyncMock(side_effect=fake_place),
+        ):
+            asyncio.run(
+                _execute_position_stop(mock_ib, analysis, leaps_con_id=999, stock_con_id=None)
+            )
+
+        assert captured["qty"] == 10  # bag sized to short leg, not LEAPS
+
+    def test_pmcc_bag_qty_uses_min_across_multiple_shorts(self):
+        mock_ib = MagicMock()
+        analysis = {
+            "type": "pmcc",
+            "symbol": "IWM",
+            "qty": 15,
+            "leaps": {"strike": 260.0, "expiry": "20260918", "right": "C"},
+            "shorts": [
+                {"strike": 280.0, "expiry": "20260618", "right": "C", "qty": 15},
+                {"strike": 285.0, "expiry": "20260718", "right": "C", "qty": 10},
+            ],
+            "stop_loss": {"stop_price": 18.0, "action": "place_new"},
+        }
+        captured = {}
+
+        async def fake_place(**kwargs):
+            captured.update(kwargs)
+            return {"ok": True, "order_id": 2, "order_ref": "SL_FALL_IWM_260.0_20260918"}
+
+        with patch(
+            "trading_skills.broker.stop_loss._place_combo_stop_order",
+            new=AsyncMock(side_effect=fake_place),
+        ):
+            asyncio.run(
+                _execute_position_stop(mock_ib, analysis, leaps_con_id=111, stock_con_id=None)
+            )
+
+        assert captured["qty"] == 10  # min across all legs
+
     def test_dispatches_leaps_to_simple_order(self):
         mock_ib = MagicMock()
         analysis = {
@@ -1055,32 +1153,64 @@ class TestExecutePositionStop:
         )
         assert result["ok"] is False
 
-    def test_cancels_all_symbol_orders_before_placing_new(self):
-        # Any existing conditional order for the symbol (manual or SL_) must be
-        # cancelled before placing the new SL_ order, not just the exact-ref match.
+    def test_cancels_only_matching_sl_fall_order_in_same_account(self):
+        # Regression: pre-cancel must match by order_ref AND account, not by
+        # symbol. Otherwise SL_ orders on the same underlying in OTHER accounts
+        # are cancelled when placing a stop in one account, and manual
+        # conditional orders are wiped too.
         mock_ib = MagicMock()
+        matching_trade = MagicMock()
+        matching_trade.order.orderId = 78
+        other_account_trade = MagicMock()
+        other_account_trade.order.orderId = 79
         manual_trade = MagicMock()
         manual_trade.order.orderId = 77
-        sl_trade = MagicMock()
-        sl_trade.order.orderId = 78
-        mock_ib.openTrades.return_value = [manual_trade, sl_trade]
+        different_key_trade = MagicMock()
+        different_key_trade.order.orderId = 80
+        mock_ib.openTrades.return_value = [
+            manual_trade,
+            matching_trade,
+            other_account_trade,
+            different_key_trade,
+        ]
 
         open_orders = [
-            # Manual order for same symbol (empty order_ref)
+            # Manual conditional order on same symbol/account — must NOT be cancelled
             {
                 "order_id": 77,
                 "order_ref": "",
+                "account": "U_A",
                 "symbol": "NVDA",
                 "conditions": [{"price": 1000.0, "is_more": True}],
             },
-            # Stale SL_ order for same symbol with different key
+            # The SL_FALL_ we're about to replace — same ref, same account — MUST be cancelled
             {
                 "order_id": 78,
+                "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U_A",
+                "symbol": "NVDA",
+                "conditions": [{"price": 18.0, "is_more": False}],
+            },
+            # Same SL_FALL_ key but DIFFERENT account — must NOT be cancelled
+            {
+                "order_id": 79,
+                "order_ref": "SL_FALL_NVDA_200.0_20270115",
+                "account": "U_B",
+                "symbol": "NVDA",
+                "conditions": [{"price": 19.0, "is_more": False}],
+            },
+            # Different SL_FALL_ key (different LEAPS) in same account — must NOT be cancelled
+            {
+                "order_id": 80,
                 "order_ref": "SL_FALL_NVDA_190.0_20270115",
+                "account": "U_A",
                 "symbol": "NVDA",
                 "conditions": [{"price": 10.0, "is_more": False}],
             },
         ]
+
+        analysis = self._pmcc_analysis("place_new")
+        analysis["account"] = "U_A"
 
         expected = {"ok": True, "order_id": 99, "order_ref": "SL_FALL_NVDA_200.0_20270115"}
         with patch(
@@ -1090,17 +1220,15 @@ class TestExecutePositionStop:
             asyncio.run(
                 _execute_position_stop(
                     mock_ib,
-                    self._pmcc_analysis("place_new"),
+                    analysis,
                     leaps_con_id=111,
                     stock_con_id=None,
                     open_orders=open_orders,
                 )
             )
 
-        # Both orders for the symbol must be cancelled
-        cancelled_orders = [call.args[0] for call in mock_ib.cancelOrder.call_args_list]
-        cancelled_ids = {o.orderId for o in cancelled_orders}
-        assert cancelled_ids == {77, 78}
+        cancelled_ids = {call.args[0].orderId for call in mock_ib.cancelOrder.call_args_list}
+        assert cancelled_ids == {78}
 
 
 # ---------------------------------------------------------------------------
@@ -1163,3 +1291,176 @@ class TestGetStopLossData:
 
         assert result["symbols_filter"] == ["NVDA"]
         assert result["positions"] == []
+
+
+# ---------------------------------------------------------------------------
+# parse_legs_spec / filter_normalized_by_legs
+# ---------------------------------------------------------------------------
+
+
+class TestCalcPmccBagQty:
+    def test_symmetric_returns_leaps_qty(self):
+        assert calc_pmcc_bag_qty(30, [30]) == 30
+
+    def test_asymmetric_returns_short_qty(self):
+        assert calc_pmcc_bag_qty(30, [10]) == 10
+
+    def test_more_shorts_than_leaps_returns_leaps(self):
+        assert calc_pmcc_bag_qty(5, [10]) == 5
+
+    def test_multiple_shorts_uses_min(self):
+        assert calc_pmcc_bag_qty(15, [15, 10, 12]) == 10
+
+    def test_no_shorts_returns_leaps_qty(self):
+        assert calc_pmcc_bag_qty(5, []) == 5
+
+
+class TestParseLegsSpec:
+    def test_none_returns_none(self):
+        assert parse_legs_spec(None) is None
+
+    def test_empty_returns_none(self):
+        assert parse_legs_spec([]) is None
+
+    def test_parses_call_with_explicit_right(self):
+        result = parse_legs_spec(["IBKR:70C:20270115"])
+        assert result == {("IBKR", 70.0, "20270115", "C")}
+
+    def test_parses_put(self):
+        result = parse_legs_spec(["AAPL:150P:20260618"])
+        assert result == {("AAPL", 150.0, "20260618", "P")}
+
+    def test_defaults_right_to_call(self):
+        result = parse_legs_spec(["NVDA:200:20270115"])
+        assert result == {("NVDA", 200.0, "20270115", "C")}
+
+    def test_uppercases_symbol(self):
+        result = parse_legs_spec(["ibkr:70c:20270115"])
+        assert result == {("IBKR", 70.0, "20270115", "C")}
+
+    def test_parses_multiple(self):
+        result = parse_legs_spec(["IBKR:70C:20270115", "IBKR:100C:20260918"])
+        assert result == {
+            ("IBKR", 70.0, "20270115", "C"),
+            ("IBKR", 100.0, "20260918", "C"),
+        }
+
+    def test_parses_fractional_strike(self):
+        result = parse_legs_spec(["AMZN:287.5C:20260522"])
+        assert result == {("AMZN", 287.5, "20260522", "C")}
+
+    def test_rejects_wrong_part_count(self):
+        with pytest.raises(ValueError, match="expected SYMBOL"):
+            parse_legs_spec(["IBKR:70C"])
+
+    def test_rejects_bad_strike(self):
+        with pytest.raises(ValueError, match="Invalid strike"):
+            parse_legs_spec(["IBKR:foo:20270115"])
+
+    def test_rejects_bad_expiry(self):
+        with pytest.raises(ValueError, match="Invalid expiry"):
+            parse_legs_spec(["IBKR:70C:2027-01-15"])
+
+
+class TestFilterNormalizedByLegs:
+    def test_keeps_only_matching_legs(self):
+        normalized = [
+            _opt("IBKR", 30, 17.79, 70.0, "20270115", "C"),  # match
+            _opt("IBKR", -30, -3.49, 100.0, "20260918", "C"),  # match
+            _opt("IBKR", 10, 5.0, 80.0, "20270618", "C"),  # different strike
+            _opt("NVDA", 5, 30.0, 200.0, "20270115", "C"),  # different symbol
+        ]
+        legs_set = {
+            ("IBKR", 70.0, "20270115", "C"),
+            ("IBKR", 100.0, "20260918", "C"),
+        }
+        result = filter_normalized_by_legs(normalized, legs_set)
+        assert len(result) == 2
+        strikes = {p["strike"] for p in result}
+        assert strikes == {70.0, 100.0}
+
+    def test_drops_stock_positions(self):
+        normalized = [
+            _opt("IBKR", 30, 17.79, 70.0, "20270115", "C"),
+            _stk("IBKR", quantity=100, avg_cost=80.0),
+        ]
+        legs_set = {("IBKR", 70.0, "20270115", "C")}
+        result = filter_normalized_by_legs(normalized, legs_set)
+        assert len(result) == 1
+        assert result[0]["sec_type"] == "OPT"
+
+    def test_right_must_match(self):
+        normalized = [
+            _opt("AAPL", 5, 5.0, 150.0, "20260618", "C"),
+            _opt("AAPL", 5, 5.0, 150.0, "20260618", "P"),
+        ]
+        legs_set = {("AAPL", 150.0, "20260618", "P")}
+        result = filter_normalized_by_legs(normalized, legs_set)
+        assert len(result) == 1
+        assert result[0]["right"] == "P"
+
+
+class TestLegsFilterIntegration:
+    """End-to-end check that --legs picks a specific PMCC pair out of a noisier portfolio."""
+
+    def _pos(self, account, symbol, qty, avg_cost, strike, expiry, right="C"):
+        c = MagicMock()
+        c.symbol = symbol
+        c.secType = "OPT"
+        c.strike = strike
+        c.lastTradeDateOrContractMonth = expiry
+        c.right = right
+        c.multiplier = "100"
+        p = MagicMock()
+        p.contract = c
+        p.position = qty
+        p.avgCost = avg_cost * 100
+        p.account = account
+        return p
+
+    def test_legs_picks_specific_pair_skipping_other_legs_same_symbol(self):
+        mock_ib = MagicMock()
+        mock_ib.managedAccounts.return_value = ["U123"]
+        mock_ib.positions.return_value = [
+            self._pos("U123", "IBKR", 30, 17.79, 70.0, "20270115"),  # target LEAPS
+            self._pos("U123", "IBKR", -30, -3.49, 100.0, "20260918"),  # target short
+            self._pos("U123", "IBKR", 10, 5.0, 80.0, "20270618"),  # other LEAPS, must be excluded
+        ]
+        mock_ib.reqAllOpenOrdersAsync = AsyncMock(return_value=[])
+        mock_ib.openTrades.return_value = []
+
+        @asynccontextmanager
+        async def _ctx(*args, **kwargs):
+            yield mock_ib
+
+        empty_quote = {"bid": None, "ask": None, "last": None, "stale": False}
+        with (
+            patch(f"{MODULE}.ib_connection", _ctx),
+            patch(f"{MODULE}.asyncio.sleep", new=AsyncMock()),
+            patch(f"{MODULE}.fetch_with_timeout", new=AsyncMock(return_value=[])),
+            patch(f"{MODULE}.is_trading_now", return_value=False),
+            patch(
+                "trading_skills.broker.pmcc_advisor._fetch_single_option_quote",
+                new=AsyncMock(return_value=empty_quote),
+            ),
+            patch(
+                "trading_skills.broker.pmcc_advisor._fetch_yf_spot_prices",
+                new=AsyncMock(return_value={"IBKR": 88.0}),
+            ),
+        ):
+            result = asyncio.run(
+                get_stop_loss_data(
+                    port=7497,
+                    legs=["IBKR:70C:20270115", "IBKR:100C:20260918"],
+                    dry_run=True,
+                )
+            )
+
+        assert result["legs_filter"] == ["IBKR:70C:20270115", "IBKR:100C:20260918"]
+        assert len(result["positions"]) == 1
+        pos = result["positions"][0]
+        assert pos["type"] == "pmcc"
+        assert pos["leaps"]["strike"] == 70.0
+        # The other LEAPS (80C) must not appear as a separate naked-LEAPS position
+        strikes_seen = {p["leaps"]["strike"] for p in result["positions"]}
+        assert 80.0 not in strikes_seen

@@ -66,6 +66,69 @@ def calc_short_premium_decay_pct(
     return ((premium_received - current_price) / premium_received) * 100.0
 
 
+def parse_legs_spec(legs: list[str] | None) -> set[tuple[str, float, str, str]] | None:
+    """Parse leg specs like 'IBKR:70C:20270115' into (sym, strike, expiry, right) tuples.
+
+    Format: SYMBOL:STRIKE[C|P]:EXPIRY. Right is the last char of the strike token
+    and defaults to C if omitted. Expiry is YYYYMMDD.
+    Returns None for None/empty input. Raises ValueError on malformed input.
+    """
+    if not legs:
+        return None
+    out: set[tuple[str, float, str, str]] = set()
+    for spec in legs:
+        parts = spec.split(":")
+        if len(parts) != 3:
+            raise ValueError(f"Invalid leg spec {spec!r}: expected SYMBOL:STRIKE[C|P]:EXPIRY")
+        sym, strike_right, expiry = parts
+        strike_right = strike_right.upper()
+        if strike_right and strike_right[-1] in ("C", "P"):
+            right = strike_right[-1]
+            strike_str = strike_right[:-1]
+        else:
+            right = "C"
+            strike_str = strike_right
+        try:
+            strike = float(strike_str)
+        except ValueError as e:
+            raise ValueError(f"Invalid strike in leg spec {spec!r}") from e
+        if len(expiry) != 8 or not expiry.isdigit():
+            raise ValueError(f"Invalid expiry in leg spec {spec!r}: expected YYYYMMDD")
+        out.add((sym.upper(), strike, expiry, right))
+    return out
+
+
+def calc_pmcc_bag_qty(leaps_qty: int, short_qtys: list[int]) -> int:
+    """Bag order quantity for a PMCC = the smallest leg (limiting leg).
+
+    A 1:1 combo (1 LEAPS + 1 of each short) of size N closes N LEAPS plus N of
+    each short. If any leg has fewer than N contracts, the order would fail or
+    fill partially at trigger time. So bag qty = min(leaps_qty, *short_qtys).
+    If no shorts, returns leaps_qty (caller shouldn't be using this for non-PMCC).
+    """
+    if not short_qtys:
+        return leaps_qty
+    return min(leaps_qty, *short_qtys)
+
+
+def filter_normalized_by_legs(
+    normalized: list[dict],
+    legs_set: set[tuple[str, float, str, str]],
+) -> list[dict]:
+    """Keep only OPT positions whose (symbol, strike, expiry, right) matches a leg.
+
+    Stocks are dropped (legs filter is option-specific).
+    """
+    out = []
+    for pos in normalized:
+        if pos["sec_type"] != "OPT":
+            continue
+        key = (pos["symbol"].upper(), pos["strike"], pos["expiry"], pos["right"])
+        if key in legs_set:
+            out.append(pos)
+    return out
+
+
 def identify_positions(normalized: list[dict]) -> list[dict]:
     """Classify normalized IB positions into pmcc, leaps, and stock groups.
 
@@ -319,6 +382,7 @@ def build_position_analysis(
                 }
             )
         result["shorts"] = shorts_out
+        result["bag_qty"] = calc_pmcc_bag_qty(qty, [s["qty"] for s in position["shorts"]])
 
     if ptype == "stock":
         result["stock"] = {
@@ -346,8 +410,16 @@ def detect_orphan_orders(
     open_orders: list[dict],
     active_positions: list[dict],
 ) -> list[dict]:
-    """Find SL_FALL_ orders with no matching active position."""
-    active_keys: set[str] = {_sl_fall_key(p) for p in active_positions}
+    """Find SL_FALL_ orders with no matching active position.
+
+    Matching is account-aware: an order in account A only matches a position in
+    account A, even when the same {symbol, strike, expiry} exists in another
+    account. Without this, a true orphan in one account would be hidden by a
+    lookalike position in another when multiple accounts are queried at once.
+    """
+    active_keys: set[tuple[str, str]] = {
+        (p.get("account", "") or "", _sl_fall_key(p)) for p in active_positions
+    }
 
     orphans = []
     for order in open_orders:
@@ -355,7 +427,8 @@ def detect_orphan_orders(
         if not ref.startswith(_SL_FALL_PREFIX):
             continue
         key = ref[len(_SL_FALL_PREFIX) :]
-        if key not in active_keys:
+        account = order.get("account", "") or ""
+        if (account, key) not in active_keys:
             orphans.append(order)
     return orphans
 
@@ -418,24 +491,29 @@ async def _fetch_open_orders(ib) -> list[dict]:
     return result
 
 
-def _parse_existing_stops(open_orders: list[dict]) -> dict[str, float]:
-    """Extract existing SL_FALL_ stop prices keyed by position key.
+def _parse_existing_stops(open_orders: list[dict]) -> dict[tuple[str, str], float]:
+    """Extract existing SL_FALL_ stop prices keyed by (account, position key).
 
-    Returns {position_key: highest_stop_price}.
+    Returns {(account, position_key): highest_stop_price}.
     A higher stop price is more protective; keep the max if duplicates exist.
+    Account is part of the key so that a SL_FALL_ on the same {symbol, strike,
+    expiry} in a different account does not leak its stop price into this
+    account's analysis when multiple accounts are queried at once.
     """
-    stops: dict[str, float] = {}
+    stops: dict[tuple[str, str], float] = {}
     for order in open_orders:
         ref = order.get("order_ref", "")
         if not ref.startswith(_SL_FALL_PREFIX):
             continue
         key = ref[len(_SL_FALL_PREFIX) :]
+        account = order.get("account", "") or ""
         conditions = order.get("conditions", [])
         if not conditions:
             continue
         price = conditions[0]["price"]
-        if key not in stops or price > stops[key]:
-            stops[key] = price
+        composite = (account, key)
+        if composite not in stops or price > stops[composite]:
+            stops[composite] = price
     return stops
 
 
@@ -600,22 +678,34 @@ async def _execute_position_stop(
         return {"symbol": symbol, "skipped": True, "reason": action}
 
     order_ref = f"{_SL_FALL_PREFIX}{_sl_fall_key(analysis)}"
+    position_account = analysis.get("account") or ""
 
     if open_orders:
         trades_by_id = {t.order.orderId: t for t in ib.openTrades()}
         for o in open_orders:
-            if o.get("symbol") == symbol and o.get("conditions"):
-                oid = o.get("order_id")
-                if oid and oid in trades_by_id:
-                    ib.cancelOrder(trades_by_id[oid].order)
+            # Only cancel the prior SL_FALL_ order that we'd be replacing: same
+            # order_ref AND same account. Symbol-only matching cancels orders on
+            # the same underlying in *other* accounts, and matching any
+            # conditional order would wipe manual orders too.
+            if o.get("order_ref") != order_ref:
+                continue
+            if (o.get("account") or "") != position_account:
+                continue
+            oid = o.get("order_id")
+            if oid and oid in trades_by_id:
+                ib.cancelOrder(trades_by_id[oid].order)
 
     if ptype == "pmcc":
         if not leaps_con_id:
             return {"symbol": symbol, "ok": False, "error": "no LEAPS conId"}
+        # Bag order qty is bounded by the limiting leg. If LEAPS qty > shorts,
+        # the bag must size to shorts or it will fail / fill partially at trigger.
+        short_qtys = [s["qty"] for s in analysis.get("shorts", [])]
+        bag_qty = calc_pmcc_bag_qty(qty, short_qtys)
         return await _place_combo_stop_order(
             ib=ib,
             position=analysis,
-            qty=qty,
+            qty=bag_qty,
             condition_con_id=leaps_con_id,
             condition_price=stop_price,
             order_ref=order_ref,
@@ -653,6 +743,7 @@ async def get_stop_loss_data(
     port: int = 7496,
     account: str | None = None,
     symbols: list[str] | None = None,
+    legs: list[str] | None = None,
     stop_pct: float = 40.0,
     short_near_strike_pct: float = 5.0,
     price_mode: str = "mid",
@@ -661,11 +752,16 @@ async def get_stop_loss_data(
 ) -> dict:
     """Analyze positions and manage downside stop-loss orders.
 
-    dry_run=True (default): analyze and report; no orders placed, no IB connection.
+    dry_run=True (default): analyze and report; no orders placed (still connects to IB
+        to fetch positions/quotes).
     dry_run=False (--execute): cancel orphan orders, place SL_ conditional orders.
     forced=True: basis = current_mid_price (can lower existing stops).
+    legs: list of SYMBOL:STRIKE[C|P]:EXPIRY specs. Narrows analysis to those
+    option legs only (takes precedence over ``symbols``). Orphan detection still
+    runs against the full position set so unrelated SL_ orders aren't cancelled.
     """
     try:
+        legs_set = parse_legs_spec(legs)
         async with ib_connection(port, CLIENT_IDS.get("stop_loss", 14)) as ib:
             ib.reqMarketDataType(4)
             await asyncio.sleep(2)
@@ -683,7 +779,12 @@ async def get_stop_loss_data(
             raw = await fetch_positions(ib, account=account)
             normalized = normalize_positions(raw)
             unfiltered_positions = identify_positions(normalized)
-            if symbols:
+            if legs_set:
+                # Filter at the leg level (before grouping) so we can target a
+                # specific LEAPS/short pair when multiple coexist on the same symbol.
+                filtered_normalized = filter_normalized_by_legs(normalized, legs_set)
+                all_positions = identify_positions(filtered_normalized)
+            elif symbols:
                 sym_set = {s.upper() for s in symbols}
                 all_positions = [p for p in unfiltered_positions if p["symbol"].upper() in sym_set]
             else:
@@ -698,7 +799,10 @@ async def get_stop_loss_data(
             # incorrectly flagged as orphans and cancelled in execute mode (issue #37).
             account_scoped_orders = filter_orders_by_account(open_orders, accounts)
             orphan_orders = detect_orphan_orders(account_scoped_orders, unfiltered_positions)
-            existing_stops = _parse_existing_stops(open_orders)
+            # Existing-stop lookup must also be account-scoped: a SL_FALL_ on the
+            # same {symbol, strike, expiry} in a different account is not "our"
+            # existing stop and would otherwise leak its price into stop_action.
+            existing_stops = _parse_existing_stops(account_scoped_orders)
 
             if not all_positions:
                 return {
@@ -708,6 +812,7 @@ async def get_stop_loss_data(
                     "forced": forced,
                     "accounts": accounts,
                     "symbols_filter": [s.upper() for s in symbols] if symbols else None,
+                    "legs_filter": legs if legs else None,
                     "all_conditional_orders": all_conditional_orders,
                     "orphan_orders": orphan_orders,
                     "alert_soon": [],
@@ -725,58 +830,38 @@ async def get_stop_loss_data(
             live = is_trading_now()
 
             option_positions = [p for p in all_positions if p["type"] in ("pmcc", "leaps")]
-            if live:
-                from trading_skills.broker.pmcc_advisor import _fetch_single_option_quote
+            pmcc_positions = [p for p in all_positions if p["type"] == "pmcc"]
 
-                phase1_tasks = [fetch_spot_prices(ib, unique_symbols)]
-                for pos in option_positions:
-                    phase1_tasks.append(
-                        _fetch_single_option_quote(
-                            ib, pos["symbol"], pos["leaps"]["strike"], pos["leaps"]["expiry"], "C"
-                        )
-                    )
-                # Also fetch short quotes for PMCC positions
-                pmcc_positions = [p for p in all_positions if p["type"] == "pmcc"]
-                short_quote_tasks = []
-                for pos in pmcc_positions:
-                    for short in pos["shorts"]:
-                        short_quote_tasks.append(
-                            _fetch_single_option_quote(
-                                ib, pos["symbol"], short["strike"], short["expiry"], "C"
-                            )
-                        )
+            # Option quotes always come from IB: after hours IB still returns the
+            # session's last trade, while yfinance can return stale prices from
+            # earlier in the day that don't reflect today's market move.
+            from trading_skills.broker.pmcc_advisor import _fetch_single_option_quote
 
-                results = await asyncio.gather(*phase1_tasks, *short_quote_tasks)
-                spot_prices: dict[str, float] = results[0]
-                leaps_quotes = list(results[1 : 1 + len(option_positions)])
-                short_quotes_flat = list(results[1 + len(option_positions) :])
-            else:
-                from trading_skills.broker.pmcc_advisor import (
-                    _fetch_yf_option_quote,
-                    _fetch_yf_spot_prices,
+            leaps_quote_tasks = [
+                _fetch_single_option_quote(
+                    ib, pos["symbol"], pos["leaps"]["strike"], pos["leaps"]["expiry"], "C"
                 )
+                for pos in option_positions
+            ]
+            short_quote_tasks = [
+                _fetch_single_option_quote(ib, pos["symbol"], short["strike"], short["expiry"], "C")
+                for pos in pmcc_positions
+                for short in pos["shorts"]
+            ]
 
-                phase1_tasks = [_fetch_yf_spot_prices(unique_symbols)]
-                for pos in option_positions:
-                    phase1_tasks.append(
-                        _fetch_yf_option_quote(
-                            pos["symbol"], pos["leaps"]["expiry"], pos["leaps"]["strike"], "C"
-                        )
-                    )
-                pmcc_positions = [p for p in all_positions if p["type"] == "pmcc"]
-                short_quote_tasks = []
-                for pos in pmcc_positions:
-                    for short in pos["shorts"]:
-                        short_quote_tasks.append(
-                            _fetch_yf_option_quote(
-                                pos["symbol"], short["expiry"], short["strike"], "C"
-                            )
-                        )
+            # Spot: IB while live, yfinance fallback when market is closed and IB
+            # bid/ask are unavailable.
+            if live:
+                spot_task = fetch_spot_prices(ib, unique_symbols)
+            else:
+                from trading_skills.broker.pmcc_advisor import _fetch_yf_spot_prices
 
-                results = await asyncio.gather(*phase1_tasks, *short_quote_tasks)
-                spot_prices: dict[str, float] = results[0]
-                leaps_quotes = list(results[1 : 1 + len(option_positions)])
-                short_quotes_flat = list(results[1 + len(option_positions) :])
+                spot_task = _fetch_yf_spot_prices(unique_symbols)
+
+            results = await asyncio.gather(spot_task, *leaps_quote_tasks, *short_quote_tasks)
+            spot_prices: dict[str, float] = results[0]
+            leaps_quotes = list(results[1 : 1 + len(option_positions)])
+            short_quotes_flat = list(results[1 + len(option_positions) :])
 
             data_delay = "real-time" if live else "stalled - using last price"
             for q in leaps_quotes:
@@ -856,7 +941,9 @@ async def get_stop_loss_data(
                     current_mid = spot
                     short_mids = []
 
-                existing_stop = existing_stops.get(_sl_fall_key(pos))
+                existing_stop = existing_stops.get(
+                    (pos.get("account", "") or "", _sl_fall_key(pos))
+                )
 
                 analysis = build_position_analysis(
                     position=pos,
@@ -898,6 +985,7 @@ async def get_stop_loss_data(
                 "short_near_strike_pct": short_near_strike_pct,
                 "accounts": accounts,
                 "symbols_filter": [s.upper() for s in symbols] if symbols else None,
+                "legs_filter": legs if legs else None,
                 "all_conditional_orders": all_conditional_orders,
                 "orphan_orders": orphan_orders,
                 "alert_soon": alert_soon_symbols,
@@ -908,6 +996,12 @@ async def get_stop_loss_data(
                 output["order_results"] = order_results
             return output
 
+    except ValueError as e:
+        return {
+            "generated_at": generated_at_str(),
+            "data_delay": "unknown",
+            "error": f"Invalid --legs spec: {e}",
+        }
     except ConnectionError as e:
         return {
             "generated_at": generated_at_str(),

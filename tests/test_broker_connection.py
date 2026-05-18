@@ -235,6 +235,7 @@ class TestClientIds:
             "options_chain",
             "roll",
             "stop_loss",
+            "trades",
             "consolidate",
         }
         assert set(CLIENT_IDS.keys()) == expected
