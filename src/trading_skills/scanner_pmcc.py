@@ -23,7 +23,7 @@ def _to_int(val, default=0) -> int:
     """Convert option field to int, treating None and NaN as default."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return default
-    return int(val) if val else default
+    return int(val)
 
 
 def format_scan_results(results: list[dict]) -> dict:
