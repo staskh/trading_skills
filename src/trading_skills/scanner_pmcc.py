@@ -83,9 +83,26 @@ def find_strike_by_delta(
         else:
             effective_mid = last
 
-        option_iv = row.get("impliedVolatility", iv)
-        if pd.isna(option_iv) or option_iv <= 0 or option_iv < 0.01:
-            option_iv = iv
+        if bid > 0 or ask > 0:
+            # Live market data: use yfinance IV with fallback to avg_iv
+            option_iv = row.get("impliedVolatility", iv)
+            if pd.isna(option_iv) or option_iv <= 0 or option_iv < 0.01:
+                option_iv = iv
+        else:
+            # Off-hours: derive IV from lastPrice using T from lastTradeDate to expiry
+            option_iv = iv  # default
+            if last > 0:
+                last_trade = row.get("lastTradeDate")
+                if last_trade is not None and not pd.isna(last_trade):
+                    trade_date = last_trade.date() if hasattr(last_trade, "date") else last_trade
+                    days_since_trade = (datetime.now().date() - trade_date).days
+                    T_for_iv = T + days_since_trade / 365
+                    if T_for_iv > 0:
+                        iv_from_last = implied_volatility(
+                            last, current_price, strike, T_for_iv, r, "call"
+                        )
+                        if iv_from_last is not None and iv_from_last >= 0.01:
+                            option_iv = iv_from_last
 
         delta = black_scholes_delta(current_price, strike, T, r, option_iv, "call")
         delta_diff = abs(delta - target_delta)

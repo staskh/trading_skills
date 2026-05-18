@@ -468,6 +468,44 @@ class TestFindStrikeByDeltaOffHours:
         # mid should be from bid/ask, not lastPrice
         assert option["effective_mid"] == (option["bid"] + option["ask"]) / 2
 
+    def test_delta_computed_from_last_price_iv_not_avg_iv(self):
+        """When bid=ask=0, delta must use IV derived from lastPrice, not the passed-in avg_iv.
+
+        Setup: short-dated OTM call (10 days, strike 105 on stock at 100).
+        lastPrice=1.50 implies ~30% IV, giving delta ~0.27.
+        avg_iv=0.80 (wrong LEAPS-derived value) would give a very different delta.
+        The test verifies the delta is close to the lastPrice-implied value.
+        """
+        from trading_skills.black_scholes import black_scholes_delta, implied_volatility
+
+        spot, strike, last_price, expiry_days = 100.0, 105.0, 1.50, 10
+        last_trade = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        chain = _make_chain(
+            strikes=[strike],
+            bids=[0.0],
+            asks=[0.0],
+            last_prices=[last_price],
+            ivs=[0.001],  # bad yfinance data
+            last_trade=last_trade,
+        )
+
+        wrong_avg_iv = 0.80
+        _, option = find_strike_by_delta(chain, spot, 0.20, expiry_days, wrong_avg_iv)
+        assert option is not None
+
+        # Compute expected delta from lastPrice IV
+        T_last = (expiry_days + 1) / 365  # +1 day because lastTradeDate is yesterday
+        iv_from_last = implied_volatility(last_price, spot, strike, T_last, 0.05, "call")
+        expected_delta = black_scholes_delta(
+            spot, strike, expiry_days / 365, 0.05, iv_from_last, "call"
+        )
+
+        assert abs(option["calculated_delta"] - expected_delta) < 0.02, (
+            f"Delta {option['calculated_delta']:.3f} should be close to lastPrice-derived "
+            f"{expected_delta:.3f}, not avg_iv-derived "
+            f"{black_scholes_delta(spot, strike, expiry_days / 365, 0.05, wrong_avg_iv, 'call'):.3f}"
+        )
+
 
 class TestComputeAtmIv:
     """compute_atm_iv must fall back to lastPrice-based IV when impliedVolatility is near zero."""
