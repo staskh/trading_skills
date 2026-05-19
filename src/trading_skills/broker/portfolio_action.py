@@ -207,11 +207,11 @@ def group_positions_into_spreads(positions: list, symbol: str) -> list:
     """Group positions for a symbol into spreads."""
     longs = sorted(
         [p for p in positions if p["quantity"] > 0],
-        key=lambda x: (x.get("expiry", ""), x.get("strike", 0)),
+        key=lambda x: (x.get("expiry") or "", x.get("strike") or 0),
     )
     shorts = sorted(
         [p for p in positions if p["quantity"] < 0],
-        key=lambda x: (x.get("expiry", ""), x.get("strike", 0)),
+        key=lambda x: (x.get("expiry") or "", x.get("strike") or 0),
     )
 
     spreads = []

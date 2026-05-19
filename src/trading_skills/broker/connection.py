@@ -107,6 +107,7 @@ async def fetch_spot_prices(ib: IB, symbols: list[str], timeout: float = 15.0) -
     qualified = await fetch_with_timeout(
         ib.qualifyContractsAsync(*stock_contracts), timeout=timeout, default=[]
     )
+    qualified = [qc for qc in qualified if qc is not None]
     if not qualified:
         return {}
 
