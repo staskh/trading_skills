@@ -20,6 +20,7 @@ _mod = _load_script()
 convert = _mod.convert
 default_output_path = _mod.default_output_path
 _sanitize = _mod._sanitize
+_fix_table_alignment = _mod._fix_table_alignment
 
 
 class TestDefaultOutputPath:
@@ -79,6 +80,22 @@ class TestConvert:
         result = convert(str(md))
         assert result["success"] is True
         assert Path(result["output"]).exists()
+
+
+class TestFixTableAlignment:
+    def test_td_gets_left_align(self):
+        assert '<td align="left">' in _fix_table_alignment("<td>text</td>")
+
+    def test_th_gets_left_align(self):
+        assert '<th align="left">' in _fix_table_alignment("<th>header</th>")
+
+    def test_existing_td_attrs_preserved(self):
+        result = _fix_table_alignment('<td colspan="2">text</td>')
+        assert 'align="left"' in result
+        assert 'colspan="2"' in result
+
+    def test_non_table_tags_unchanged(self):
+        assert _fix_table_alignment("<p>hello</p>") == "<p>hello</p>"
 
 
 class TestSanitize:

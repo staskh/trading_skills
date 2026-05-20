@@ -5,6 +5,7 @@
 # Dependencies: markdown>=3.7, fpdf2>=2.8  (pip install markdown fpdf2)
 
 import json
+import re
 import sys
 import unicodedata
 from datetime import datetime
@@ -82,13 +83,22 @@ _LATIN1_SUBS = {
 # PDF visual style
 # ---------------------------------------------------------------------------
 _NAVY = (26, 58, 92)
-_WHITE = (255, 255, 255)
 
-_TAG_STYLES = {
-    "h1": FontFace(size_pt=18, color=_NAVY, emphasis="BOLD"),
-    "h2": FontFace(size_pt=14, color=_NAVY, emphasis="BOLD"),
-    "h3": FontFace(size_pt=11, color=_NAVY, emphasis="BOLD"),
-}
+
+def _make_tag_styles(family: str) -> dict:
+    """Build heading tag_styles with explicit font family so bold resolves correctly."""
+    return {
+        "h1": FontFace(family=family, size_pt=22, color=_NAVY, emphasis="BOLD"),
+        "h2": FontFace(family=family, size_pt=16, color=_NAVY, emphasis="BOLD"),
+        "h3": FontFace(family=family, size_pt=12, color=_NAVY, emphasis="BOLD"),
+    }
+
+
+def _fix_table_alignment(html: str) -> str:
+    """Inject align=left into td/th tags; fpdf2 otherwise defaults to CENTER."""
+    html = re.sub(r"<td(\b)", r'<td align="left"\1', html)
+    html = re.sub(r"<th(\b)", r'<th align="left"\1', html)
+    return html
 
 
 def default_output_path(input_path: str) -> str:
@@ -158,15 +168,16 @@ def convert(input_path: str, output_path: str | None = None) -> dict:
         pdf.set_margins(20, 20, 20)
         pdf.add_page()
 
-        font_family = _setup_font(pdf)
-        has_unicode = font_family is not None
+        font_family = _setup_font(pdf) or "helvetica"
+        has_unicode = font_family != "helvetica"
         body_html = _sanitize(body_html, unicode_font=has_unicode)
+        body_html = _fix_table_alignment(body_html)
 
         pdf.write_html(
             body_html,
             table_line_separators=True,
-            tag_styles=_TAG_STYLES,
-            font_family=font_family or "helvetica",
+            tag_styles=_make_tag_styles(font_family),
+            font_family=font_family,
         )
         pdf.output(out)
     except Exception as exc:
