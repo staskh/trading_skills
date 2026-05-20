@@ -19,21 +19,29 @@ from fpdf import FPDF, FontFace
 # Each entry is (regular_path, bold_path); bold_path=None → reuse regular.
 # ---------------------------------------------------------------------------
 _FONT_CANDIDATES = [
+    # (regular, bold, italic)  — None means reuse regular
     # macOS
-    ("/Library/Fonts/Arial Unicode.ttf", None),
-    ("/Library/Fonts/Arial.ttf", "/Library/Fonts/Arial Bold.ttf"),
+    ("/Library/Fonts/Arial Unicode.ttf", None, None),
+    ("/Library/Fonts/Arial.ttf", "/Library/Fonts/Arial Bold.ttf",
+     "/Library/Fonts/Arial Italic.ttf"),
     ("/System/Library/Fonts/Supplemental/Arial.ttf",
-     "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
+     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+     "/System/Library/Fonts/Supplemental/Arial Italic.ttf"),
     # Linux
     ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf"),
     ("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
+     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+     "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf"),
     ("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-     "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"),
+     "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+     "/usr/share/fonts/truetype/noto/NotoSans-Italic.ttf"),
     # Windows
-    ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"),
-    ("C:/Windows/Fonts/calibri.ttf", "C:/Windows/Fonts/calibrib.ttf"),
+    ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf",
+     "C:/Windows/Fonts/ariali.ttf"),
+    ("C:/Windows/Fonts/calibri.ttf", "C:/Windows/Fonts/calibrib.ttf",
+     "C:/Windows/Fonts/calibrii.ttf"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -118,12 +126,15 @@ def _generated_at() -> str:
 
 def _setup_font(pdf: FPDF) -> str | None:
     """Register first available Unicode TTF font. Returns family name or None."""
-    for regular, bold in _FONT_CANDIDATES:
+    for regular, bold, italic in _FONT_CANDIDATES:
         if Path(regular).exists():
             try:
                 pdf.add_font("DocFont", style="", fname=regular)
                 bold_path = bold if (bold and Path(bold).exists()) else regular
+                italic_path = italic if (italic and Path(italic).exists()) else regular
                 pdf.add_font("DocFont", style="B", fname=bold_path)
+                pdf.add_font("DocFont", style="I", fname=italic_path)
+                pdf.add_font("DocFont", style="BI", fname=bold_path)
                 return "DocFont"
             except Exception:
                 continue
