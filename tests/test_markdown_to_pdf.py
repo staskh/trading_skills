@@ -21,6 +21,7 @@ convert = _mod.convert
 default_output_path = _mod.default_output_path
 _sanitize = _mod._sanitize
 _fix_table_alignment = _mod._fix_table_alignment
+_fix_tight_lists = _mod._fix_tight_lists
 
 
 class TestDefaultOutputPath:
@@ -96,6 +97,39 @@ class TestFixTableAlignment:
 
     def test_non_table_tags_unchanged(self):
         assert _fix_table_alignment("<p>hello</p>") == "<p>hello</p>"
+
+
+class TestFixTightLists:
+    def test_inserts_blank_line_before_list_after_bold_header(self):
+        text = "**Strengths:**\n- item1\n- item2"
+        result = _fix_tight_lists(text)
+        assert result == "**Strengths:**\n\n- item1\n- item2"
+
+    def test_already_separated_list_unchanged(self):
+        text = "**Strengths:**\n\n- item1\n- item2"
+        assert _fix_tight_lists(text) == text
+
+    def test_list_after_plain_paragraph(self):
+        text = "Some text here\n- item"
+        result = _fix_tight_lists(text)
+        assert result == "Some text here\n\n- item"
+
+    def test_consecutive_list_items_not_affected(self):
+        text = "- item1\n- item2\n- item3"
+        assert _fix_tight_lists(text) == text
+
+    def test_asterisk_and_plus_list_markers_also_fixed(self):
+        text = "Header:\n* item\nHeader2:\n+ item2"
+        result = _fix_tight_lists(text)
+        assert "Header:\n\n* item" in result
+        assert "Header2:\n\n+ item2" in result
+
+    def test_convert_renders_tight_list_as_list(self, tmp_path):
+        md = tmp_path / "tight.md"
+        md.write_text("**Strengths:**\n- Strong trend\n- Good fundamentals\n")
+        result = convert(str(md))
+        assert result["success"] is True
+        assert Path(result["output"]).exists()
 
 
 class TestSanitize:

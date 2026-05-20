@@ -164,6 +164,21 @@ def _sanitize(html: str, unicode_font: bool) -> str:
     return "".join(result)
 
 
+def _fix_tight_lists(text: str) -> str:
+    """Insert blank line before list items that directly follow non-list content.
+
+    The markdown library requires a blank line between a paragraph and a list.
+    Without it, `**Header:**\n- item` lands in one <p> tag instead of a <ul>.
+    Only inserts when the preceding line is NOT itself a list item.
+    """
+    return re.sub(
+        r"^((?![ \t]*[-*+] ).+)\n([ \t]*[-*+] )",
+        r"\1\n\n\2",
+        text,
+        flags=re.MULTILINE,
+    )
+
+
 def convert(input_path: str, output_path: str | None = None) -> dict:
     input_file = Path(input_path)
     if not input_file.exists():
@@ -172,8 +187,10 @@ def convert(input_path: str, output_path: str | None = None) -> dict:
     out = output_path or default_output_path(input_path)
 
     try:
+        raw_md = input_file.read_text(encoding="utf-8")
+        raw_md = _fix_tight_lists(raw_md)
         body_html = md_lib.markdown(
-            input_file.read_text(encoding="utf-8"),
+            raw_md,
             extensions=["tables", "fenced_code"],
         )
 
