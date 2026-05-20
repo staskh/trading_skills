@@ -34,18 +34,20 @@ The script returns detailed JSON with:
 
 ### Step 2: Generate Report
 
-Choose output format based on user preference:
+**Step 2a — Write markdown**
 
-**For PDF**: Use the `pdf` skill to create a professionally formatted PDF report from the JSON data.
-Read `templates/pdf-template.md` for detailed formatting guidelines including color scheme, typography, table layouts, and section structure.
+Read `templates/markdown-template.md` for formatting instructions. Generate a markdown report from the JSON data and save to `sandbox/` as:
+```
+sandbox/{SYMBOL}_Analysis_Report_{YYYY-MM-DD}_{HHmm}.md
+```
 
-**For Markdown**: Read `templates/markdown-template.md` for formatting instructions. Generate a markdown report and save to `sandbox/`.
+**Step 2b — Convert to PDF (if requested)**
 
-**Filename format**:
-- PDF: `{SYMBOL}_Analysis_Report_{YYYY-MM-DD}_{HHmm}.pdf`
-- Markdown: `{SYMBOL}_Analysis_Report_{YYYY-MM-DD}_{HHmm}.md`
-
-**Output location**: Save to `sandbox/` directory
+Invoke the `markdown-to-pdf` skill on the markdown file just created:
+```bash
+uv run python .claude/skills/markdown-to-pdf/scripts/markdown_to_pdf.py sandbox/{SYMBOL}_Analysis_Report_{YYYY-MM-DD}_{HHmm}.md
+```
+The PDF is written alongside the markdown file with the same basename.
 
 ### Step 3: Report Results
 
@@ -64,39 +66,6 @@ uv run python scripts/report.py AAPL
 uv run python scripts/report.py AAPL
 uv run python scripts/report.py MSFT
 ```
-
-## Report Contents
-
-### Pages 1-2: Executive Summary & Trend Analysis
-- Color-coded recommendation box (green/yellow/red)
-- Company overview table
-- Bullish scanner metrics with signal interpretations
-- Trend signals list
-
-### Pages 2-3: Fundamental Analysis & Piotroski
-- Valuation metrics (P/E, P/B, EPS)
-- Profitability (margins, ROE, ROA, growth)
-- Dividend & balance sheet (yield, payout ratio, debt)
-- Earnings history (up to 8 quarters)
-- Piotroski F-Score breakdown (all 9 criteria)
-
-### Pages 3-4: PMCC Viability Analysis
-- PMCC score and assessment
-- LEAPS option details (strike, delta, spread, liquidity)
-- Short call details (strike, delta, spread, liquidity)
-- Trade metrics (net debit, yield estimates, capital required)
-
-### Pages 4-5: Option Spread Strategies
-- Bull call spread with breakeven and risk/reward
-- Bear put spread with breakeven and risk/reward
-- Long straddle analysis with move needed %
-- Long strangle analysis with breakeven prices
-- Iron condor with profit range and max risk
-
-### Final Page: Investment Summary
-- Strengths box
-- Risk factors box
-- Disclaimer footer
 
 ## Dependencies
 
