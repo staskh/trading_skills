@@ -82,17 +82,23 @@ class TestConvert:
 
 
 class TestSanitize:
-    def test_greek_letters_replaced(self):
-        assert _sanitize("δ theta Δ") == "delta theta Delta"
+    def test_greek_letters_replaced_without_unicode_font(self):
+        assert _sanitize("δ theta Δ", unicode_font=False) == "delta theta Delta"
 
-    def test_arrows_replaced(self):
-        assert _sanitize("→ ←") == "-> <-"
+    def test_greek_letters_kept_with_unicode_font(self):
+        result = _sanitize("δ Δ", unicode_font=True)
+        assert "δ" in result and "Δ" in result
+
+    def test_arrows_always_replaced(self):
+        # Arrows are in _ALWAYS_SUBS, substituted regardless of font
+        assert _sanitize("→ ←", unicode_font=False) == "-> <-"
+        assert _sanitize("→ ←", unicode_font=True) == "-> <-"
 
     def test_latin1_chars_unchanged(self):
-        assert _sanitize("Hello, world! 100%") == "Hello, world! 100%"
+        assert _sanitize("Hello, world! 100%", unicode_font=False) == "Hello, world! 100%"
 
-    def test_unknown_unicode_gets_question_mark_or_decomposed(self):
-        result = _sanitize("café")
+    def test_unknown_unicode_decomposed_without_font(self):
+        result = _sanitize("café", unicode_font=False)
         assert "caf" in result  # 'é' decomposes to 'e' via NFKD
 
     def test_convert_with_greek_chars(self, tmp_path):
