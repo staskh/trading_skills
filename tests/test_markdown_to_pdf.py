@@ -22,7 +22,7 @@ default_output_path = _mod.default_output_path
 _sanitize = _mod._sanitize
 _fix_table_alignment = _mod._fix_table_alignment
 _fix_tight_lists = _mod._fix_tight_lists
-_replace_headings = _mod._replace_headings
+_render_html = _mod._render_html
 
 
 class TestDefaultOutputPath:
@@ -84,31 +84,25 @@ class TestConvert:
         assert Path(result["output"]).exists()
 
 
-class TestReplaceHeadings:
-    def test_h1_replaced_with_font_tag(self):
-        result = _replace_headings("<h1>Title</h1>")
-        assert "<h1>" not in result
-        assert 'size="22"' in result
-        assert "<b>" in result
-        assert "Title" in result
+class TestRenderHtml:
+    def _make_pdf(self):
+        from fpdf import FPDF
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("helvetica", size=9)
+        return pdf
 
-    def test_h2_replaced_with_font_tag(self):
-        result = _replace_headings("<h2>Section</h2>")
-        assert "<h2>" not in result
-        assert 'size="16"' in result
+    def test_renders_without_error(self):
+        pdf = self._make_pdf()
+        _render_html(pdf, "<p>Hello world</p>", "helvetica")
 
-    def test_h3_replaced_with_font_tag(self):
-        result = _replace_headings("<h3>Sub</h3>")
-        assert "<h3>" not in result
-        assert 'size="12"' in result
+    def test_renders_heading_without_error(self):
+        pdf = self._make_pdf()
+        _render_html(pdf, "<h2>Section</h2><p>Body text</p>", "helvetica")
 
-    def test_navy_color_applied(self):
-        result = _replace_headings("<h2>Section</h2>")
-        assert 'color="#1a3a5c"' in result
-
-    def test_non_heading_tags_unchanged(self):
-        html = "<p>Normal paragraph</p>"
-        assert _replace_headings(html) == html
+    def test_renders_heading_followed_by_list(self):
+        pdf = self._make_pdf()
+        _render_html(pdf, "<h2>Section</h2><ul><li>item1</li><li>item2</li></ul>", "helvetica")
 
     def test_convert_with_headings_followed_by_list(self, tmp_path):
         md = tmp_path / "h2_list.md"

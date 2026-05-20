@@ -93,28 +93,40 @@ _LATIN1_SUBS = {
 _NAVY = (26, 58, 92)
 _BODY_SIZE_PT = 9
 _LINE_HEIGHT = 1.5
+_PT_TO_MM = 0.352778
+
+_HEADING_SPLIT_RE = re.compile(r"(<h[1-3]>.*?</h[1-3]>)", re.DOTALL)
+_HEADING_TAG_RE = re.compile(r"<h([1-3])>(.*?)</h\1>", re.DOTALL)
+_HEADING_SIZES = {1: 22, 2: 16, 3: 12}
 
 
-def _navy_hex() -> str:
-    return "#{:02x}{:02x}{:02x}".format(*_NAVY)
+def _render_html(pdf: FPDF, html: str, font_family: str) -> None:
+    """Render HTML, drawing h1-h3 headings manually to prevent font-size bleed.
 
-
-def _replace_headings(html: str) -> str:
-    """Replace h1-h3 tags with inline font styling.
-
-    fpdf2 tag_styles leave the heading font active after </hN>, causing list
-    bullets that follow to render at heading size on their own line. Replacing
-    headings with explicit <font> tags resets the font cleanly after each one.
+    fpdf2 changes the active font size when processing heading tags and does not
+    fully restore it before rendering subsequent <ul> content, causing list bullets
+    to appear on their own line. Splitting at heading boundaries and rendering them
+    with pdf.set_font() / multi_cell() — then explicitly resetting to body size —
+    eliminates the bleed.
     """
-    sizes = {"h1": 22, "h2": 16, "h3": 12}
-    color = _navy_hex()
-    for tag, size in sizes.items():
-        html = re.sub(
-            rf"<{tag}>(.*?)</{tag}>",
-            rf'<p><b><font size="{size}" color="{color}">\1</font></b></p>',
-            html,
-        )
-    return html
+    for part in _HEADING_SPLIT_RE.split(html):
+        chunk = part.strip()
+        if not chunk:
+            continue
+        m = _HEADING_TAG_RE.fullmatch(chunk)
+        if m:
+            level = int(m.group(1))
+            text = re.sub(r"<[^>]+>", "", m.group(2))
+            size_pt = _HEADING_SIZES[level]
+            pdf.ln(3)
+            pdf.set_font(font_family, "B", size_pt)
+            pdf.set_text_color(*_NAVY)
+            pdf.multi_cell(0, size_pt * _PT_TO_MM * _LINE_HEIGHT, text)
+            pdf.ln(1)
+            pdf.set_font(font_family, "", _BODY_SIZE_PT)
+            pdf.set_text_color(0, 0, 0)
+        else:
+            pdf.write_html(chunk, font_family=font_family, table_line_separators=True)
 
 
 def _fix_table_alignment(html: str) -> str:
@@ -215,15 +227,10 @@ def convert(input_path: str, output_path: str | None = None) -> dict:
         pdf.set_font(font_family, size=_BODY_SIZE_PT)
         has_unicode = font_family != "helvetica"
         body_html = _sanitize(body_html, unicode_font=has_unicode)
-        body_html = _replace_headings(body_html)
         body_html = _fix_table_alignment(body_html)
         body_html = re.sub(r"<p(\b)", rf'<p line-height="{_LINE_HEIGHT}"\1', body_html)
 
-        pdf.write_html(
-            body_html,
-            table_line_separators=True,
-            font_family=font_family,
-        )
+        _render_html(pdf, body_html, font_family)
         pdf.output(out)
     except Exception as exc:
         return {"success": False, "error": str(exc), "input": input_path, "output": out}
