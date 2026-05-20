@@ -2746,7 +2746,7 @@ wheels = [
 
 [[package]]
 name = "trading-skills"
-version = "0.5.3"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "fpdf2" },
