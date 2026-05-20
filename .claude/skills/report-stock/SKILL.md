@@ -67,6 +67,22 @@ uv run python scripts/report.py AAPL
 uv run python scripts/report.py MSFT
 ```
 
+## Report Contents
+
+All sections defined in `templates/markdown-template.md`:
+
+1. **Header** — symbol, company name, generated timestamp
+2. **Recommendation** — BUY/HOLD/AVOID with strengths and risks
+3. **Company Overview** — sector, industry, market cap, beta
+4. **Trend Analysis** — bullish score, RSI, MACD, ADX, SMA distances, earnings date, signals list
+5. **Fundamental Analysis** — valuation (P/E, P/B, EPS), profitability (margins, ROE, ROA, growth), dividend & balance sheet, earnings history (up to 8 quarters)
+6. **Piotroski F-Score** — all 9 criteria with PASS/FAIL
+7. **Insider Trading** — net sentiment, buy/sell counts, recent transactions (omitted if no data)
+8. **PMCC Viability** — score, IV, LEAPS/short leg details, trade metrics (yield, capital required)
+9. **Option Spread Strategies** — bull call, bear put, straddle, strangle, iron condor
+10. **Investment Summary** — strengths and risk factors
+11. **Disclaimer footer**
+
 ## Dependencies
 
 This skill aggregates data from:
