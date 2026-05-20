@@ -84,6 +84,7 @@ _LATIN1_SUBS = {
 # ---------------------------------------------------------------------------
 _NAVY = (26, 58, 92)
 _BODY_SIZE_PT = 9
+_LINE_HEIGHT = 1.5
 
 
 def _make_tag_styles(family: str) -> dict:
@@ -174,6 +175,7 @@ def convert(input_path: str, output_path: str | None = None) -> dict:
         has_unicode = font_family != "helvetica"
         body_html = _sanitize(body_html, unicode_font=has_unicode)
         body_html = _fix_table_alignment(body_html)
+        body_html = re.sub(r"<p(\b)", rf'<p line-height="{_LINE_HEIGHT}"\1', body_html)
 
         pdf.write_html(
             body_html,
