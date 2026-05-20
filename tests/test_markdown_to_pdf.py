@@ -20,9 +20,10 @@ _mod = _load_script()
 convert = _mod.convert
 default_output_path = _mod.default_output_path
 _sanitize = _mod._sanitize
-_fix_table_alignment = _mod._fix_table_alignment
 _fix_tight_lists = _mod._fix_tight_lists
-_render_html = _mod._render_html
+_Renderer = _mod._Renderer
+_build_styles = _mod._build_styles
+_setup_font = _mod._setup_font
 
 
 class TestDefaultOutputPath:
@@ -83,27 +84,6 @@ class TestConvert:
         assert result["success"] is True
         assert Path(result["output"]).exists()
 
-
-class TestRenderHtml:
-    def _make_pdf(self):
-        from fpdf import FPDF
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font("helvetica", size=9)
-        return pdf
-
-    def test_renders_without_error(self):
-        pdf = self._make_pdf()
-        _render_html(pdf, "<p>Hello world</p>", "helvetica")
-
-    def test_renders_heading_without_error(self):
-        pdf = self._make_pdf()
-        _render_html(pdf, "<h2>Section</h2><p>Body text</p>", "helvetica")
-
-    def test_renders_heading_followed_by_list(self):
-        pdf = self._make_pdf()
-        _render_html(pdf, "<h2>Section</h2><ul><li>item1</li><li>item2</li></ul>", "helvetica")
-
     def test_convert_with_headings_followed_by_list(self, tmp_path):
         md = tmp_path / "h2_list.md"
         md.write_text("## Section\n\n- item1\n- item2\n")
@@ -111,21 +91,84 @@ class TestRenderHtml:
         assert result["success"] is True
         assert Path(result["output"]).exists()
 
+    def test_convert_renders_tight_list_as_list(self, tmp_path):
+        md = tmp_path / "tight.md"
+        md.write_text("**Strengths:**\n- Strong trend\n- Good fundamentals\n")
+        result = convert(str(md))
+        assert result["success"] is True
+        assert Path(result["output"]).exists()
 
-class TestFixTableAlignment:
-    def test_td_gets_left_align(self):
-        assert '<td align="left">' in _fix_table_alignment("<td>text</td>")
+    def test_convert_with_greek_chars(self, tmp_path):
+        md = tmp_path / "greeks.md"
+        md.write_text("# Greeks\n\nDelta: δ, Theta: θ, Gamma: γ\n")
+        result = convert(str(md))
+        assert result["success"] is True
+        assert Path(result["output"]).exists()
 
-    def test_th_gets_left_align(self):
-        assert '<th align="left">' in _fix_table_alignment("<th>header</th>")
 
-    def test_existing_td_attrs_preserved(self):
-        result = _fix_table_alignment('<td colspan="2">text</td>')
-        assert 'align="left"' in result
-        assert 'colspan="2"' in result
+class TestRenderer:
+    def _make_renderer(self):
+        font = _setup_font()
+        styles = _build_styles(font)
+        return _Renderer(styles=styles, unicode_font=(font != "Helvetica"))
 
-    def test_non_table_tags_unchanged(self):
-        assert _fix_table_alignment("<p>hello</p>") == "<p>hello</p>"
+    def test_paragraph_added_to_story(self):
+        r = self._make_renderer()
+        r.paragraph("Hello world")
+        assert len(r.story) == 1
+
+    def test_heading_added_to_story(self):
+        r = self._make_renderer()
+        r.heading("Section title", level=2)
+        assert len(r.story) == 1
+
+    def test_thematic_break_added_to_story(self):
+        r = self._make_renderer()
+        r.thematic_break()
+        assert len(r.story) == 1
+
+    def test_list_items_all_added(self):
+        r = self._make_renderer()
+        item1 = r.list_item("first")
+        item2 = r.list_item("second")
+        r.list(item1 + item2, ordered=False)
+        assert len(r.story) == 2
+
+    def test_ordered_list(self):
+        r = self._make_renderer()
+        item1 = r.list_item("one")
+        item2 = r.list_item("two")
+        r.list(item1 + item2, ordered=True)
+        assert len(r.story) == 2
+
+    def test_table_adds_flowables(self):
+        r = self._make_renderer()
+        c1 = r.table_cell("Symbol", head=True)
+        c2 = r.table_cell("Price", head=True)
+        head = r.table_head(c1 + c2)
+        c3 = r.table_cell("AAPL")
+        c4 = r.table_cell("200")
+        row = r.table_row(c3 + c4)
+        body = r.table_body(row)
+        r.table(head + body)
+        assert len(r.story) >= 1
+
+    def test_strong_returns_bold_markup(self):
+        r = self._make_renderer()
+        result = r.strong("bold text")
+        assert result == "<b>bold text</b>"
+
+    def test_emphasis_returns_italic_markup(self):
+        r = self._make_renderer()
+        result = r.emphasis("italic text")
+        assert result == "<i>italic text</i>"
+
+    def test_text_escapes_xml(self):
+        r = self._make_renderer()
+        result = r.text("a < b & c > d")
+        assert "&lt;" in result
+        assert "&amp;" in result
+        assert "&gt;" in result
 
 
 class TestFixTightLists:
@@ -153,13 +196,6 @@ class TestFixTightLists:
         assert "Header:\n\n* item" in result
         assert "Header2:\n\n+ item2" in result
 
-    def test_convert_renders_tight_list_as_list(self, tmp_path):
-        md = tmp_path / "tight.md"
-        md.write_text("**Strengths:**\n- Strong trend\n- Good fundamentals\n")
-        result = convert(str(md))
-        assert result["success"] is True
-        assert Path(result["output"]).exists()
-
 
 class TestSanitize:
     def test_greek_letters_replaced_without_unicode_font(self):
@@ -170,23 +206,15 @@ class TestSanitize:
         assert "δ" in result and "Δ" in result
 
     def test_arrows_always_replaced(self):
-        # Arrows are in _ALWAYS_SUBS, substituted regardless of font
-        assert _sanitize("→ ←", unicode_font=False) == "-> <-"
-        assert _sanitize("→ ←", unicode_font=True) == "-> <-"
+        assert _sanitize("→ ←", unicode_font=False) == "-&gt; &lt;-"
+        assert _sanitize("→ ←", unicode_font=True) == "-&gt; &lt;-"
 
     def test_latin1_chars_unchanged(self):
         assert _sanitize("Hello, world! 100%", unicode_font=False) == "Hello, world! 100%"
 
     def test_unknown_unicode_decomposed_without_font(self):
         result = _sanitize("café", unicode_font=False)
-        assert "caf" in result  # 'é' decomposes to 'e' via NFKD
-
-    def test_convert_with_greek_chars(self, tmp_path):
-        md = tmp_path / "greeks.md"
-        md.write_text("# Greeks\n\nDelta: δ, Theta: θ, Gamma: γ\n")
-        result = convert(str(md))
-        assert result["success"] is True
-        assert Path(result["output"]).exists()
+        assert "caf" in result
 
 
 class TestCLI:
