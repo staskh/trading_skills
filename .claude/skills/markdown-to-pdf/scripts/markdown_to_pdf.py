@@ -9,8 +9,54 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import unicodedata
+
 import markdown as md_lib
 from fpdf import FPDF
+
+# ASCII substitutions for characters outside Latin-1 (Helvetica's range).
+# Covers Greeks (options greeks), arrows, math operators, and typography.
+_UNICODE_SUBS = {
+    # Greek — options greeks and stats
+    "α": "alpha", "β": "beta", "γ": "gamma", "Γ": "Gamma",
+    "δ": "delta", "Δ": "Delta", "θ": "theta", "Θ": "Theta",
+    "λ": "lambda", "μ": "mu", "ν": "nu", "ρ": "rho",
+    "σ": "sigma", "Σ": "Sigma", "τ": "tau", "φ": "phi", "Φ": "Phi",
+    "ψ": "psi", "ω": "omega", "Ω": "Omega", "ε": "epsilon", "η": "eta",
+    "κ": "kappa", "χ": "chi", "ξ": "xi", "π": "pi",
+    # Arrows
+    "→": "->", "←": "<-", "↑": "^", "↓": "v",
+    "⇒": "=>", "⇐": "<=", "⟶": "->", "⟵": "<-",
+    # Math / comparison
+    "≥": ">=", "≤": "<=", "≠": "!=", "≈": "~=",
+    "×": "x", "÷": "/", "±": "+/-", "∞": "inf",
+    "√": "sqrt", "∑": "sum", "∏": "prod",
+    # Typographic
+    "‘": "'", "’": "'", "“": '"', "”": '"',
+    "–": "-", "—": "--", "…": "...",
+    # Currency
+    "€": "EUR", "£": "GBP", "¥": "JPY", "₹": "INR",
+    # Misc
+    "•": "-", "·": ".", "°": "deg", "©": "(c)", "®": "(R)", "™": "(TM)",
+    "½": "1/2", "¼": "1/4", "¾": "3/4",
+}
+
+
+def _sanitize(text: str) -> str:
+    """Replace non-Latin-1 chars with ASCII equivalents; drop anything remaining."""
+    result = []
+    for ch in text:
+        if ord(ch) < 256:
+            result.append(ch)
+        elif ch in _UNICODE_SUBS:
+            result.append(_UNICODE_SUBS[ch])
+        else:
+            # Try NFKD decomposition, keep only ASCII part
+            normalized = unicodedata.normalize("NFKD", ch)
+            ascii_part = normalized.encode("ascii", "ignore").decode("ascii")
+            result.append(ascii_part if ascii_part else "?")
+    return "".join(result)
+
 
 _CSS = """
 <style>
@@ -51,7 +97,7 @@ def convert(input_path: str, output_path: str | None = None) -> dict:
             input_file.read_text(encoding="utf-8"),
             extensions=["tables", "fenced_code"],
         )
-        html = f"<html><head>{_CSS}</head><body>{html}</body></html>"
+        html = _sanitize(f"<html><head>{_CSS}</head><body>{html}</body></html>")
 
         pdf = FPDF()
         pdf.set_margins(20, 20, 20)

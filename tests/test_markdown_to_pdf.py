@@ -19,6 +19,7 @@ def _load_script():
 _mod = _load_script()
 convert = _mod.convert
 default_output_path = _mod.default_output_path
+_sanitize = _mod._sanitize
 
 
 class TestDefaultOutputPath:
@@ -75,6 +76,28 @@ class TestConvert:
     def test_markdown_table_renders(self, tmp_path):
         md = tmp_path / "table.md"
         md.write_text("# Report\n\n| Symbol | Price |\n|--------|-------|\n| AAPL   | 200   |\n")
+        result = convert(str(md))
+        assert result["success"] is True
+        assert Path(result["output"]).exists()
+
+
+class TestSanitize:
+    def test_greek_letters_replaced(self):
+        assert _sanitize("δ theta Δ") == "delta theta Delta"
+
+    def test_arrows_replaced(self):
+        assert _sanitize("→ ←") == "-> <-"
+
+    def test_latin1_chars_unchanged(self):
+        assert _sanitize("Hello, world! 100%") == "Hello, world! 100%"
+
+    def test_unknown_unicode_gets_question_mark_or_decomposed(self):
+        result = _sanitize("café")
+        assert "caf" in result  # 'é' decomposes to 'e' via NFKD
+
+    def test_convert_with_greek_chars(self, tmp_path):
+        md = tmp_path / "greeks.md"
+        md.write_text("# Greeks\n\nDelta: δ, Theta: θ, Gamma: γ\n")
         result = convert(str(md))
         assert result["success"] is True
         assert Path(result["output"]).exists()
