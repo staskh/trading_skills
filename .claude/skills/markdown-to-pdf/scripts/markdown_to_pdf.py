@@ -83,6 +83,7 @@ _LATIN1_SUBS = {
 # PDF visual style
 # ---------------------------------------------------------------------------
 _NAVY = (26, 58, 92)
+_BODY_SIZE_PT = 9
 
 
 def _make_tag_styles(family: str) -> dict:
@@ -169,6 +170,7 @@ def convert(input_path: str, output_path: str | None = None) -> dict:
         pdf.add_page()
 
         font_family = _setup_font(pdf) or "helvetica"
+        pdf.set_font(font_family, size=_BODY_SIZE_PT)
         has_unicode = font_family != "helvetica"
         body_html = _sanitize(body_html, unicode_font=has_unicode)
         body_html = _fix_table_alignment(body_html)
