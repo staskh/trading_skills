@@ -20,6 +20,8 @@ dependencies = [
     "massive>=2.4.0",
     "pandas-market-calendars>=5.3.1.2",
     "plotly>=6.6.0",
+    "markdown>=3.7",
+    "fpdf2>=2.8",
 ]
 
 [project.scripts]
