@@ -272,12 +272,12 @@ def compute_recommendation(data: dict) -> dict:
     # PMCC viability
     if pmcc_score >= 9:
         points += 2
-        strengths.append(f"Excellent PMCC candidate ({pmcc_score}/11)")
+        strengths.append(f"Excellent PMCC candidate ({pmcc_score}/14)")
     elif pmcc_score >= 7:
         points += 1
-        strengths.append(f"Good PMCC candidate ({pmcc_score}/11)")
+        strengths.append(f"Good PMCC candidate ({pmcc_score}/14)")
     elif pmcc_score > 0:
-        risks.append(f"Fair PMCC viability ({pmcc_score}/11)")
+        risks.append(f"Fair PMCC viability ({pmcc_score}/14)")
 
     # Valuation
     if forward_pe and forward_pe > 0:
