@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import markdown as md_lib
-from fpdf import FPDF, FontFace
+from fpdf import FPDF
 
 # ---------------------------------------------------------------------------
 # Unicode TTF font discovery — searched in order, first match wins.
@@ -95,13 +95,26 @@ _BODY_SIZE_PT = 9
 _LINE_HEIGHT = 1.5
 
 
-def _make_tag_styles(family: str) -> dict:
-    """Build heading tag_styles with explicit font family so bold resolves correctly."""
-    return {
-        "h1": FontFace(family=family, size_pt=22, color=_NAVY, emphasis="BOLD"),
-        "h2": FontFace(family=family, size_pt=16, color=_NAVY, emphasis="BOLD"),
-        "h3": FontFace(family=family, size_pt=12, color=_NAVY, emphasis="BOLD"),
-    }
+def _navy_hex() -> str:
+    return "#{:02x}{:02x}{:02x}".format(*_NAVY)
+
+
+def _replace_headings(html: str) -> str:
+    """Replace h1-h3 tags with inline font styling.
+
+    fpdf2 tag_styles leave the heading font active after </hN>, causing list
+    bullets that follow to render at heading size on their own line. Replacing
+    headings with explicit <font> tags resets the font cleanly after each one.
+    """
+    sizes = {"h1": 22, "h2": 16, "h3": 12}
+    color = _navy_hex()
+    for tag, size in sizes.items():
+        html = re.sub(
+            rf"<{tag}>(.*?)</{tag}>",
+            rf'<p><b><font size="{size}" color="{color}">\1</font></b></p>',
+            html,
+        )
+    return html
 
 
 def _fix_table_alignment(html: str) -> str:
@@ -202,13 +215,13 @@ def convert(input_path: str, output_path: str | None = None) -> dict:
         pdf.set_font(font_family, size=_BODY_SIZE_PT)
         has_unicode = font_family != "helvetica"
         body_html = _sanitize(body_html, unicode_font=has_unicode)
+        body_html = _replace_headings(body_html)
         body_html = _fix_table_alignment(body_html)
         body_html = re.sub(r"<p(\b)", rf'<p line-height="{_LINE_HEIGHT}"\1', body_html)
 
         pdf.write_html(
             body_html,
             table_line_separators=True,
-            tag_styles=_make_tag_styles(font_family),
             font_family=font_family,
         )
         pdf.output(out)

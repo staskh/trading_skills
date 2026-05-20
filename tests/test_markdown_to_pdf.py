@@ -22,6 +22,7 @@ default_output_path = _mod.default_output_path
 _sanitize = _mod._sanitize
 _fix_table_alignment = _mod._fix_table_alignment
 _fix_tight_lists = _mod._fix_tight_lists
+_replace_headings = _mod._replace_headings
 
 
 class TestDefaultOutputPath:
@@ -78,6 +79,40 @@ class TestConvert:
     def test_markdown_table_renders(self, tmp_path):
         md = tmp_path / "table.md"
         md.write_text("# Report\n\n| Symbol | Price |\n|--------|-------|\n| AAPL   | 200   |\n")
+        result = convert(str(md))
+        assert result["success"] is True
+        assert Path(result["output"]).exists()
+
+
+class TestReplaceHeadings:
+    def test_h1_replaced_with_font_tag(self):
+        result = _replace_headings("<h1>Title</h1>")
+        assert "<h1>" not in result
+        assert 'size="22"' in result
+        assert "<b>" in result
+        assert "Title" in result
+
+    def test_h2_replaced_with_font_tag(self):
+        result = _replace_headings("<h2>Section</h2>")
+        assert "<h2>" not in result
+        assert 'size="16"' in result
+
+    def test_h3_replaced_with_font_tag(self):
+        result = _replace_headings("<h3>Sub</h3>")
+        assert "<h3>" not in result
+        assert 'size="12"' in result
+
+    def test_navy_color_applied(self):
+        result = _replace_headings("<h2>Section</h2>")
+        assert 'color="#1a3a5c"' in result
+
+    def test_non_heading_tags_unchanged(self):
+        html = "<p>Normal paragraph</p>"
+        assert _replace_headings(html) == html
+
+    def test_convert_with_headings_followed_by_list(self, tmp_path):
+        md = tmp_path / "h2_list.md"
+        md.write_text("## Section\n\n- item1\n- item2\n")
         result = convert(str(md))
         assert result["success"] is True
         assert Path(result["output"]).exists()
