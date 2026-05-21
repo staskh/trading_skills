@@ -36,67 +36,128 @@ _FONT_CANDIDATES = [
     # (regular, bold, italic)  — None means reuse regular
     # macOS
     ("/Library/Fonts/Arial Unicode.ttf", None, None),
-    ("/Library/Fonts/Arial.ttf", "/Library/Fonts/Arial Bold.ttf",
-     "/Library/Fonts/Arial Italic.ttf"),
-    ("/System/Library/Fonts/Supplemental/Arial.ttf",
-     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-     "/System/Library/Fonts/Supplemental/Arial Italic.ttf"),
+    (
+        "/Library/Fonts/Arial.ttf",
+        "/Library/Fonts/Arial Bold.ttf",
+        "/Library/Fonts/Arial Italic.ttf",
+    ),
+    (
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Italic.ttf",
+    ),
     # Linux
-    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf"),
-    ("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-     "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf"),
-    ("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-     "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-     "/usr/share/fonts/truetype/noto/NotoSans-Italic.ttf"),
+    (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+    ),
+    (
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+    ),
+    (
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Italic.ttf",
+    ),
     # Windows
-    ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf",
-     "C:/Windows/Fonts/ariali.ttf"),
+    ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/ariali.ttf"),
 ]
 
 # ---------------------------------------------------------------------------
 # Substitutions always applied (emoji / symbols absent from most TTF fonts)
 # ---------------------------------------------------------------------------
 _ALWAYS_SUBS = {
-    "\U0001f947": "1st", "\U0001f948": "2nd", "\U0001f949": "3rd",
-    "✓": "OK", "✔": "OK",
-    "✗": "X",  "✘": "X",
+    "\U0001f947": "1st",
+    "\U0001f948": "2nd",
+    "\U0001f949": "3rd",
+    # Color circles (no TTF font supports these)
+    "\U0001f534": "[!!]",  # 🔴
+    "\U0001f7e1": "[!]",  # 🟡
+    "\U0001f7e2": "[OK]",  # 🟢
+    # Trend / chart emoji
+    "\U0001f4c8": "(+)",  # 📈
+    "\U0001f4c9": "(-)",  # 📉
+    "➡": "->",
     "⚠": "(!)",
-    "✅": "OK", "❌": "X",
-    "↑": "^", "↓": "v",
-    "→": "->", "←": "<-",
+    "✅": "OK",
+    "❌": "X",
+    "↑": "^",
+    "↓": "v",
+    "→": "->",
+    "←": "<-",
     "'": "'",
-    "“": '"', "”": '"',
-    "–": "-", "—": "--",
+    """: '"', """: '"',
+    "–": "-",
+    "—": "--",
     "…": "...",
 }
 
 # Substitutions applied only when no Unicode font is available
 _LATIN1_SUBS = {
-    "α": "alpha",  "β": "beta",   "γ": "gamma",  "Γ": "Gamma",
-    "δ": "delta",  "Δ": "Delta",  "θ": "theta",  "Θ": "Theta",
-    "λ": "lambda", "μ": "mu",     "ν": "nu",     "ρ": "rho",
-    "σ": "sigma",  "Σ": "Sigma",  "τ": "tau",    "φ": "phi",
-    "Φ": "Phi",    "ψ": "psi",    "ω": "omega",  "Ω": "Omega",
-    "ε": "epsilon","η": "eta",    "κ": "kappa",  "χ": "chi",
-    "ξ": "xi",     "π": "pi",
-    "≥": ">=", "≤": "<=", "≠": "!=", "≈": "~=",
-    "×": "x",  "÷": "/",  "±": "+/-","∞": "inf",
-    "√": "sqrt","∑": "sum",
-    "€": "EUR", "£": "GBP", "¥": "JPY", "₹": "INR",
-    "°": "deg", "©": "(c)", "®": "(R)", "™": "(TM)",
-    "½": "1/2", "¼": "1/4", "¾": "3/4",
-    "•": "-", "·": ".",
+    "✓": "OK",
+    "✔": "OK",
+    "✗": "X",
+    "✘": "X",
+    "α": "alpha",
+    "β": "beta",
+    "γ": "gamma",
+    "Γ": "Gamma",
+    "δ": "delta",
+    "Δ": "Delta",
+    "θ": "theta",
+    "Θ": "Theta",
+    "λ": "lambda",
+    "μ": "mu",
+    "ν": "nu",
+    "ρ": "rho",
+    "σ": "sigma",
+    "Σ": "Sigma",
+    "τ": "tau",
+    "φ": "phi",
+    "Φ": "Phi",
+    "ψ": "psi",
+    "ω": "omega",
+    "Ω": "Omega",
+    "ε": "epsilon",
+    "η": "eta",
+    "κ": "kappa",
+    "χ": "chi",
+    "ξ": "xi",
+    "π": "pi",
+    "≥": ">=",
+    "≤": "<=",
+    "≠": "!=",
+    "≈": "~=",
+    "×": "x",
+    "÷": "/",
+    "±": "+/-",
+    "∞": "inf",
+    "√": "sqrt",
+    "∑": "sum",
+    "€": "EUR",
+    "£": "GBP",
+    "¥": "JPY",
+    "₹": "INR",
+    "°": "deg",
+    "©": "(c)",
+    "®": "(R)",
+    "™": "(TM)",
+    "½": "1/2",
+    "¼": "1/4",
+    "¾": "3/4",
+    "•": "-",
+    "·": ".",
 }
 
 # ---------------------------------------------------------------------------
 # Sentinel bytes for passing structured data through string-concat pipeline
 # ---------------------------------------------------------------------------
 _CELL_SEP = "\x00C\x00"
-_HEAD_ROW  = "\x01H\x01"
-_BODY_ROW  = "\x01R\x01"
+_HEAD_ROW = "\x01H\x01"
+_BODY_ROW = "\x01R\x01"
 _LIST_ITEM = "\x02I\x02"
 
 # ---------------------------------------------------------------------------
@@ -138,25 +199,44 @@ def _build_styles(font: str) -> dict:
         return ParagraphStyle(name, fontName=fn or font, **kw)
 
     return {
-        "body": s("body", fontSize=_BODY_PT, leading=_LINE_SPACING,
-                  spaceAfter=4, spaceBefore=0),
-        "h1": s("h1_doc", fn=bold, fontSize=22, leading=28, textColor=_NAVY,
-                spaceBefore=8, spaceAfter=4),
-        "h2": s("h2_doc", fn=bold, fontSize=16, leading=20, textColor=_NAVY,
-                spaceBefore=8, spaceAfter=4),
-        "h3": s("h3_doc", fn=bold, fontSize=12, leading=16, textColor=_NAVY,
-                spaceBefore=6, spaceAfter=3),
-        "code": s("code", fn="Courier", fontSize=8, leading=11,
-                  backColor=colors.HexColor("#f5f5f5"), spaceAfter=6),
-        "quote": s("quote", fontSize=_BODY_PT, leading=_LINE_SPACING,
-                   leftIndent=20, textColor=colors.HexColor("#444444"),
-                   spaceAfter=4),
-        "bullet": s("bullet", fontSize=_BODY_PT, leading=_LINE_SPACING,
-                    leftIndent=20, bulletIndent=10, spaceAfter=2),
-        "table_head": s("table_head", fn=bold, fontSize=8, leading=11,
-                        alignment=TA_LEFT),
-        "table_cell": s("table_cell", fontSize=8, leading=11,
-                        alignment=TA_LEFT),
+        "body": s("body", fontSize=_BODY_PT, leading=_LINE_SPACING, spaceAfter=4, spaceBefore=0),
+        "h1": s(
+            "h1_doc", fn=bold, fontSize=22, leading=28, textColor=_NAVY, spaceBefore=8, spaceAfter=4
+        ),
+        "h2": s(
+            "h2_doc", fn=bold, fontSize=16, leading=20, textColor=_NAVY, spaceBefore=8, spaceAfter=4
+        ),
+        "h3": s(
+            "h3_doc", fn=bold, fontSize=12, leading=16, textColor=_NAVY, spaceBefore=6, spaceAfter=3
+        ),
+        "code": s(
+            "code",
+            fn="Courier",
+            fontSize=8,
+            leading=11,
+            backColor=colors.HexColor("#f5f5f5"),
+            spaceAfter=6,
+        ),
+        "quote": s(
+            "quote",
+            fontSize=_BODY_PT,
+            leading=_LINE_SPACING,
+            leftIndent=20,
+            textColor=colors.HexColor("#444444"),
+            spaceAfter=4,
+        ),
+        "bullet": s(
+            "bullet",
+            fontSize=_BODY_PT,
+            leading=_LINE_SPACING,
+            leftIndent=20,
+            bulletIndent=10,
+            spaceAfter=2,
+        ),
+        "table_head": s(
+            "table_head", fn=bold, fontSize=8, leading=11, alignment=TA_LEFT, textColor=colors.white
+        ),
+        "table_cell": s("table_cell", fontSize=8, leading=11, alignment=TA_LEFT),
     }
 
 
@@ -234,7 +314,7 @@ class _Renderer(mistune.HTMLRenderer):
         return " "
 
     def link(self, text: str, url: str, title=None) -> str:
-        return f'<u>{text}</u>'
+        return f"<u>{text}</u>"
 
     def image(self, text: str, url: str, title=None) -> str:
         return ""
@@ -256,9 +336,15 @@ class _Renderer(mistune.HTMLRenderer):
         return ""
 
     def thematic_break(self) -> str:
-        self.story.append(HRFlowable(width="100%", thickness=0.5,
-                                      color=colors.HexColor("#cccccc"),
-                                      spaceAfter=4, spaceBefore=4))
+        self.story.append(
+            HRFlowable(
+                width="100%",
+                thickness=0.5,
+                color=colors.HexColor("#cccccc"),
+                spaceAfter=4,
+                spaceBefore=4,
+            )
+        )
         return ""
 
     def block_code(self, code: str, info=None) -> str:
@@ -281,9 +367,7 @@ class _Renderer(mistune.HTMLRenderer):
         bullet = "•" if self.unicode_font else "-"
         for i, body in enumerate(items, 1):
             marker = f"{i}." if ordered else bullet
-            self.story.append(
-                Paragraph(f"{marker}&nbsp;&nbsp;{body}", self.styles["bullet"])
-            )
+            self.story.append(Paragraph(f"{marker}&nbsp;&nbsp;{body}", self.styles["bullet"]))
         return ""
 
     def list_item(self, text: str) -> str:
@@ -374,6 +458,7 @@ def default_output_path(input_path: str) -> str:
 def _generated_at() -> str:
     try:
         from zoneinfo import ZoneInfo
+
         now = datetime.now(ZoneInfo("America/New_York"))
     except Exception:
         now = datetime.now()
