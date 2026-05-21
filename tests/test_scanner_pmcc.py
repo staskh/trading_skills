@@ -14,6 +14,7 @@ from trading_skills.scanner_pmcc import (
     compute_earnings_score,
     compute_trend_score,
     find_strike_by_delta,
+    format_scan_markdown,
     format_scan_results,
 )
 
@@ -33,7 +34,7 @@ class TestAnalyzePMCC:
         if "pmcc_score" in result:
             assert "leaps" in result
             leaps = result["leaps"]
-            for field in ["expiry", "strike", "delta", "bid", "ask", "mid"]:
+            for field in ["expiry", "strike", "delta", "iv", "last_price", "bid", "ask", "mid"]:
                 assert field in leaps, f"Missing LEAPS field: {field}"
 
     def test_has_short_data(self):
@@ -41,7 +42,7 @@ class TestAnalyzePMCC:
         if "pmcc_score" in result:
             assert "short" in result
             short = result["short"]
-            for field in ["expiry", "strike", "delta", "bid", "ask", "mid"]:
+            for field in ["expiry", "strike", "delta", "iv", "last_price", "bid", "ask", "mid"]:
                 assert field in short, f"Missing short field: {field}"
 
     def test_has_metrics(self):
@@ -183,6 +184,21 @@ class TestAnalyzePMCC:
         expected_max_profit = leaps_value_at_short_expiry + short["mid"] - leaps["mid"]
         # iv_pct is rounded to 1 decimal, so allow tolerance for BS repricing error
         assert abs(metrics["max_profit"] - expected_max_profit) < 0.10
+
+    def test_leaps_iv_is_positive(self):
+        result = analyze_pmcc("AAPL")
+        if "pmcc_score" in result:
+            assert result["leaps"]["iv"] > 0
+
+    def test_short_iv_is_positive(self):
+        result = analyze_pmcc("AAPL")
+        if "pmcc_score" in result:
+            assert result["short"]["iv"] > 0
+
+    def test_has_earnings_date(self):
+        result = analyze_pmcc("AAPL")
+        if "pmcc_score" in result:
+            assert "earnings_date" in result
 
     def test_symbol_without_options(self):
         result = analyze_pmcc("BRK.A")
@@ -576,30 +592,57 @@ class TestNaNOptionData:
         assert result["short"]["volume"] == 0
         assert result["short"]["oi"] == 0
 
+    def test_iv_and_last_price_present(self):
+        result = analyze_pmcc("TEST", ticker=self._make_mock_ticker())
+        assert result is not None
+        assert "pmcc_score" in result
+        assert "iv" in result["leaps"]
+        assert "last_price" in result["leaps"]
+        assert "iv" in result["short"]
+        assert "last_price" in result["short"]
+        assert result["leaps"]["iv"] > 0
+        assert result["short"]["iv"] > 0
+
 
 class TestComputeAtmIv:
-    """compute_atm_iv must fall back to lastPrice-based IV when impliedVolatility is near zero."""
+    """compute_atm_iv always computes IV from market price data, never from Yahoo's column."""
 
-    def test_returns_valid_iv_from_implied_volatility(self):
+    def test_returns_valid_iv_from_market_data(self):
+        # Realistic bid/ask prices for ~30% IV on 1-year ATM options
+        # (S=100, K=100, T≈1yr, r=5%, σ=30% → C≈14.2)
         calls = _make_chain(
             strikes=[95.0, 100.0, 105.0],
-            bids=[5.0, 2.5, 0.8],
-            asks=[5.5, 3.0, 1.2],
-            last_prices=[5.2, 2.7, 1.0],
-            ivs=[0.30, 0.28, 0.32],
+            bids=[16.3, 13.7, 11.5],
+            asks=[17.3, 14.7, 12.5],
+            last_prices=[16.8, 14.2, 12.0],
+            ivs=[0.30, 0.28, 0.32],  # unused — computed from price
         )
         iv = compute_atm_iv(calls, 100.0, "2027-05-18")
         assert iv is not None
-        assert 0.25 <= iv <= 0.35
+        assert 0.25 <= iv <= 0.40
 
-    def test_falls_back_when_iv_near_zero(self):
-        """Near-zero impliedVolatility should trigger lastPrice-based recalculation."""
+    def test_always_computes_from_price_not_yahoo(self):
+        """IV must be computed from bid/ask mid, never from Yahoo's impliedVolatility."""
+        calls = _make_chain(
+            strikes=[95.0, 100.0, 105.0],
+            bids=[16.3, 13.7, 11.5],
+            asks=[17.3, 14.7, 12.5],
+            last_prices=[16.8, 14.2, 12.0],
+            ivs=[0.001, 0.001, 0.001],  # bad Yahoo data — must be ignored
+        )
+        iv = compute_atm_iv(calls, 100.0, "2027-05-18")
+        assert iv is not None
+        # Should compute ~30% IV from bid/ask, not use the bad Yahoo 0.001
+        assert 0.25 <= iv <= 0.40, f"Expected IV ~30% from price, got {iv:.3f}"
+
+    def test_falls_back_to_last_price_when_no_bid_ask(self):
+        """When bid=ask=0, compute IV from lastPrice using lastTradeDate."""
         calls = _make_chain(
             strikes=[95.0, 100.0, 105.0],
             bids=[0.0, 0.0, 0.0],
             asks=[0.0, 0.0, 0.0],
             last_prices=[8.0, 5.0, 2.5],
-            ivs=[0.001, 0.001, 0.001],  # bad yfinance data
+            ivs=[0.001, 0.001, 0.001],
             last_trade="2026-05-16",
         )
         iv = compute_atm_iv(calls, 100.0, "2027-05-18")
@@ -616,3 +659,184 @@ class TestComputeAtmIv:
         )
         iv = compute_atm_iv(calls, 100.0, "2027-05-18")
         assert iv == 0.30  # default fallback
+
+
+class TestFindStrikeByDeltaIV:
+    """find_strike_by_delta must always compute IV from price, not Yahoo's column."""
+
+    def test_calculated_iv_present_in_result(self):
+        """Returned option dict must include calculated_iv."""
+        chain = _make_chain(
+            strikes=[85.0, 90.0, 95.0, 100.0],
+            bids=[16.0, 13.0, 10.0, 7.0],
+            asks=[17.0, 14.0, 11.0, 8.0],
+            last_prices=[16.5, 13.5, 10.5, 7.5],
+            ivs=[0.001] * 4,
+        )
+        _, option = find_strike_by_delta(chain, 100.0, 0.80, 365, 0.30)
+        assert option is not None
+        assert "calculated_iv" in option, "Option must include calculated_iv"
+        assert option["calculated_iv"] > 0
+
+    def test_iv_from_bid_ask_not_yahoo(self):
+        """IV computed from bid/ask mid, ignoring Yahoo's impliedVolatility (0.001)."""
+        # ATM call: S=K=100, T=1yr, bid/ask mid=14.2 → IV ≈ 30%
+        chain = _make_chain(
+            strikes=[100.0],
+            bids=[13.7],
+            asks=[14.7],
+            last_prices=[14.2],
+            ivs=[0.001],  # bad Yahoo data — must be ignored
+        )
+        _, option = find_strike_by_delta(chain, 100.0, 0.50, 365, 0.80)
+        assert option is not None
+        # With avg_iv=0.80 the delta would be ~0.85+; with true IV~30% it's ~0.54
+        # So calculated_iv must be far from 0.80
+        assert option["calculated_iv"] < 0.60, (
+            f"IV {option['calculated_iv']:.3f} should be ~30%, not avg_iv 0.80"
+        )
+
+    def test_off_hours_calculated_iv_from_last_price(self):
+        """When bid=ask=0, calculated_iv derived from lastPrice."""
+        last_trade = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
+        chain = _make_chain(
+            strikes=[100.0],
+            bids=[0.0],
+            asks=[0.0],
+            last_prices=[14.2],
+            ivs=[0.001],
+            last_trade=last_trade,
+        )
+        _, option = find_strike_by_delta(chain, 100.0, 0.50, 365, 0.80)
+        assert option is not None
+        assert "calculated_iv" in option
+        assert option["calculated_iv"] > 0.01
+
+
+class TestFormatScanMarkdown:
+    """format_scan_markdown renders scan output as structured markdown report."""
+
+    def _make_scan_output(self):
+        result = {
+            "symbol": "AAPL",
+            "price": 150.0,
+            "iv_pct": 30.0,
+            "pmcc_score": 10.0,
+            "max_possible_score": 14,
+            "earnings_date": "2026-08-01",
+            "leaps": {
+                "expiry": "2027-01-15",
+                "days": 300,
+                "strike": 120.0,
+                "delta": 0.80,
+                "iv": 0.30,
+                "bid": 35.0,
+                "ask": 36.0,
+                "mid": 35.5,
+                "last_price": 35.2,
+                "spread_pct": 2.8,
+                "volume": 100,
+                "oi": 500,
+            },
+            "short": {
+                "expiry": "2026-06-06",
+                "days": 14,
+                "strike": 155.0,
+                "delta": 0.20,
+                "iv": 0.28,
+                "bid": 1.5,
+                "ask": 1.8,
+                "mid": 1.65,
+                "last_price": 1.6,
+                "spread_pct": 18.0,
+                "volume": 200,
+                "oi": 1000,
+            },
+            "metrics": {
+                "net_debit": 33.85,
+                "short_yield_pct": 4.6,
+                "annual_yield_est_pct": 120.0,
+                "capital_required": 3550.0,
+                "max_profit": 5.0,
+                "roi_pct": 14.1,
+            },
+            "score_breakdown": {
+                "trend_delta": 1.5,
+                "trend": {"sma50": "+1.0", "rsi": "+0.5"},
+                "earnings_delta": 1.0,
+                "earnings": {"earnings": "+1.0 (earnings 72d away)"},
+                "leaps_delta_delta": 2.0,
+                "leaps_delta": "+2.0",
+                "short_delta_delta": 1.0,
+                "short_delta": "+1.0",
+                "leaps_liquidity_delta": 1.0,
+                "leaps_liquidity": "+1.0",
+                "short_liquidity_delta": 1.0,
+                "short_liquidity": "+1.0",
+                "leaps_spread_delta": 1.0,
+                "leaps_spread": "+1.0",
+                "short_spread_delta": 0.5,
+                "short_spread": "+0.5",
+                "iv_delta": 1.0,
+                "iv": "+1.0",
+                "yield_delta": 2.0,
+                "yield": "+2.0",
+            },
+        }
+        return {
+            "results": [result],
+            "scan_date": "2026-05-21 10:00 ET",
+            "count": 1,
+            "errors": [],
+            "criteria": {},
+        }
+
+    def test_returns_string(self):
+        md = format_scan_markdown(self._make_scan_output())
+        assert isinstance(md, str)
+        assert len(md) > 0
+
+    def test_has_summary_table(self):
+        md = format_scan_markdown(self._make_scan_output())
+        assert "| Symbol" in md
+        assert "AAPL" in md
+
+    def test_summary_table_has_required_columns(self):
+        md = format_scan_markdown(self._make_scan_output())
+        for col in ["Symbol", "Price", "IV%", "Capital", "Ann. Yield", "Trend", "PMCC Score"]:
+            assert col in md, f"Summary table missing column: {col}"
+
+    def test_has_per_symbol_leaps_section(self):
+        md = format_scan_markdown(self._make_scan_output())
+        assert "LEAPS" in md
+
+    def test_has_per_symbol_short_section(self):
+        md = format_scan_markdown(self._make_scan_output())
+        assert "Short" in md or "short call" in md.lower()
+
+    def test_summary_sorted_by_score(self):
+        output = self._make_scan_output()
+        output["results"].append(
+            {
+                **output["results"][0],
+                "symbol": "MSFT",
+                "pmcc_score": 12.0,
+                "metrics": {**output["results"][0]["metrics"]},
+            }
+        )
+        md = format_scan_markdown(output)
+        aapl_pos = md.find("AAPL")
+        msft_pos = md.find("MSFT")
+        # MSFT (score 12) should appear before AAPL (score 10) in summary
+        assert msft_pos < aapl_pos
+
+    def test_empty_results(self):
+        output = {
+            "results": [],
+            "scan_date": "2026-05-21 10:00 ET",
+            "count": 0,
+            "errors": [],
+            "criteria": {},
+        }
+        md = format_scan_markdown(output)
+        assert isinstance(md, str)

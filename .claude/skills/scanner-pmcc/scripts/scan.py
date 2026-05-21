@@ -6,7 +6,7 @@ import argparse
 import json
 import sys
 
-from trading_skills.scanner_pmcc import analyze_pmcc, format_scan_results
+from trading_skills.scanner_pmcc import analyze_pmcc, format_scan_markdown, format_scan_results
 from trading_skills.utils import generated_at_str
 
 
@@ -14,6 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description="PMCC scanner")
     parser.add_argument("symbols", help="Comma-separated symbols or JSON file path")
     parser.add_argument("--output", help="Output JSON file")
+    parser.add_argument("--report", help="Output markdown report file (e.g. report.md)")
     parser.add_argument("--min-leaps-days", type=int, default=270, help="Minimum LEAPS days (default: 270)")
     parser.add_argument("--leaps-delta", type=float, default=0.80, help="Target LEAPS delta (default: 0.80)")
     parser.add_argument("--short-delta", type=float, default=0.20, help="Target short call delta (default: 0.20)")
@@ -58,6 +59,12 @@ def main():
         print(f"Results saved to {args.output}", file=sys.stderr)
     else:
         print(json.dumps(output, indent=2))
+
+    if args.report:
+        md = format_scan_markdown(output)
+        with open(args.report, "w") as f:
+            f.write(md)
+        print(f"Report saved to {args.report}", file=sys.stderr)
 
 
 if __name__ == "__main__":

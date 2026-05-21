@@ -27,6 +27,7 @@ uv run python scripts/scan.py SYMBOLS [options]
 - `--leaps-delta` - Target LEAPS delta (default: 0.80)
 - `--short-delta` - Target short call delta (default: 0.20)
 - `--output` - Save results to JSON file
+- `--report` - Save comprehensive markdown report to file (e.g. `report.md`)
 
 ## Scoring System (max possible: 14, range: -4 to 14)
 
@@ -61,8 +62,9 @@ Returns JSON with:
 - `criteria` - Scan parameters used
 - `results` - Array sorted by score:
   - `symbol`, `price`, `iv_pct`, `pmcc_score`, `max_possible_score` (always 14)
-  - `leaps` - expiry, strike, delta, bid/ask, spread%, volume, OI
-  - `short` - expiry, strike, delta, bid/ask, spread%, volume, OI
+  - `leaps` - expiry, strike, delta, **iv** (calculated from bid/ask), **last_price**, bid/ask, spread%, volume, OI
+  - `short` - expiry, strike, delta, **iv** (calculated from bid/ask), **last_price**, bid/ask, spread%, volume, OI
+  - `earnings_date` - next earnings date (YYYY-MM-DD) or null
   - `metrics` - net_debit, short_yield%, annual_yield%, capital_required
   - `score_breakdown` - every scoring component as a `<name>_delta` (float) + `<name>` (explanation string) pair:
     - Base: `leaps_delta`, `short_delta`, `leaps_liquidity`, `short_liquidity`, `leaps_spread`, `short_spread`, `iv`, `yield`
@@ -90,10 +92,19 @@ uv run python scripts/scan.py AAPL,MSFT --min-leaps-days 365
 uv run python scripts/scan.py AAPL,MSFT,GOOGL --output pmcc_results.json
 ```
 
+## IV Calculation
+
+IV is always computed from market price data via Black-Scholes, never taken from Yahoo Finance's `impliedVolatility` column:
+
+- **During trading hours**: IV derived from bid/ask mid price
+- **Off-hours (bid=ask=0)**: IV derived from last price, using the option's last trade timestamp as the pricing moment (not current wall-clock time)
+
+This applies to both `compute_atm_iv` (used for scanner baseline IV) and per-option delta calculations.
+
 ## Key Constraints
 
 - Short strike **must be above** LEAPS strike
-- Options with bid = 0 (illiquid) are skipped
+- Options with bid = 0 and no last price are skipped
 - Moderate IV (25-50%) scores highest
 
 ## Interpretation

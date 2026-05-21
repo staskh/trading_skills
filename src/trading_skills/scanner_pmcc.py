@@ -49,6 +49,220 @@ def format_scan_results(results: list[dict]) -> dict:
     }
 
 
+def _trend_label(score_breakdown: dict) -> str:
+    """Derive a short trend label from score breakdown."""
+    delta = score_breakdown.get("trend_delta", 0)
+    if delta >= 1.5:
+        return "Bullish"
+    elif delta <= -1.5:
+        return "Bearish"
+    elif delta > 0:
+        return "Leaning Bull"
+    elif delta < 0:
+        return "Leaning Bear"
+    return "Neutral"
+
+
+def _earnings_label(earnings_date_str: str | None) -> str:
+    """Return 'Nd' earnings label, flagging if within 30 days."""
+    if not earnings_date_str:
+        return "N/A"
+    try:
+        today = datetime.now(_NY).date()
+        earnings_date = datetime.strptime(earnings_date_str, "%Y-%m-%d").date()
+        days = (earnings_date - today).days
+        if days < 0:
+            return "passed"
+        flag = " ⚠" if days < 30 else ""
+        return f"{days}d{flag}"
+    except (ValueError, TypeError):
+        return "N/A"
+
+
+def format_scan_markdown(output: dict) -> str:
+    """Render PMCC scan output as a structured markdown report.
+
+    Section 1: Summary table sorted by PMCC score descending.
+    Section 2: Per-symbol detail sections with LEAPS, short call, and setup info.
+    """
+    results = sorted(
+        output.get("results", []),
+        key=lambda x: (
+            x.get("pmcc_score", 0),
+            x.get("metrics", {}).get("annual_yield_est_pct", 0),
+        ),
+        reverse=True,
+    )
+    scan_date = output.get("scan_date", "")
+    errors = output.get("errors", [])
+
+    lines = ["# PMCC Scan Report", "", f"**Generated:** {scan_date}", ""]
+
+    if not results:
+        lines.append("*No results found.*")
+        if errors:
+            lines += ["", "## Errors", ""]
+            for e in errors:
+                lines.append(f"- **{e['symbol']}**: {e.get('error', 'unknown error')}")
+        return "\n".join(lines)
+
+    # Section 1: Summary Table
+    lines += [
+        "## Summary",
+        "",
+        "| Symbol | Price | IV% | Capital | Ann. Yield | Trend | Earnings | PMCC Score |",
+        "|--------|------:|----:|--------:|-----------:|-------|----------|:----------:|",
+    ]
+    for r in results:
+        sym = r["symbol"]
+        price = r.get("price", 0)
+        iv_pct = r.get("iv_pct", 0)
+        capital = r.get("metrics", {}).get("capital_required", 0)
+        ann_yield = r.get("metrics", {}).get("annual_yield_est_pct", 0)
+        trend = _trend_label(r.get("score_breakdown", {}))
+        earnings = _earnings_label(r.get("earnings_date"))
+        score = r.get("pmcc_score", 0)
+        max_score = r.get("max_possible_score", 14)
+        lines.append(
+            f"| {sym} | ${price:.2f} | {iv_pct:.1f}% | ${capital:,.0f} "
+            f"| {ann_yield:.1f}% | {trend} | {earnings} | {score}/{max_score} |"
+        )
+
+    lines += [""]
+
+    # Section 2: Per-Symbol Details
+    lines += ["## Details", ""]
+
+    for r in results:
+        sym = r["symbol"]
+        price = r.get("price", 0)
+        score = r.get("pmcc_score", 0)
+        max_score = r.get("max_possible_score", 14)
+        leaps = r.get("leaps", {})
+        short = r.get("short", {})
+        metrics = r.get("metrics", {})
+        bd = r.get("score_breakdown", {})
+
+        lines += [f"### {sym} — Score {score}/{max_score}", ""]
+
+        # LEAPS details
+        leaps_iv_pct = leaps.get("iv", 0) * 100
+        lines += [
+            "**LEAPS**",
+            "",
+            "| Expiry | Strike | Delta | IV% | Last | Bid | Ask | Mid | Capital |",
+            "|--------|-------:|------:|----:|-----:|----:|----:|----:|--------:|",
+            f"| {leaps.get('expiry')} | ${leaps.get('strike'):.0f} "
+            f"| {leaps.get('delta', 0):.3f} | {leaps_iv_pct:.1f}% "
+            f"| ${leaps.get('last_price', 0):.2f} "
+            f"| ${leaps.get('bid', 0):.2f} | ${leaps.get('ask', 0):.2f} "
+            f"| ${leaps.get('mid', 0):.2f} "
+            f"| ${metrics.get('capital_required', 0):,.0f} |",
+            "",
+        ]
+
+        # Short call details
+        short_iv_pct = short.get("iv", 0) * 100
+        lines += [
+            "**Short Call Candidates**",
+            "",
+            "| Expiry | Strike | Delta | IV% | Last | Bid | Ask | Mid | Premium | Yield% |",
+            "|--------|-------:|------:|----:|-----:|----:|----:|----:|--------:|-------:|",
+            f"| {short.get('expiry')} | ${short.get('strike'):.0f} "
+            f"| {short.get('delta', 0):.3f} | {short_iv_pct:.1f}% "
+            f"| ${short.get('last_price', 0):.2f} "
+            f"| ${short.get('bid', 0):.2f} | ${short.get('ask', 0):.2f} "
+            f"| ${short.get('mid', 0):.2f} "
+            f"| ${short.get('mid', 0) * 100:.0f} "
+            f"| {metrics.get('short_yield_pct', 0):.1f}% |",
+            "",
+        ]
+
+        # Suggested setup
+        net_debit = metrics.get("net_debit", 0)
+        ann_yield = metrics.get("annual_yield_est_pct", 0)
+        max_profit = metrics.get("max_profit", 0)
+        lines += [
+            "**Suggested PMCC Setup**",
+            "",
+            f"- **Buy**: {leaps.get('expiry')} ${leaps.get('strike'):.0f}C "
+            f"@ ${leaps.get('mid', 0):.2f} (delta {leaps.get('delta', 0):.3f})",
+            f"- **Sell**: {short.get('expiry')} ${short.get('strike'):.0f}C "
+            f"@ ${short.get('mid', 0):.2f} (delta {short.get('delta', 0):.3f})",
+            f"- **Net Debit**: ${net_debit:.2f} "
+            f"| **Max Risk**: ${metrics.get('capital_required', 0):,.0f}",
+            f"- **Max Profit**: ${max_profit:.2f} | **Ann. Yield Est.**: {ann_yield:.1f}%",
+            "",
+        ]
+
+        # Score breakdown strengths/weaknesses
+        strengths = []
+        weaknesses = []
+        for key in [
+            "leaps_delta",
+            "short_delta",
+            "leaps_liquidity",
+            "short_liquidity",
+            "leaps_spread",
+            "short_spread",
+            "iv",
+            "yield",
+        ]:
+            delta_key = f"{key}_delta"
+            val = bd.get(delta_key, 0)
+            explanation = bd.get(key, "")
+            if val > 0:
+                strengths.append(f"  - {explanation}")
+            elif val < 0:
+                weaknesses.append(f"  - {explanation}")
+
+        trend_info = bd.get("trend", {})
+        for indicator, explanation in trend_info.items() if isinstance(trend_info, dict) else []:
+            if "+" in str(explanation):
+                strengths.append(f"  - Trend/{indicator}: {explanation}")
+            elif "-" in str(explanation):
+                weaknesses.append(f"  - Trend/{indicator}: {explanation}")
+
+        earnings_delta = bd.get("earnings_delta", 0)
+        earnings_info = bd.get("earnings", {})
+        earnings_str = (
+            earnings_info.get("earnings", "")
+            if isinstance(earnings_info, dict)
+            else str(earnings_info)
+        )
+        if earnings_delta > 0:
+            strengths.append(f"  - Earnings: {earnings_str}")
+        elif earnings_delta < 0:
+            weaknesses.append(f"  - Earnings: {earnings_str}")
+
+        if strengths:
+            lines += ["**Strengths**", ""] + strengths + [""]
+        if weaknesses:
+            lines += ["**Weaknesses**", ""] + weaknesses + [""]
+
+        # Verdict
+        if score >= 12:
+            verdict = "**Go** — Excellent candidate. Strong structure with clear runway."
+        elif score >= 10:
+            verdict = "**Go** — Good candidate. Review any weaknesses before entry."
+        elif score >= 6:
+            verdict = (
+                f"**Proceed with caution** — Acceptable setup ({score}/{max_score}). "
+                "Address concerns before entry."
+            )
+        else:
+            verdict = f"**No-go** — Poor structure or elevated risk ({score}/{max_score})."
+
+        lines += ["**Verdict**", "", verdict, "", "---", ""]
+
+    if errors:
+        lines += ["## Errors", ""]
+        for e in errors:
+            lines.append(f"- **{e['symbol']}**: {e.get('error', 'unknown error')}")
+
+    return "\n".join(lines)
+
+
 def find_strike_by_delta(
     chain, current_price, target_delta, expiry_days, iv, r=0.05, min_strike=None, max_strike=None
 ):
@@ -87,15 +301,16 @@ def find_strike_by_delta(
         # Use bid/ask mid when available, else fall back to lastPrice
         if bid > 0 or ask > 0:
             effective_mid = (bid + ask) / 2
+            # Always compute IV from market price, not Yahoo's impliedVolatility
+            option_iv = iv  # default fallback
+            if effective_mid > 0:
+                iv_from_price = implied_volatility(
+                    effective_mid, current_price, strike, T, r, "call"
+                )
+                if iv_from_price is not None and iv_from_price >= 0.01:
+                    option_iv = iv_from_price
         else:
             effective_mid = last
-
-        if bid > 0 or ask > 0:
-            # Live market data: use yfinance IV with fallback to avg_iv
-            option_iv = row.get("impliedVolatility", iv)
-            if pd.isna(option_iv) or option_iv <= 0 or option_iv < 0.01:
-                option_iv = iv
-        else:
             # Off-hours: derive IV from lastPrice using T from lastTradeDate to expiry
             option_iv = iv  # default
             if last > 0:
@@ -125,6 +340,7 @@ def find_strike_by_delta(
             best_strike = strike
             best_option = row.copy()
             best_option["calculated_delta"] = delta
+            best_option["calculated_iv"] = option_iv
             best_option["effective_mid"] = effective_mid
 
     return best_strike, best_option
@@ -135,38 +351,51 @@ def compute_atm_iv(
 ) -> float:
     """Compute average ATM implied volatility from option chain data.
 
-    If yfinance's impliedVolatility is unreliable (< 1%), falls back to computing
-    IV from lastPrice using the Black-Scholes solver, with T measured from
-    lastTradeDate to expiry.
+    Always derives IV from market price: bid/ask mid when available, lastPrice
+    when off-hours (using lastTradeDate as pricing moment).
 
     Returns 0.30 as a default when no valid IV can be computed.
     """
     if atm_calls.empty:
         return 0.30
 
-    raw_iv = atm_calls["impliedVolatility"].mean()
-    if not pd.isna(raw_iv) and raw_iv >= 0.01:
-        return raw_iv
-
-    # Fallback: compute IV from lastPrice at lastTradeDate
     expiry_dt = datetime.strptime(expiry_date, "%Y-%m-%d").date()
+    today = datetime.now(_NY).date()
     ivs = []
 
     for _, row in atm_calls.iterrows():
+        bid = row.get("bid", 0) or 0
+        ask = row.get("ask", 0) or 0
         last_price = row.get("lastPrice", 0) or 0
-        if pd.isna(last_price) or last_price <= 0:
+
+        if pd.isna(bid):
+            bid = 0.0
+        if pd.isna(ask):
+            ask = 0.0
+        if pd.isna(last_price):
+            last_price = 0.0
+
+        strike = row["strike"]
+
+        if bid > 0 or ask > 0:
+            mid = (bid + ask) / 2
+            days_to_expiry = (expiry_dt - today).days
+            if days_to_expiry <= 0:
+                continue
+            T = days_to_expiry / 365
+            iv = implied_volatility(mid, current_price, strike, T, r, "call")
+        elif last_price > 0:
+            last_trade = row.get("lastTradeDate")
+            if last_trade is None or (hasattr(last_trade, "__bool__") and pd.isna(last_trade)):
+                continue
+            trade_date = last_trade.date() if hasattr(last_trade, "date") else last_trade
+            T = (expiry_dt - trade_date).days / 365
+            if T <= 0:
+                continue
+            iv = implied_volatility(last_price, current_price, strike, T, r, "call")
+        else:
             continue
 
-        last_trade = row.get("lastTradeDate")
-        if last_trade is None or (hasattr(last_trade, "__bool__") and pd.isna(last_trade)):
-            continue
-
-        trade_date = last_trade.date() if hasattr(last_trade, "date") else last_trade
-        T = (expiry_dt - trade_date).days / 365
-        if T <= 0:
-            continue
-
-        iv = implied_volatility(last_price, current_price, row["strike"], T, r, "call")
         if iv is not None and iv >= 0.01:
             ivs.append(iv)
 
@@ -567,17 +796,29 @@ def analyze_pmcc(
             "earnings": earnings_breakdown,
         }
 
+        leaps_iv = leaps_option.get("calculated_iv", avg_iv)
+        short_iv = short_option.get("calculated_iv", avg_iv)
+        leaps_last_price = leaps_option.get("lastPrice", 0) or 0
+        short_last_price = short_option.get("lastPrice", 0) or 0
+        if pd.isna(leaps_last_price):
+            leaps_last_price = 0.0
+        if pd.isna(short_last_price):
+            short_last_price = 0.0
+
         return {
             "symbol": symbol,
             "price": round(current_price, 2),
             "iv_pct": round(avg_iv * 100, 1),
             "pmcc_score": round(score, 1),
             "max_possible_score": 14,
+            "earnings_date": earnings_date_str,
             "leaps": {
                 "expiry": leaps_expiry,
                 "days": leaps_days,
                 "strike": leaps_strike,
                 "delta": round(actual_leaps_delta, 3),
+                "iv": round(leaps_iv, 4),
+                "last_price": round(leaps_last_price, 2),
                 "bid": round(leaps_bid, 2),
                 "ask": round(leaps_ask, 2),
                 "mid": round(leaps_mid, 2),
@@ -592,6 +833,8 @@ def analyze_pmcc(
                 "days": short_days,
                 "strike": short_strike,
                 "delta": round(actual_short_delta, 3),
+                "iv": round(short_iv, 4),
+                "last_price": round(short_last_price, 2),
                 "bid": round(short_bid, 2),
                 "ask": round(short_ask, 2),
                 "mid": round(short_mid, 2),
