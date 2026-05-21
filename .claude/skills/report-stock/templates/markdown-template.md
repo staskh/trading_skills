@@ -142,7 +142,7 @@ Up to 10 most recent. Omit `price` and `value` columns if all values are N/A.
 
 | Metric | Value | Assessment |
 |--------|-------|------------|
-| PMCC Score | `X / 11` | Excellent(≥9)/Good(7-8)/Acceptable(5-6)/Poor(<5) |
+| PMCC Score | `X / {max_pmcc_score}` | Excellent(≥9)/Good(7-8)/Acceptable(5-6)/Poor(<5) |
 | Implied Volatility | `X.X%` | Ideal(25-50%)/Acceptable(20-60%)/High(>60%)/Low(<20%) |
 | LEAPS Expiry | `YYYY-MM-DD (X days)` | - |
 | LEAPS Strike | `$X` | - |

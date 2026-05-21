@@ -251,6 +251,7 @@ def compute_recommendation(data: dict) -> dict:
 
     bullish_score = bullish.get("score", 0)
     pmcc_score = pmcc.get("pmcc_score", 0)
+    pmcc_max = pmcc.get("max_possible_score", 14)
 
     info = fundamentals.get("info", {})
     forward_pe = info.get("forwardPE")
@@ -272,12 +273,12 @@ def compute_recommendation(data: dict) -> dict:
     # PMCC viability
     if pmcc_score >= 9:
         points += 2
-        strengths.append(f"Excellent PMCC candidate ({pmcc_score}/11)")
+        strengths.append(f"Excellent PMCC candidate ({pmcc_score}/{pmcc_max})")
     elif pmcc_score >= 7:
         points += 1
-        strengths.append(f"Good PMCC candidate ({pmcc_score}/11)")
+        strengths.append(f"Good PMCC candidate ({pmcc_score}/{pmcc_max})")
     elif pmcc_score > 0:
-        risks.append(f"Fair PMCC viability ({pmcc_score}/11)")
+        risks.append(f"Fair PMCC viability ({pmcc_score}/{pmcc_max})")
 
     # Valuation
     if forward_pe and forward_pe > 0:
@@ -382,6 +383,7 @@ def generate_report_data(symbol: str) -> dict:
         },
         "pmcc_analysis": {
             "pmcc_score": data.get("pmcc", {}).get("pmcc_score"),
+            "max_pmcc_score": data.get("pmcc", {}).get("max_possible_score"),
             "iv_pct": data.get("pmcc", {}).get("iv_pct"),
             "leaps": data.get("pmcc", {}).get("leaps", {}),
             "short": data.get("pmcc", {}).get("short", {}),
