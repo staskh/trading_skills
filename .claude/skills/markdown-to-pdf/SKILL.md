@@ -1,6 +1,6 @@
 ---
 name: markdown-to-pdf
-description: Convert a markdown file to PDF using pandoc. Use when the user wants to convert a .md file to PDF, or when another skill needs to produce a PDF from markdown output.
+description: Convert a markdown file to PDF using mistune + reportlab. Use when the user wants to convert a .md file to PDF, or when another skill needs to produce a PDF from markdown output.
 user_invocable: true
 arguments:
   - name: file
@@ -21,11 +21,11 @@ Converts a markdown file to a professionally formatted PDF. Pure Python — no s
 Requires two Python packages (already in `pyproject.toml`):
 
 ```
-markdown>=3.7
-fpdf2>=2.8
+mistune>=3.2
+reportlab>=4.0
 ```
 
-Install with: `uv sync` (or `pip install markdown fpdf2`)
+Install with: `uv sync` (or `pip install mistune reportlab`)
 
 ## Instructions
 
