@@ -220,9 +220,10 @@ class TestSanitize:
 class TestCLI:
     def test_missing_args_exits_nonzero(self):
         result = subprocess.run(
-            ["python", str(SCRIPT)],
+            ["uv", "run", "python", str(SCRIPT)],
             capture_output=True,
             text=True,
+            cwd=Path(__file__).parent.parent,
         )
         assert result.returncode != 0
         assert "error" in json.loads(result.stdout)
