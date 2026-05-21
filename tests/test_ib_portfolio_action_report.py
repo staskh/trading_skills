@@ -202,21 +202,49 @@ class TestGroupPositionsIntoSpreads:
 class TestFetchEarningsDate:
     """Tests for earnings date fetching."""
 
-    @patch(f"{MODULE}.get_next_earnings_date")
-    def test_successful_fetch_via_calendar(self, mock_ned):
-        mock_ned.return_value = "2025-02-15"
+    @patch(f"{MODULE}.get_earnings_info")
+    def test_successful_fetch_returns_date_and_timing(self, mock_gei):
+        mock_gei.return_value = {
+            "symbol": "AAPL",
+            "earnings_date": "2025-02-15",
+            "timing": "AMC",
+        }
 
         result = fetch_earnings_date("AAPL")
         assert result["symbol"] == "AAPL"
         assert result["earnings_date"] == "2025-02-15"
+        assert result["earnings_timing"] == "AMC"
 
-    @patch(f"{MODULE}.get_next_earnings_date")
-    def test_no_earnings_data(self, mock_ned):
-        mock_ned.return_value = None
+    @patch(f"{MODULE}.get_earnings_info")
+    def test_bmo_timing_returned(self, mock_gei):
+        mock_gei.return_value = {
+            "symbol": "WMT",
+            "earnings_date": "2025-05-21",
+            "timing": "BMO",
+        }
+
+        result = fetch_earnings_date("WMT")
+        assert result["earnings_timing"] == "BMO"
+
+    @patch(f"{MODULE}.get_earnings_info")
+    def test_no_earnings_data(self, mock_gei):
+        mock_gei.return_value = {"symbol": "INVALID", "earnings_date": None, "timing": None}
 
         result = fetch_earnings_date("INVALID")
         assert result["symbol"] == "INVALID"
         assert result["earnings_date"] is None
+        assert result["earnings_timing"] is None
+
+    @patch(f"{MODULE}.get_earnings_info")
+    def test_unknown_timing_is_none(self, mock_gei):
+        mock_gei.return_value = {
+            "symbol": "XOM",
+            "earnings_date": "2025-07-31",
+            "timing": None,
+        }
+
+        result = fetch_earnings_date("XOM")
+        assert result["earnings_timing"] is None
 
 
 class TestFetchTechnicals:
@@ -483,3 +511,136 @@ class TestAnalyzePortfolio:
             s for s in result["spreads"] if s.get("earnings_urgency") == "this_week"
         ]
         assert len(earnings_urgency_spreads) > 0
+
+    @patch(f"{MODULE}.fetch_technicals")
+    @patch(f"{MODULE}.fetch_earnings_date")
+    def test_earnings_timing_in_output(self, mock_earnings, mock_technicals):
+        mock_earnings.return_value = {
+            "symbol": "AAPL",
+            "earnings_date": "2026-09-01",
+            "earnings_timing": "AMC",
+        }
+        mock_technicals.return_value = {"symbol": "AAPL", "trend": "bullish"}
+
+        future_expiry = (datetime.now() + timedelta(days=60)).strftime("%Y%m%d")
+        data = {
+            "accounts": ["U123"],
+            "positions": {"U123": [self._make_position("AAPL", 1, 150.0, future_expiry)]},
+            "prices": {"AAPL": 155.0},
+        }
+
+        result = analyze_portfolio(data)
+        assert "earnings_timing" in result
+        assert result["earnings_timing"].get("AAPL") == "AMC"
+
+    @patch(f"{MODULE}.fetch_technicals")
+    @patch(f"{MODULE}.fetch_earnings_date")
+    def test_earnings_timing_on_spreads(self, mock_earnings, mock_technicals):
+        mock_earnings.return_value = {
+            "symbol": "AAPL",
+            "earnings_date": "2026-09-01",
+            "earnings_timing": "BMO",
+        }
+        mock_technicals.return_value = {"symbol": "AAPL", "trend": "bullish"}
+
+        future_expiry = (datetime.now() + timedelta(days=60)).strftime("%Y%m%d")
+        data = {
+            "accounts": ["U123"],
+            "positions": {"U123": [self._make_position("AAPL", 1, 150.0, future_expiry)]},
+            "prices": {"AAPL": 155.0},
+        }
+
+        result = analyze_portfolio(data)
+        spread = result["spreads"][0]
+        assert spread.get("earnings_timing") == "BMO"
+
+    @patch(f"{MODULE}.fetch_technicals")
+    @patch(f"{MODULE}.fetch_earnings_date")
+    def test_earnings_calendar_has_timing(self, mock_earnings, mock_technicals):
+        mock_earnings.return_value = {
+            "symbol": "AAPL",
+            "earnings_date": "2026-09-01",
+            "earnings_timing": "AMC",
+        }
+        mock_technicals.return_value = {"symbol": "AAPL", "trend": "bullish"}
+
+        future_expiry = (datetime.now() + timedelta(days=60)).strftime("%Y%m%d")
+        data = {
+            "accounts": ["U123"],
+            "positions": {"U123": [self._make_position("AAPL", 1, 150.0, future_expiry)]},
+            "prices": {"AAPL": 155.0},
+        }
+
+        result = analyze_portfolio(data)
+        assert len(result["earnings_calendar"]) > 0
+        cal_entry = result["earnings_calendar"][0]
+        assert "timing" in cal_entry
+        assert cal_entry["timing"] == "AMC"
+
+    @patch(f"{MODULE}.fetch_technicals")
+    @patch(f"{MODULE}.fetch_earnings_date")
+    def test_today_bmo_earnings_status_after_open(self, mock_earnings, mock_technicals):
+        """BMO earnings on today's date should be 'reported' after market open."""
+        from zoneinfo import ZoneInfo
+
+        _NY = ZoneInfo("America/New_York")
+        today_str = datetime.now(_NY).strftime("%Y-%m-%d")
+
+        mock_earnings.return_value = {
+            "symbol": "WMT",
+            "earnings_date": today_str,
+            "earnings_timing": "BMO",
+        }
+        mock_technicals.return_value = {"symbol": "WMT", "trend": "bearish"}
+
+        future_expiry = (datetime.now() + timedelta(days=30)).strftime("%Y%m%d")
+        data = {
+            "accounts": ["U123"],
+            "positions": {"U123": [self._make_position("WMT", 1, 100.0, future_expiry)]},
+            "prices": {"WMT": 121.0},
+        }
+
+        # Simulate time after market open (10:00 ET)
+        fake_now = datetime.now(_NY).replace(hour=10, minute=0)
+        with patch(f"{MODULE}.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_now
+            mock_dt.strptime = datetime.strptime
+            result = analyze_portfolio(data)
+
+        cal_entry = next((e for e in result["earnings_calendar"] if e["symbol"] == "WMT"), None)
+        assert cal_entry is not None
+        assert cal_entry.get("status") == "reported"
+
+    @patch(f"{MODULE}.fetch_technicals")
+    @patch(f"{MODULE}.fetch_earnings_date")
+    def test_today_amc_earnings_status_before_close(self, mock_earnings, mock_technicals):
+        """AMC earnings on today's date should be 'pending' before market close."""
+        from zoneinfo import ZoneInfo
+
+        _NY = ZoneInfo("America/New_York")
+        today_str = datetime.now(_NY).strftime("%Y-%m-%d")
+
+        mock_earnings.return_value = {
+            "symbol": "NVDA",
+            "earnings_date": today_str,
+            "earnings_timing": "AMC",
+        }
+        mock_technicals.return_value = {"symbol": "NVDA", "trend": "bullish"}
+
+        future_expiry = (datetime.now() + timedelta(days=30)).strftime("%Y%m%d")
+        data = {
+            "accounts": ["U123"],
+            "positions": {"U123": [self._make_position("NVDA", 1, 200.0, future_expiry)]},
+            "prices": {"NVDA": 221.0},
+        }
+
+        # Simulate time before market close (13:00 ET)
+        fake_now = datetime.now(_NY).replace(hour=13, minute=0)
+        with patch(f"{MODULE}.datetime") as mock_dt:
+            mock_dt.now.return_value = fake_now
+            mock_dt.strptime = datetime.strptime
+            result = analyze_portfolio(data)
+
+        cal_entry = next((e for e in result["earnings_calendar"] if e["symbol"] == "NVDA"), None)
+        assert cal_entry is not None
+        assert cal_entry.get("status") == "pending"

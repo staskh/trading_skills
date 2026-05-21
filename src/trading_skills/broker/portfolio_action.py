@@ -14,15 +14,19 @@ from trading_skills.broker.connection import (
     ib_connection,
     normalize_positions,
 )
-from trading_skills.earnings import get_next_earnings_date
+from trading_skills.earnings import get_earnings_info
 from trading_skills.technicals import compute_raw_indicators
 from trading_skills.utils import _NY, days_to_expiry, generated_at_str
 
 
 def fetch_earnings_date(symbol: str) -> dict:
-    """Fetch earnings date using yfinance."""
-    date_str = get_next_earnings_date(symbol)
-    return {"symbol": symbol, "earnings_date": date_str}
+    """Fetch earnings date and timing (BMO/AMC) using yfinance."""
+    info = get_earnings_info(symbol)
+    return {
+        "symbol": symbol,
+        "earnings_date": info.get("earnings_date"),
+        "earnings_timing": info.get("timing"),
+    }
 
 
 def fetch_technicals(symbol: str, period: str = "3mo") -> dict:
@@ -203,6 +207,19 @@ def get_spread_recommendation(spread: dict, earnings_date: str, today: datetime)
     return emoji, risk_level, " | ".join(recommendations)
 
 
+def _earnings_status(earnings_date: str, timing: str | None, now: datetime) -> str:
+    """Return 'reported', 'pending', or 'upcoming' for an earnings date."""
+    today_str = now.strftime("%Y-%m-%d")
+    if earnings_date != today_str:
+        return "upcoming"
+    hour = now.hour
+    if timing == "BMO":
+        return "reported" if hour >= 9 else "pending"
+    if timing == "AMC":
+        return "reported" if hour >= 16 else "pending"
+    return "pending"
+
+
 def group_positions_into_spreads(positions: list, symbol: str) -> list:
     """Group positions for a symbol into spreads."""
     longs = sorted(
@@ -320,9 +337,11 @@ def analyze_portfolio(data: dict) -> dict:
 
     print("Fetching earnings dates...", file=sys.stderr)
     earnings = {}
+    earnings_timing = {}
     for sym in all_symbols:
         result = fetch_earnings_date(sym)
         earnings[sym] = result.get("earnings_date")
+        earnings_timing[sym] = result.get("earnings_timing")
 
     print("Fetching technical indicators...", file=sys.stderr)
     technicals = {}
@@ -352,6 +371,7 @@ def analyze_portfolio(data: dict) -> dict:
             for spread in spreads_by_account[acc][symbol]:
                 spread["underlying_price"] = prices.get(symbol)
                 spread["earnings_date"] = earnings.get(symbol)
+                spread["earnings_timing"] = earnings_timing.get(symbol)
 
     # Categorize spreads by urgency
     expiring_2_days = []
@@ -455,10 +475,14 @@ def analyze_portfolio(data: dict) -> dict:
                 else:
                     pos_types.append("Short")
         if accs:
+            timing = earnings_timing.get(sym)
+            status = _earnings_status(dt, timing, today)
             earnings_calendar.append(
                 {
                     "date": dt,
                     "symbol": sym,
+                    "timing": timing,
+                    "status": status,
                     "accounts": accs,
                     "position_types": list(set(pos_types)),
                 }
@@ -492,6 +516,7 @@ def analyze_portfolio(data: dict) -> dict:
         "today_earnings_symbols": today_symbols,
         "spreads": all_spreads,
         "earnings": earnings,
+        "earnings_timing": earnings_timing,
         "technicals": technicals,
         "prices": prices,
         "earnings_calendar": earnings_calendar,
