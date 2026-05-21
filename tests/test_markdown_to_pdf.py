@@ -141,6 +141,14 @@ class TestRenderer:
         r.list(item1 + item2, ordered=True)
         assert len(r.story) == 2
 
+    def test_ordered_list_numbering_starts_at_one(self):
+        r = self._make_renderer()
+        item1 = r.list_item("first")
+        item2 = r.list_item("second")
+        r.list(item1 + item2, ordered=True)
+        first_para = r.story[0]
+        assert first_para.text.startswith("1.")
+
     def test_table_adds_flowables(self):
         r = self._make_renderer()
         c1 = r.table_cell("Symbol", head=True)
@@ -206,8 +214,8 @@ class TestSanitize:
         assert "δ" in result and "Δ" in result
 
     def test_arrows_always_replaced(self):
-        assert _sanitize("→ ←", unicode_font=False) == "-&gt; &lt;-"
-        assert _sanitize("→ ←", unicode_font=True) == "-&gt; &lt;-"
+        assert _sanitize("→ ←", unicode_font=False) == "-> <-"
+        assert _sanitize("→ ←", unicode_font=True) == "-> <-"
 
     def test_latin1_chars_unchanged(self):
         assert _sanitize("Hello, world! 100%", unicode_font=False) == "Hello, world! 100%"

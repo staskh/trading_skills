@@ -82,7 +82,7 @@ _LATIN1_SUBS = {
     "Φ": "Phi",    "ψ": "psi",    "ω": "omega",  "Ω": "Omega",
     "ε": "epsilon","η": "eta",    "κ": "kappa",  "χ": "chi",
     "ξ": "xi",     "π": "pi",
-    "≥": "&gt;=", "≤": "&lt;=", "≠": "!=", "≈": "~=",
+    "≥": ">=", "≤": "<=", "≠": "!=", "≈": "~=",
     "×": "x",  "÷": "/",  "±": "+/-","∞": "inf",
     "√": "sqrt","∑": "sum",
     "€": "EUR", "£": "GBP", "¥": "JPY", "₹": "INR",
@@ -277,12 +277,10 @@ class _Renderer(mistune.HTMLRenderer):
         return ""
 
     def list(self, text: str, ordered: bool, **attrs) -> str:
-        items = text.split(_LIST_ITEM)
+        items = [item.strip() for item in text.split(_LIST_ITEM) if item.strip()]
+        bullet = "•" if self.unicode_font else "-"
         for i, body in enumerate(items, 1):
-            body = body.strip()
-            if not body:
-                continue
-            marker = f"{i}." if ordered else "•"
+            marker = f"{i}." if ordered else bullet
             self.story.append(
                 Paragraph(f"{marker}&nbsp;&nbsp;{body}", self.styles["bullet"])
             )

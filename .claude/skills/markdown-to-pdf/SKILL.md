@@ -30,7 +30,7 @@ Install with: `uv sync` (or `pip install mistune reportlab`)
 ## Instructions
 
 ```bash
-uv run python scripts/markdown_to_pdf.py <input.md> [output.pdf]
+uv run python .claude/skills/markdown-to-pdf/scripts/markdown_to_pdf.py <input.md> [output.pdf]
 ```
 
 - `input.md` — path to the markdown file (required)
@@ -52,10 +52,10 @@ After conversion, tell the user the output PDF path.
 
 ```bash
 # Convert sandbox/report.md → sandbox/report.pdf (default output)
-uv run python scripts/markdown_to_pdf.py sandbox/report.md
+uv run python .claude/skills/markdown-to-pdf/scripts/markdown_to_pdf.py sandbox/report.md
 
 # Explicit output path
-uv run python scripts/markdown_to_pdf.py sandbox/report.md sandbox/AAPL_Report_2026-05-20_1430.pdf
+uv run python .claude/skills/markdown-to-pdf/scripts/markdown_to_pdf.py sandbox/report.md sandbox/AAPL_Report_2026-05-20_1430.pdf
 ```
 
 ## Supported Markdown
