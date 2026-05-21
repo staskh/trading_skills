@@ -346,7 +346,8 @@ class _Renderer(mistune.HTMLRenderer):
             while len(row) < col_count:
                 row.append(Paragraph("", self.styles["table_cell"]))
 
-        col_width = (7.5 * inch) / col_count
+        available_width = LETTER[0] - (2 * inch)
+        col_width = available_width / col_count
         t = Table(table_data, colWidths=[col_width] * col_count, repeatRows=1)
 
         cmd = [
