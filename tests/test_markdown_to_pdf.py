@@ -25,6 +25,7 @@ _Renderer = _mod._Renderer
 _build_styles = _mod._build_styles
 _setup_font = _mod._setup_font
 _ALWAYS_SUBS = _mod._ALWAYS_SUBS
+_apply_markup_subs = _mod._apply_markup_subs
 
 
 class TestDefaultOutputPath:
@@ -249,18 +250,61 @@ class TestBug47Fixes:
     def test_right_arrow_box_in_always_subs(self):
         assert "➡" in _ALWAYS_SUBS  # ➡
 
-    def test_color_emoji_sanitized_to_text(self):
+    def test_color_emoji_sanitized_to_sentinel(self):
         result = _sanitize("🔴 RED 🟡 YELLOW 🟢 GREEN", unicode_font=True)
         assert "🔴" not in result
         assert "🟡" not in result
         assert "🟢" not in result
-        assert len(result) > 0
+        # sentinels must survive into the string
+        assert "\x03" in result
 
-    def test_trend_emoji_sanitized_to_text(self):
+    def test_trend_emoji_sanitized_to_sentinel(self):
         result = _sanitize("bullish 📈 bearish 📉 neutral ➡", unicode_font=True)
         assert "📈" not in result
         assert "📉" not in result
         assert "➡" not in result
+        assert "\x03" in result
+
+    def test_apply_markup_subs_produces_font_tags(self):
+        # sentinel survives XML escaping, then resolves to colored square markup
+        sentinel_text = "\x03RED\x03 some text \x03GRN\x03"
+        result = _apply_markup_subs(sentinel_text)
+        assert "<font" in result
+        assert "■" in result
+        assert "\x03" not in result
+
+    def test_apply_markup_subs_red_color(self):
+        result = _apply_markup_subs("\x03RED\x03")
+        assert "#" in result or "color" in result.lower()
+        assert "■" in result
+
+    def test_apply_markup_subs_yellow_color(self):
+        result = _apply_markup_subs("\x03YEL\x03")
+        assert "■" in result
+
+    def test_apply_markup_subs_green_color(self):
+        result = _apply_markup_subs("\x03GRN\x03")
+        assert "■" in result
+
+    def test_apply_markup_subs_trend_up(self):
+        result = _apply_markup_subs("\x03TUP\x03")
+        assert "▲" in result or "■" in result or len(result) > 0
+
+    def test_apply_markup_subs_trend_down(self):
+        result = _apply_markup_subs("\x03TDN\x03")
+        assert "▼" in result or len(result) > 0
+
+    def test_sentinels_do_not_appear_in_final_output(self):
+        # Full pipeline: sanitize → escape_xml → apply_markup_subs
+        from tests.test_markdown_to_pdf import _mod
+
+        _escape_xml = _mod._escape_xml
+        text = "🔴 status 🟢 ok 📈 up 📉 down"
+        sanitized = _sanitize(text, unicode_font=True)
+        escaped = _escape_xml(sanitized)
+        final = _apply_markup_subs(escaped)
+        assert "\x03" not in final
+        assert "<font" in final
 
     # --- Bug 2: table header style must use white text ---
 

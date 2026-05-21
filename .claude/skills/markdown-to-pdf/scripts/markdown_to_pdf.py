@@ -73,14 +73,14 @@ _ALWAYS_SUBS = {
     "\U0001f947": "1st",
     "\U0001f948": "2nd",
     "\U0001f949": "3rd",
-    # Color circles (no TTF font supports these)
-    "\U0001f534": "[!!]",  # 🔴
-    "\U0001f7e1": "[!]",  # 🟡
-    "\U0001f7e2": "[OK]",  # 🟢
-    # Trend / chart emoji
-    "\U0001f4c8": "(+)",  # 📈
-    "\U0001f4c9": "(-)",  # 📉
-    "➡": "->",
+    # Color circles → sentinels resolved to colored ■ after XML escaping
+    "\U0001f534": "\x03RED\x03",  # 🔴
+    "\U0001f7e1": "\x03YEL\x03",  # 🟡
+    "\U0001f7e2": "\x03GRN\x03",  # 🟢
+    # Trend emoji → sentinels resolved to colored ▲▼ after XML escaping
+    "\U0001f4c8": "\x03TUP\x03",  # 📈
+    "\U0001f4c9": "\x03TDN\x03",  # 📉
+    "➡": "\x03RGT\x03",
     "⚠": "(!)",
     "✅": "OK",
     "❌": "X",
@@ -274,6 +274,24 @@ def _escape_xml(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+# Sentinel → ReportLab font markup (applied after XML escaping, so tags are safe)
+_MARKUP_SUBS = {
+    "\x03RED\x03": '<font color="#cc2200" size="10">■</font>',
+    "\x03YEL\x03": '<font color="#cc8800" size="10">■</font>',
+    "\x03GRN\x03": '<font color="#228822" size="10">■</font>',
+    "\x03TUP\x03": '<font color="#228822">▲</font>',
+    "\x03TDN\x03": '<font color="#cc2200">▼</font>',
+    "\x03RGT\x03": "&#8594;",  # → as XML entity
+}
+
+
+def _apply_markup_subs(text: str) -> str:
+    """Replace sentinels with ReportLab XML font markup."""
+    for sentinel, markup in _MARKUP_SUBS.items():
+        text = text.replace(sentinel, markup)
+    return text
+
+
 class _Renderer(mistune.HTMLRenderer):
     """mistune renderer that builds a reportlab Platypus story.
 
@@ -295,7 +313,7 @@ class _Renderer(mistune.HTMLRenderer):
     # ------------------------------------------------------------------
 
     def text(self, text: str) -> str:
-        return _escape_xml(_sanitize(text, self.unicode_font))
+        return _apply_markup_subs(_escape_xml(_sanitize(text, self.unicode_font)))
 
     def strong(self, text: str) -> str:
         return f"<b>{text}</b>"
