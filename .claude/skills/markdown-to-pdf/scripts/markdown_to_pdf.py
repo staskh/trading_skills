@@ -276,11 +276,11 @@ def _escape_xml(text: str) -> str:
 
 # Sentinel → ReportLab font markup (applied after XML escaping, so tags are safe)
 _MARKUP_SUBS = {
-    "\x03RED\x03": '<font color="#cc2200" size="10">■</font>',
-    "\x03YEL\x03": '<font color="#cc8800" size="10">■</font>',
-    "\x03GRN\x03": '<font color="#228822" size="10">■</font>',
-    "\x03TUP\x03": '<font color="#228822">▲</font>',
-    "\x03TDN\x03": '<font color="#cc2200">▼</font>',
+    "\x03RED\x03": '<font color="#cc2200" size="20">■</font>',
+    "\x03YEL\x03": '<font color="#cc8800" size="20">■</font>',
+    "\x03GRN\x03": '<font color="#228822" size="20">■</font>',
+    "\x03TUP\x03": '<font color="#228822" size="18">▲</font>',
+    "\x03TDN\x03": '<font color="#cc2200" size="18">▼</font>',
     "\x03RGT\x03": "&#8594;",  # → as XML entity
 }
 
