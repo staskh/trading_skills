@@ -84,7 +84,7 @@ When the user asks for a report, a written analysis, or a saved document:
 
 2. Read the JSON output.
 
-3. Generate the markdown report yourself using the template defined in `markdown-template.md` (same directory as this file). Do **not** use the `--report` flag — that produces mechanical string output. Claude-generated reports include real analysis, contextual warnings, and trader-relevant narrative.
+3. Generate the markdown report yourself using the template defined in `templates/markdown-template.md`. Do **not** use the `--report` flag — that produces mechanical string output. Claude-generated reports include real analysis, contextual warnings, and trader-relevant narrative.
 
 4. Save the generated markdown to `sandbox/PMCC_Scan_YYYY-MM-DD_HHmm.md` (match the JSON timestamp).
 
