@@ -84,6 +84,7 @@ You MUST complete all of the following steps before opening a pull request:
 
 1. **Lint and fix**: `uv run ruff check src/ tests/ --fix && uv run ruff format src/ tests/`
 2. **Full unit tests pass**: `uv run pytest tests/ -v --ignore=tests/test_massive_whales.py --ignore=tests/test_whales_hunter.py`
+3. **Stage uv.lock**: Always commit `uv.lock` alongside any dependency changes (`pyproject.toml`).
 
 Do not open a PR if either step fails.
 
