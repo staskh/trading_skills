@@ -247,7 +247,8 @@ class _Renderer(mistune.HTMLRenderer):
     # ------------------------------------------------------------------
 
     def heading(self, text: str, level: int, **attrs) -> str:
-        self.story.append(Paragraph(text, self.styles[f"h{level}"]))
+        style = self.styles.get(f"h{level}", self.styles.get("h3", self.styles["body"]))
+        self.story.append(Paragraph(text, style))
         return ""
 
     def paragraph(self, text: str) -> str:
