@@ -206,6 +206,27 @@ def calc_profit_per_day(
     return avg_cost / max(dte, 1 / 24)
 
 
+def calc_pnl_if_assigned(
+    long_strike: float,
+    long_dte: float,
+    long_cost: float,
+    long_iv: float,
+    short_strike: float,
+    short_dte: float,
+    total_premium: float,
+    qty: int,
+) -> float:
+    """Total P&L (qty × 100 shares) if the short expires ITM at expiry.
+
+    Assumes the long leg is sold at its BS value at the moment of assignment
+    (spot = short_strike, remaining DTE = long_dte − short_dte), which is
+    more accurate than using intrinsic spread width when the long has time value.
+    """
+    long_days_at_assignment = max(long_dte - short_dte, 0)
+    long_price = calc_bs_price(short_strike, long_strike, long_days_at_assignment, long_iv, "C")
+    return round((long_price - long_cost + total_premium) * 100 * qty, 2)
+
+
 def check_earnings_warning(
     earnings_date: str | None,
     earnings_timing: str | None,
@@ -262,6 +283,9 @@ def find_best_rolls(
     spot: float,
     long_strike: float,
     long_cost: float,
+    long_dte: float,
+    long_iv: float,
+    qty: int,
     min_roll_dte: int,
     price_mode: str,
 ) -> list[dict]:
@@ -304,8 +328,9 @@ def find_best_rolls(
                 continue
 
             profit_per_day = net_credit / max(dte, 1 / 24)
-            spread_width = strike - long_strike
-            pnl_if_assigned = (spread_width - long_cost + price) * 100
+            pnl_if_assigned = calc_pnl_if_assigned(
+                long_strike, long_dte, long_cost, long_iv, strike, dte, price, qty
+            )
 
             candidates.append(
                 {
@@ -328,24 +353,40 @@ def find_best_rolls(
     return candidates[:3]
 
 
-def build_comparison_table(current: dict, rolls: list[dict], long_pos: dict) -> dict:
+def build_comparison_table(
+    current: dict,
+    rolls: list[dict],
+    long_pos: dict,
+    long_dte: float,
+    long_iv: float,
+    qty: int,
+) -> dict:
     """Side-by-side comparison of current short and up to 3 roll candidates."""
 
     def _entry(pos: dict) -> dict:
         long_strike = long_pos["strike"]
         long_cost = long_pos.get("avg_cost", 0)
         short_strike = pos["strike"]
+        short_dte = pos.get("dte") or 0
         total_premium = pos.get("total_premium") or pos.get("price", 0)
 
         pnl_if_assigned = None
         if long_strike and short_strike > long_strike:
-            spread_width = short_strike - long_strike
-            pnl_if_assigned = round((spread_width - long_cost + total_premium) * 100, 2)
+            pnl_if_assigned = calc_pnl_if_assigned(
+                long_strike,
+                long_dte,
+                long_cost,
+                long_iv,
+                short_strike,
+                short_dte,
+                total_premium,
+                qty,
+            )
 
         return {
             "strike": short_strike,
             "expiry": pos.get("expiry"),
-            "dte": pos.get("dte"),
+            "dte": short_dte,
             "delta": pos.get("delta"),
             "assignment_prob": pos.get("assignment_prob"),
             "profit_per_day": pos.get("profit_per_day"),
@@ -935,6 +976,9 @@ async def get_pmcc_data(
                         spot=spot,
                         long_strike=long_pos["strike"],
                         long_cost=long_pos["avg_cost"],
+                        long_dte=long_dte,
+                        long_iv=long_iv,
+                        qty=qty,
                         min_roll_dte=min_roll_dte,
                         price_mode=price_mode,
                     )
@@ -963,6 +1007,9 @@ async def get_pmcc_data(
                     current=current_short_summary,
                     rolls=rolls,
                     long_pos=long_pos,
+                    long_dte=long_dte,
+                    long_iv=long_iv,
+                    qty=qty,
                 )
 
                 results.append(

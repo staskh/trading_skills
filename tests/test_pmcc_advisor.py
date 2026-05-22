@@ -14,6 +14,7 @@ from trading_skills.broker.pmcc_advisor import (
     calc_daily_pnl_table,
     calc_delta,
     calc_iv,
+    calc_pnl_if_assigned,
     calc_profit_per_day,
     check_earnings_warning,
     filter_spreads_by_symbols,
@@ -334,6 +335,63 @@ def test_calc_daily_pnl_table_scales_with_qty():
 
 
 # ---------------------------------------------------------------------------
+# calc_pnl_if_assigned
+# ---------------------------------------------------------------------------
+
+
+def test_calc_pnl_if_assigned_uses_bs_long_value():
+    """BS-estimated long value exceeds intrinsic spread width when LEAPS has time value."""
+    long_strike, short_strike = 90.0, 110.0
+    long_dte, short_dte = 120.0, 1.0
+    long_cost, long_iv, total_premium, qty = 18.0, 0.35, 2.0, 1
+
+    result = calc_pnl_if_assigned(
+        long_strike, long_dte, long_cost, long_iv, short_strike, short_dte, total_premium, qty
+    )
+
+    # Old spread-width formula: (110-90-18+2)*100 = 400
+    old_formula = (short_strike - long_strike - long_cost + total_premium) * 100
+    assert result > old_formula, "BS-estimated long value should exceed intrinsic spread width"
+
+
+def test_calc_pnl_if_assigned_scales_with_qty():
+    """P&L doubles when qty doubles."""
+    kwargs = dict(
+        long_strike=90.0,
+        long_dte=120.0,
+        long_cost=18.0,
+        long_iv=0.35,
+        short_strike=110.0,
+        short_dte=1.0,
+        total_premium=2.0,
+    )
+    r1 = calc_pnl_if_assigned(**kwargs, qty=1)
+    r2 = calc_pnl_if_assigned(**kwargs, qty=2)
+    assert r2 == pytest.approx(r1 * 2, abs=0.01)
+
+
+def test_calc_pnl_if_assigned_at_long_expiry_equals_intrinsic():
+    """When long expires at same time as short, BS value = intrinsic, matching old formula."""
+    long_strike, short_strike = 90.0, 110.0
+    dte = 0.0
+    long_cost, total_premium, qty = 18.0, 2.0, 1
+
+    result = calc_pnl_if_assigned(
+        long_strike, dte, long_cost, 0.35, short_strike, dte, total_premium, qty
+    )
+    expected = (short_strike - long_strike - long_cost + total_premium) * 100
+    assert result == pytest.approx(expected, abs=0.01)
+
+
+def test_calc_pnl_if_assigned_qty_one_contract():
+    """Result is scaled by 100 shares per contract."""
+    long_price = calc_bs_price(110.0, 90.0, 119, 0.35, "C")
+    expected = round((long_price - 18.0 + 2.0) * 100, 2)
+    result = calc_pnl_if_assigned(90.0, 120.0, 18.0, 0.35, 110.0, 1.0, 2.0, 1)
+    assert result == pytest.approx(expected, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
 # find_best_rolls
 # ---------------------------------------------------------------------------
 
@@ -363,6 +421,9 @@ def test_find_best_rolls_returns_at_most_3():
         spot=108.0,
         long_strike=90.0,
         long_cost=18.0,
+        long_dte=180.0,
+        long_iv=0.35,
+        qty=1,
         min_roll_dte=7,
         price_mode="mid",
     )
@@ -389,6 +450,9 @@ def test_find_best_rolls_filters_by_delta():
         spot=108.0,
         long_strike=90.0,
         long_cost=18.0,
+        long_dte=180.0,
+        long_iv=0.35,
+        qty=1,
         min_roll_dte=7,
         price_mode="mid",
     )
@@ -415,6 +479,9 @@ def test_find_best_rolls_requires_net_credit():
         spot=108.0,
         long_strike=90.0,
         long_cost=18.0,
+        long_dte=180.0,
+        long_iv=0.35,
+        qty=1,
         min_roll_dte=7,
         price_mode="mid",
     )
@@ -437,6 +504,9 @@ def test_find_best_rolls_result_fields():
         spot=108.0,
         long_strike=90.0,
         long_cost=18.0,
+        long_dte=180.0,
+        long_iv=0.35,
+        qty=1,
         min_roll_dte=7,
         price_mode="mid",
     )
@@ -449,6 +519,7 @@ def test_find_best_rolls_result_fields():
         assert "iv_pct" in roll
         assert "net_credit" in roll
         assert "profit_per_day" in roll
+        assert "pnl_if_assigned" in roll
 
 
 def test_find_best_rolls_profit_per_day_is_net_credit_per_day():
@@ -467,6 +538,9 @@ def test_find_best_rolls_profit_per_day_is_net_credit_per_day():
         spot=108.0,
         long_strike=90.0,
         long_cost=18.0,
+        long_dte=180.0,
+        long_iv=0.35,
+        qty=1,
         min_roll_dte=7,
         price_mode="mid",
     )
@@ -493,7 +567,9 @@ def test_build_comparison_table_has_current():
         "total_premium": 2.0,
     }
     long_pos = {"strike": 90, "expiry": "20260918", "avg_cost": 18.0}
-    table = build_comparison_table(current=current, rolls=[], long_pos=long_pos)
+    table = build_comparison_table(
+        current=current, rolls=[], long_pos=long_pos, long_dte=120.0, long_iv=0.35, qty=1
+    )
     assert "current" in table
     assert table["current"]["strike"] == 110
     assert table["current"]["delta"] == 0.40
@@ -523,13 +599,15 @@ def test_build_comparison_table_has_rolls():
         "iv_pct": 28.0,
         "total_premium": 3.10,
     }
-    table = build_comparison_table(current=current, rolls=[roll1], long_pos=long_pos)
+    table = build_comparison_table(
+        current=current, rolls=[roll1], long_pos=long_pos, long_dte=120.0, long_iv=0.35, qty=1
+    )
     assert "roll_1" in table
     assert table["roll_1"]["strike"] == 120
 
 
-def test_build_comparison_table_pnl_if_assigned():
-    """P&L if assigned = (short_strike - long_strike - long_cost + total_premium) * qty * 100."""
+def test_build_comparison_table_pnl_if_assigned_uses_bs_and_qty():
+    """pnl_if_assigned uses BS-estimated long value at assignment and scales by qty."""
     current = {
         "strike": 110,
         "expiry": "20260501",
@@ -540,10 +618,21 @@ def test_build_comparison_table_pnl_if_assigned():
         "profit_per_day": 0.10,
         "total_premium": 2.0,
     }
-    long_pos = {"strike": 90, "expiry": "20260918", "avg_cost": 18.0, "qty": 1}
-    table = build_comparison_table(current=current, rolls=[], long_pos=long_pos)
-    # (110 - 90 - 18.0 + 2.0) * 1 * 100 = 4.0 * 100 = 400
-    assert table["current"]["pnl_if_assigned"] == pytest.approx(400.0)
+    long_pos = {"strike": 90, "expiry": "20260918", "avg_cost": 18.0}
+    long_dte, long_iv, qty = 120.0, 0.35, 3
+
+    table = build_comparison_table(
+        current=current, rolls=[], long_pos=long_pos, long_dte=long_dte, long_iv=long_iv, qty=qty
+    )
+
+    long_days_at_assignment = long_dte - current["dte"]  # 119
+    long_price = calc_bs_price(110.0, 90.0, long_days_at_assignment, long_iv, "C")
+    expected = round((long_price - 18.0 + 2.0) * 100 * qty, 2)
+    assert table["current"]["pnl_if_assigned"] == pytest.approx(expected, abs=0.01)
+
+    # Must be larger than old spread-width formula (which would be 4 * 100 * 3 = 1200)
+    old_formula = (110 - 90 - 18.0 + 2.0) * 100 * qty
+    assert table["current"]["pnl_if_assigned"] > old_formula
 
 
 # ---------------------------------------------------------------------------
@@ -817,6 +906,9 @@ def test_find_best_rolls_skips_small_dte():
         spot=200.0,
         long_strike=180.0,
         long_cost=20.0,
+        long_dte=300.0,
+        long_iv=0.35,
+        qty=1,
         min_roll_dte=7,
         price_mode="mid",
     )
@@ -847,6 +939,9 @@ def test_find_best_rolls_skips_same_expiry_as_current_short():
         spot=200.0,
         long_strike=180.0,
         long_cost=20.0,
+        long_dte=300.0,
+        long_iv=0.35,
+        qty=1,
         min_roll_dte=7,
         price_mode="mid",
     )
