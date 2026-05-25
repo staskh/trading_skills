@@ -12,6 +12,8 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(write_through=True)
 
+from importlib.metadata import version as pkg_version
+
 from mcp.server.fastmcp import FastMCP
 
 from trading_skills.broker.account import get_account_summary
@@ -61,6 +63,17 @@ from trading_skills.technicals import compute_indicators
 
 # Create MCP server
 mcp = FastMCP("trading-skills")
+
+
+# ============================================================================
+# SERVER INFO
+# ============================================================================
+
+
+@mcp.tool()
+def get_version() -> dict:
+    """Return the current version of the trading-skills package."""
+    return {"version": pkg_version("trading-skills")}
 
 
 # ============================================================================
