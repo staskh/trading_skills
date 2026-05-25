@@ -49,6 +49,7 @@ class TestMCPServerImport:
             "ib_option_chain",
             "ib_delta_exposure",
             "ib_collar",
+            "get_version",
         ]
         for tool_name in expected_tools:
             assert tool_name in tools, f"Missing tool: {tool_name}"
@@ -236,6 +237,28 @@ class TestIBTools:
                 )
             )
             assert mock.call_args.kwargs["flex_query_id"] == ids
+
+
+class TestVersionTool:
+    """Test get_version tool."""
+
+    def test_get_version_returns_version_string(self):
+        """get_version returns the package version."""
+        from mcp_server.server import get_version
+
+        result = get_version()
+        assert "version" in result
+        assert isinstance(result["version"], str)
+        assert len(result["version"]) > 0
+
+    def test_get_version_matches_package_metadata(self):
+        """get_version matches importlib.metadata version."""
+        from importlib.metadata import version
+
+        from mcp_server.server import get_version
+
+        result = get_version()
+        assert result["version"] == version("trading-skills")
 
 
 class TestReportTools:
