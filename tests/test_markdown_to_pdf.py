@@ -102,7 +102,7 @@ class TestConvert:
 
     def test_convert_with_greek_chars(self, tmp_path):
         md = tmp_path / "greeks.md"
-        md.write_text("# Greeks\n\nDelta: δ, Theta: θ, Gamma: γ\n")
+        md.write_text("# Greeks\n\nDelta: δ, Theta: θ, Gamma: γ\n", encoding="utf-8")
         result = convert(str(md))
         assert result["success"] is True
         assert Path(result["output"]).exists()
@@ -338,7 +338,8 @@ class TestBug47Fixes:
             "| 🟡 YELLOW | 2 |\n"
             "| 🟢 GREEN | 10 |\n\n"
             "Trend: bullish 📈 bearish 📉 neutral ➡\n\n"
-            "Above SMA ✓ Below SMA ✗\n"
+            "Above SMA ✓ Below SMA ✗\n",
+            encoding="utf-8",
         )
         result = convert(str(md))
         assert result["success"] is True

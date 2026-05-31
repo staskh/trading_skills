@@ -522,8 +522,19 @@ def test_find_best_rolls_result_fields():
         assert "pnl_if_assigned" in roll
 
 
-def test_find_best_rolls_profit_per_day_is_net_credit_per_day():
+def test_find_best_rolls_profit_per_day_is_net_credit_per_day(monkeypatch):
     """profit_per_day = net_credit / dte, not roll_price / dte."""
+    # Pin DTE to a fixed reference date so the roll clears min_roll_dte
+    # regardless of when the suite runs (find_best_rolls calls days_to_expiry,
+    # which otherwise measures against today's real date).
+    import datetime as _dt
+
+    from trading_skills.broker import pmcc_advisor
+
+    def _fixed_dte(expiry_str):
+        return (_dt.datetime.strptime(expiry_str, "%Y%m%d") - _dt.datetime(2026, 5, 1)).days
+
+    monkeypatch.setattr(pmcc_advisor, "days_to_expiry", _fixed_dte)
     # current short price = $2.00, roll mid = $3.10 → net_credit = $1.10
     roll_chains = {
         "20260601": [_make_quote(120, 3.0, 3.20, "20260601")],
