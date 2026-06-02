@@ -8,7 +8,7 @@ import sys
 
 import pandas as pd
 
-from trading_skills.massive.whales import whales_hunter
+from trading_skills.massive.whales import WhaleDataError, whales_hunter
 from trading_skills.utils import generated_at_str
 
 
@@ -37,13 +37,27 @@ def main():
     symbol = args.symbol.strip().upper()
     print(f"Hunting whales for {symbol}...", file=sys.stderr)
 
-    result = whales_hunter(
-        symbol,
-        max_months=args.months,
-        precise=True,
-        sigma_z=args.sigma_z,
-        trading_date=args.date,
-    )
+    try:
+        result = whales_hunter(
+            symbol,
+            max_months=args.months,
+            precise=True,
+            sigma_z=args.sigma_z,
+            trading_date=args.date,
+        )
+    except WhaleDataError as exc:
+        print(
+            json.dumps(
+                {
+                    "underlying": symbol,
+                    "error": str(exc),
+                    "generated_at": generated_at_str(),
+                    "data_delay": "real-time",
+                },
+                indent=2,
+            )
+        )
+        sys.exit(1)
 
     whales = result["whales"]
     trading_date = result["trading_date"]
