@@ -2,12 +2,16 @@
 # ABOUTME: All tests run without IBKR dependency — pure calculation coverage.
 
 
+import asyncio
+import math
 from datetime import date, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from trading_skills.broker.pmcc_advisor import (
+    _fetch_option_quotes_batch,
+    _fetch_single_option_quote,
     build_comparison_table,
     calc_assignment_prob,
     calc_bs_price,
@@ -948,3 +952,78 @@ def test_find_best_rolls_skips_same_expiry_as_current_short():
     if result:
         for r in result:
             assert r["expiry"] != same_expiry
+
+
+# ---------------------------------------------------------------------------
+# Off-hours option price fallback (_fetch_single_option_quote / _fetch_option_quotes_batch)
+# ---------------------------------------------------------------------------
+
+
+def _make_ticker(bid=math.nan, ask=math.nan, last=math.nan, close=math.nan, model_greeks=None):
+    t = MagicMock()
+    t.bid = bid
+    t.ask = ask
+    t.last = last
+    t.close = close
+    t.modelGreeks = model_greeks
+    return t
+
+
+def _make_ib(ticker, contract=MagicMock()):
+    ib = MagicMock()
+    ib.qualifyContractsAsync = AsyncMock(return_value=[contract])
+    ib.reqMktData = MagicMock(return_value=ticker)
+    ib.cancelMktData = MagicMock()
+    return ib
+
+
+def test_fetch_single_option_quote_falls_back_to_close_when_last_is_nan():
+    """Off-hours: bid/ask/last are NaN but close has the session's closing price."""
+    ticker = _make_ticker(close=5.23)
+    contract = MagicMock()
+    contract.conId = 12345
+    ib = _make_ib(ticker, contract)
+
+    with patch("trading_skills.broker.pmcc_advisor.asyncio.sleep", new=AsyncMock()):
+        result = asyncio.run(_fetch_single_option_quote(ib, "AAPL", 200.0, "20260117", "C"))
+
+    assert result is not None
+    assert result["bid"] is None
+    assert result["ask"] is None
+    assert result["last"] == pytest.approx(5.23)
+    assert result["stale"] is True
+
+
+def test_fetch_single_option_quote_prefers_last_over_close():
+    """When last price is available, use it (not close)."""
+    ticker = _make_ticker(bid=4.90, ask=5.10, last=5.00, close=4.80)
+    contract = MagicMock()
+    contract.conId = 12345
+    ib = _make_ib(ticker, contract)
+
+    with patch("trading_skills.broker.pmcc_advisor.asyncio.sleep", new=AsyncMock()):
+        result = asyncio.run(_fetch_single_option_quote(ib, "AAPL", 200.0, "20260117", "C"))
+
+    assert result is not None
+    assert result["last"] == pytest.approx(5.00)
+    assert result["stale"] is False
+
+
+def test_fetch_option_quotes_batch_falls_back_to_close_when_last_is_nan():
+    """Off-hours batch: bid/ask/last are NaN but close has the session's closing price."""
+    ticker = _make_ticker(close=3.75)
+    contract = MagicMock()
+    contract.conId = 99
+    contract.strike = 210.0
+
+    ib = MagicMock()
+    ib.qualifyContractsAsync = AsyncMock(return_value=[contract])
+    ib.reqMktData = MagicMock(return_value=ticker)
+    ib.cancelMktData = MagicMock()
+
+    with patch("trading_skills.broker.pmcc_advisor.asyncio.sleep", new=AsyncMock()):
+        results = asyncio.run(_fetch_option_quotes_batch(ib, "AAPL", "20260117", [210.0], "C"))
+
+    assert len(results) == 1
+    assert results[0]["last"] == pytest.approx(3.75)
+    assert results[0]["stale"] is True
