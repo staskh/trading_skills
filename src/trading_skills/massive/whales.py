@@ -10,6 +10,7 @@ import pandas as pd
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 from massive import RESTClient
+from massive.exceptions import AuthError, BadResponse
 
 from trading_skills.options import get_expiries, get_option_chain, parse_option_ticker
 from trading_skills.utils import _coerce_date, latest_trading_date, previous_trading_date
@@ -17,6 +18,41 @@ from trading_skills.utils import _coerce_date, latest_trading_date, previous_tra
 load_dotenv()
 
 _NY = ZoneInfo("America/New_York")
+
+
+class WhaleDataError(RuntimeError):
+    """Raised when the Massive/Polygon API cannot serve whale data.
+
+    Covers fatal, account-wide failures — a missing/invalid API key or a plan
+    that lacks the 1-second aggregate entitlement the precise drill-down needs.
+    These must surface to the caller rather than be swallowed into an empty
+    result, which would masquerade as a genuine "no whale activity" signal.
+    """
+
+
+# Substrings that mark a BadResponse body as a fatal auth/entitlement failure
+# (as opposed to a recoverable per-contract error like a 404 for one ticker).
+_FATAL_RESPONSE_MARKERS = (
+    "NOT_AUTHORIZED",
+    "not entitled",
+    "Unknown API Key",
+    "UNAUTHORIZED",
+)
+
+
+def _is_fatal_api_error(exc: Exception) -> bool:
+    """True if exc is an account-wide auth/entitlement failure, not per-contract.
+
+    Fatal: missing key (EnvironmentError), AuthError (empty/invalid key), or a
+    BadResponse whose body names an authorization/entitlement problem. A bare
+    BadResponse (e.g. a 404 for a single illiquid contract) is NOT fatal — those
+    stay swallowed so the rest of the scan completes.
+    """
+    if isinstance(exc, (EnvironmentError, AuthError)):
+        return True
+    if isinstance(exc, BadResponse):
+        return any(marker in str(exc) for marker in _FATAL_RESPONSE_MARKERS)
+    return False
 
 
 def _make_client() -> RESTClient:
@@ -186,7 +222,9 @@ def _fetch_whales_parallel(
     """Fetch per-second whale data for each candidate concurrently.
 
     Returns a list of non-empty DataFrames, one per candidate that had whale activity.
-    Exceptions from individual candidates are swallowed so others still complete.
+    Recoverable per-candidate errors are swallowed so others still complete, but a
+    fatal auth/entitlement failure (see _is_fatal_api_error) is re-raised as a
+    WhaleDataError so it cannot be silently turned into an empty result.
     """
 
     def fetch_one(row):
@@ -198,13 +236,21 @@ def _fetch_whales_parallel(
             w["open_interest"] = row.get("open_interest")
             w["reason"] = row.get("reason")
             return w[_WHALE_COLS]
-        except Exception:
+        except Exception as exc:
+            if _is_fatal_api_error(exc):
+                raise WhaleDataError(
+                    "Massive API request failed — the key is missing/invalid or the "
+                    "plan lacks the 1-second aggregate entitlement required for whale "
+                    f"detection. Upgrade the plan or fix MASSIVE_API_KEY. Detail: {exc}"
+                ) from exc
             return None
 
     rows = [row for _, row in candidates.iterrows()]
     with ThreadPoolExecutor() as executor:
         futures = {executor.submit(fetch_one, row): row for row in rows}
-        results = [f.result() for f in as_completed(futures)]
+        results = []
+        for f in as_completed(futures):
+            results.append(f.result())  # re-raises WhaleDataError from fetch_one
 
     return [r for r in results if r is not None]
 
