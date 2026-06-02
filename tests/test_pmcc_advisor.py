@@ -973,7 +973,9 @@ def _make_ticker(bid=math.nan, ask=math.nan, last=math.nan, close=math.nan, mode
     return t
 
 
-def _make_ib(ticker, contract=MagicMock()):
+def _make_ib(ticker, contract=None):
+    if contract is None:
+        contract = MagicMock()
     ib = MagicMock()
     ib.qualifyContractsAsync = AsyncMock(return_value=[contract])
     ib.reqMktData = MagicMock(return_value=ticker)
