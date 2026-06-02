@@ -13,7 +13,7 @@ from trading_skills.utils import generated_at_str
 async def main():
     parser = argparse.ArgumentParser(description="Generate tactical collar analysis")
     parser.add_argument("symbol", help="Stock symbol to analyze")
-    parser.add_argument("--port", type=int, default=7496, help="IB port (default: 7496)")
+    parser.add_argument("--port", type=int, default=7497, help="IB port (default: 7496)")
     parser.add_argument("--account", type=str, default=None, help="IB account ID")
 
     args = parser.parse_args()

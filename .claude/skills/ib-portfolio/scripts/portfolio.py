@@ -12,7 +12,7 @@ from trading_skills.utils import generated_at_str
 
 def main():
     parser = argparse.ArgumentParser(description="Fetch IB portfolio")
-    parser.add_argument("--port", type=int, default=7496, help="IB port (7496=live, 7497=paper)")
+    parser.add_argument("--port", type=int, default=7497, help="IB port (7496=live, 7497=paper)")
     parser.add_argument("--account", type=str, default=None, help="IB account ID (e.g., U790497)")
     parser.add_argument("--all", action="store_true", help="Fetch positions from all accounts")
 

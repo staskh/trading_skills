@@ -12,7 +12,7 @@ from trading_skills.broker.pmcc_advisor import get_pmcc_data
 
 async def main():
     parser = argparse.ArgumentParser(description="Analyze PMCC (diagonal spread) positions from IB")
-    parser.add_argument("--port", type=int, default=7496, help="IB port (7496=live, 7497=paper)")
+    parser.add_argument("--port", type=int, default=7497, help="IB port (7496=live, 7497=paper)")
     parser.add_argument("--account", type=str, default=None, help="Specific account ID")
     parser.add_argument(
         "--min-roll-dte",

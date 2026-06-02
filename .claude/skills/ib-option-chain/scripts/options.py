@@ -16,7 +16,7 @@ def main():
     parser.add_argument("symbol", help="Ticker symbol")
     parser.add_argument("--expiries", action="store_true", help="List expiration dates only")
     parser.add_argument("--expiry", help="Fetch chain for specific expiry (YYYYMMDD)")
-    parser.add_argument("--port", type=int, default=7496, help="IB port (7497=paper, 7496=live)")
+    parser.add_argument("--port", type=int, default=7497, help="IB port (7497=paper, 7496=live)")
     parser.add_argument(
         "--sec-type",
         dest="sec_type",
