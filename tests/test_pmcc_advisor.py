@@ -400,7 +400,11 @@ def test_calc_pnl_if_assigned_qty_one_contract():
 # ---------------------------------------------------------------------------
 
 
-def _make_quote(strike, bid, ask, expiry="20260601"):
+_EXP_ROLL = (date.today() + timedelta(days=30)).strftime("%Y%m%d")
+
+
+def _make_quote(strike, bid, ask, expiry=None):
+    expiry = expiry or _EXP_ROLL
     mid = (bid + ask) / 2 if bid and ask else 0
     return {"strike": strike, "bid": bid, "ask": ask, "mid": mid, "last": bid, "expiry": expiry}
 
@@ -408,11 +412,11 @@ def _make_quote(strike, bid, ask, expiry="20260601"):
 def test_find_best_rolls_returns_at_most_3():
     # Many candidates, but we only want top 3
     roll_chains = {
-        "20260601": [
-            _make_quote(115, 1.0, 1.20, "20260601"),  # lower delta, credit roll
-            _make_quote(120, 0.80, 1.00, "20260601"),
-            _make_quote(125, 0.60, 0.80, "20260601"),
-            _make_quote(130, 0.40, 0.60, "20260601"),
+        _EXP_ROLL: [
+            _make_quote(115, 1.0, 1.20, _EXP_ROLL),  # lower delta, credit roll
+            _make_quote(120, 0.80, 1.00, _EXP_ROLL),
+            _make_quote(125, 0.60, 0.80, _EXP_ROLL),
+            _make_quote(130, 0.40, 0.60, _EXP_ROLL),
         ],
     }
     rolls = find_best_rolls(
@@ -439,9 +443,9 @@ def test_find_best_rolls_filters_by_delta():
     # At spot=108, IV=0.3, strike=109, 30 dte → delta ≈ 0.49 (high)
     # strike=125, 30 dte → delta should be much lower
     roll_chains = {
-        "20260601": [
-            _make_quote(109, 3.50, 3.80, "20260601"),  # near ATM, high delta — should be filtered
-            _make_quote(130, 0.50, 0.70, "20260601"),  # OTM, low delta — should pass
+        _EXP_ROLL: [
+            _make_quote(109, 3.50, 3.80, _EXP_ROLL),  # near ATM, high delta — should be filtered
+            _make_quote(130, 0.50, 0.70, _EXP_ROLL),  # OTM, low delta — should pass
         ],
     }
     rolls = find_best_rolls(
@@ -468,9 +472,9 @@ def test_find_best_rolls_filters_by_delta():
 def test_find_best_rolls_requires_net_credit():
     """Candidates with debit > NET_CREDIT_MIN (-0.10) should be excluded."""
     roll_chains = {
-        "20260601": [
+        _EXP_ROLL: [
             # new mid = 0.25, current = 0.50 → net_credit = -0.25 < -0.10 → excluded
-            _make_quote(130, 0.20, 0.30, "20260601"),
+            _make_quote(130, 0.20, 0.30, _EXP_ROLL),
         ],
     }
     rolls = find_best_rolls(
@@ -494,8 +498,8 @@ def test_find_best_rolls_requires_net_credit():
 
 def test_find_best_rolls_result_fields():
     roll_chains = {
-        "20260601": [
-            _make_quote(120, 1.0, 1.20, "20260601"),
+        _EXP_ROLL: [
+            _make_quote(120, 1.0, 1.20, _EXP_ROLL),
         ],
     }
     rolls = find_best_rolls(
@@ -530,7 +534,7 @@ def test_find_best_rolls_profit_per_day_is_net_credit_per_day():
     """profit_per_day = net_credit / dte, not roll_price / dte."""
     # current short price = $2.00, roll mid = $3.10 → net_credit = $1.10
     roll_chains = {
-        "20260601": [_make_quote(120, 3.0, 3.20, "20260601")],
+        _EXP_ROLL: [_make_quote(120, 3.0, 3.20, _EXP_ROLL)],
     }
     rolls = find_best_rolls(
         current_short_strike=110,
@@ -593,7 +597,7 @@ def test_build_comparison_table_has_rolls():
     long_pos = {"strike": 90, "expiry": "20260918", "avg_cost": 18.0}
     roll1 = {
         "strike": 120,
-        "expiry": "20260601",
+        "expiry": _EXP_ROLL,
         "dte": 32,
         "delta": 0.25,
         "assignment_prob": 20.0,
