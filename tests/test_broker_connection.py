@@ -235,6 +235,7 @@ class TestClientIds:
             "options_chain",
             "roll",
             "stop_loss",
+            "trailing_stop",
             "trades",
             "consolidate",
         }

@@ -24,11 +24,17 @@ uv run python .claude/skills/ib-pmcc-advisor/scripts/pmcc_advisor.py [--port POR
 
 The script returns JSON to stdout. Capture it and format the report.
 
-### Step 2: Format and save the report
+### Step 2: Report to user
 
-Read `.claude/skills/ib-pmcc-advisor/templates/markdown-template.md` for full formatting instructions.
+From the JSON, present inline in the conversation:
+- Lead with any red flags (assignment > 40%, DTE < 7, earnings warnings).
+- For each spread with a red flag, show the comparison table inline.
+- State the top recommendation for each flagged spread.
+- For clean positions, a one-line summary is enough.
 
-Generate a markdown report from the JSON and save to `sandbox/`:
+**Do NOT save a file** unless the user explicitly asks for a report (e.g. "save a report", "generate a PDF", "write a report").
+
+If a report is requested, read `.claude/skills/ib-pmcc-advisor/templates/markdown-template.md` for full formatting instructions and save to `sandbox/`:
 - Filename: `pmcc_advisor_{ACCOUNT}_{YYYY-MM-DD}_{HHmm}.md`
 - Use first account ID. Derive date/time from `generated_at`.
 
@@ -40,13 +46,6 @@ The report must include all sections per spread:
 5. **Roll candidates table** — strike, expiry, DTE, delta, assign%, IV, net credit, $/day, P&L if assigned, bid/ask
 6. **Comparison table** — current vs roll_1/2/3 side by side
 7. **Recommendation** — hold/roll/close with reasoning
-
-### Step 3: Report to user
-
-- State the file path of the saved report.
-- Lead with any red flags from the summary section.
-- For each spread with a red flag or earnings warning, show the comparison table inline.
-- State the top recommendation for each flagged spread.
 
 ## Arguments
 

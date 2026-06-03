@@ -169,26 +169,40 @@ _LINE_SPACING = 14
 
 
 def _setup_font() -> str:
-    """Register first available Unicode TTF font. Returns family name or 'Helvetica'."""
-    for regular, bold, italic in _FONT_CANDIDATES:
-        if Path(regular).exists():
-            try:
-                pdfmetrics.registerFont(TTFont("DocFont", regular))
-                bold_path = bold if (bold and Path(bold).exists()) else regular
-                italic_path = italic if (italic and Path(italic).exists()) else regular
-                pdfmetrics.registerFont(TTFont("DocFont-Bold", bold_path))
-                pdfmetrics.registerFont(TTFont("DocFont-Italic", italic_path))
-                pdfmetrics.registerFont(TTFont("DocFont-BoldItalic", bold_path))
-                pdfmetrics.registerFontFamily(
-                    "DocFont",
-                    normal="DocFont",
-                    bold="DocFont-Bold",
-                    italic="DocFont-Italic",
-                    boldItalic="DocFont-BoldItalic",
-                )
-                return "DocFont"
-            except Exception:
-                continue
+    """Register first available Unicode TTF font. Returns family name or 'Helvetica'.
+
+    reportlab's font registry is process-global. When this script is loaded as
+    more than one module instance (e.g. report-stock imports it via sys.path
+    while the tests load it via importlib), the base "DocFont" can end up
+    registered without its bold/italic family map, which breaks <b>/<i> at build
+    time ("Can't map determine family/bold/italic for DocFont"). So register the
+    TTFont files only once (re-registering corrupts the map), but always reassert
+    the family mapping, which is cheap and idempotent.
+    """
+    variants = {"DocFont", "DocFont-Bold", "DocFont-Italic", "DocFont-BoldItalic"}
+    if not variants <= set(pdfmetrics.getRegisteredFontNames()):
+        for regular, bold, italic in _FONT_CANDIDATES:
+            if Path(regular).exists():
+                try:
+                    pdfmetrics.registerFont(TTFont("DocFont", regular))
+                    bold_path = bold if (bold and Path(bold).exists()) else regular
+                    italic_path = italic if (italic and Path(italic).exists()) else regular
+                    pdfmetrics.registerFont(TTFont("DocFont-Bold", bold_path))
+                    pdfmetrics.registerFont(TTFont("DocFont-Italic", italic_path))
+                    pdfmetrics.registerFont(TTFont("DocFont-BoldItalic", bold_path))
+                    break
+                except Exception:
+                    continue
+
+    if variants <= set(pdfmetrics.getRegisteredFontNames()):
+        pdfmetrics.registerFontFamily(
+            "DocFont",
+            normal="DocFont",
+            bold="DocFont-Bold",
+            italic="DocFont-Italic",
+            boldItalic="DocFont-BoldItalic",
+        )
+        return "DocFont"
     return "Helvetica"
 
 
