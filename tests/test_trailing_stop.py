@@ -175,9 +175,7 @@ def test_ts_key_stock():
 
 
 def test_ts_key_leaps():
-    assert (
-        _ts_key(_leaps_pos("SOLO", strike=50.0, expiry="20260918")) == "SOLO_50.0_20260918_C"
-    )
+    assert _ts_key(_leaps_pos("SOLO", strike=50.0, expiry="20260918")) == "SOLO_50.0_20260918_C"
 
 
 def test_ts_key_leaps_call_and_put_differ():
@@ -1012,9 +1010,7 @@ class TestGetTrailingStopData:
             patch(f"{MODULE}.ib_connection", self._ib_context(mock_ib)),
             patch(f"{MODULE}.asyncio.sleep", new=AsyncMock()),
         ):
-            result = asyncio.run(
-                get_trailing_stop_data(port=7497, account="UNKNOWN", dry_run=True)
-            )
+            result = asyncio.run(get_trailing_stop_data(port=7497, account="UNKNOWN", dry_run=True))
         assert "error" in result
         assert "UNKNOWN" in result["error"]
 
@@ -1044,9 +1040,7 @@ class TestGetTrailingStopData:
             patch(f"{MODULE}.fetch_positions", new=AsyncMock(return_value=[])),
             patch(f"{MODULE}.fetch_with_timeout", new=AsyncMock(return_value=[])),
         ):
-            result = asyncio.run(
-                get_trailing_stop_data(port=7497, symbols=["nvda"], dry_run=True)
-            )
+            result = asyncio.run(get_trailing_stop_data(port=7497, symbols=["nvda"], dry_run=True))
         assert result["symbols_filter"] == ["NVDA"]
         assert result["positions"] == []
 
