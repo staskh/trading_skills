@@ -2,10 +2,12 @@
 # ABOUTME: Validates candidate evaluation and roll calculation logic.
 
 from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from trading_skills.broker.roll import (
+    _resolve_fop_contracts,
     calculate_roll_options,
     evaluate_short_candidates,
 )
@@ -144,3 +146,46 @@ class TestCalculateRollOptions:
         assert len(result) == 1
         # 20% OTM should have penalty applied (score still calculated)
         assert result[0]["otm_pct"] == pytest.approx(20.0)
+
+
+def _fop_detail(trading_class: str, con_id: int):
+    """Build a mock ContractDetails whose .contract carries a tradingClass + conId."""
+    contract = MagicMock()
+    contract.tradingClass = trading_class
+    contract.conId = con_id
+    detail = MagicMock()
+    detail.contract = contract
+    return detail
+
+
+class TestResolveFopContracts:
+    """Regression tests for FOP tradingClass disambiguation (roll-fop-ambiguity bug)."""
+
+    @pytest.mark.asyncio
+    async def test_prefers_standard_monthly_class(self):
+        # Same (expiry, strike) returns both the standard NQ class and a Q3D weekly.
+        # qualifyContracts would choke on this; _resolve_fop_contracts must pick NQ.
+        ib = MagicMock()
+        ib.reqContractDetailsAsync = AsyncMock(
+            return_value=[_fop_detail("Q3D", 888), _fop_detail("NQ", 877)]
+        )
+        resolved = await _resolve_fop_contracts(ib, "NQ", "20260618", [31300], "C")
+        assert len(resolved) == 1
+        assert resolved[0].tradingClass == "NQ"
+        assert resolved[0].conId == 877
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_only_class(self):
+        # A weekly/daily expiry (no standard NQ contract) must still resolve.
+        ib = MagicMock()
+        ib.reqContractDetailsAsync = AsyncMock(return_value=[_fop_detail("Q2D", 555)])
+        resolved = await _resolve_fop_contracts(ib, "NQ", "20260611", [31300], "C")
+        assert len(resolved) == 1
+        assert resolved[0].conId == 555
+
+    @pytest.mark.asyncio
+    async def test_skips_strike_with_no_contract(self):
+        ib = MagicMock()
+        ib.reqContractDetailsAsync = AsyncMock(return_value=[])
+        resolved = await _resolve_fop_contracts(ib, "NQ", "20260618", [99999], "C")
+        assert resolved == []

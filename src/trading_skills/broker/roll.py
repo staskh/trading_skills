@@ -10,7 +10,7 @@ from ib_async import IB, ContFuture, FuturesOption, Option, Stock
 
 from trading_skills.broker.connection import CLIENT_IDS, best_option_chain, ib_connection
 from trading_skills.earnings import get_next_earnings_date
-from trading_skills.utils import days_to_expiry
+from trading_skills.utils import days_to_expiry, fetch_with_timeout
 
 # Known futures symbols — options are FOP, not OPT
 FUTURES_SYMBOLS = {
@@ -185,22 +185,50 @@ async def get_option_chain_params(ib: IB, symbol: str) -> dict:
     }
 
 
+async def _resolve_fop_contracts(
+    ib: IB, symbol: str, expiry: str, strikes: list, right: str
+) -> list:
+    """Resolve FuturesOption contracts for the given strikes, disambiguating tradingClass.
+
+    IB returns multiple FOPs for the same (expiry, strike) when a standard monthly
+    contract (tradingClass == symbol) and a weekly/daily contract (e.g. Q3D) share an
+    expiry date. ``qualifyContractsAsync`` cannot pick between them and leaves the
+    contract unqualified (no conId), which silently drops every candidate. We instead
+    expand each strike via contract details and select one concrete contract per strike,
+    preferring the standard monthly class.
+    """
+    resolved = []
+    for strike in strikes:
+        base = FuturesOption(symbol, expiry, strike, right, exchange="CME")
+        details = await fetch_with_timeout(ib.reqContractDetailsAsync(base), timeout=10, default=[])
+        contracts = [d.contract for d in details if d.contract is not None]
+        if not contracts:
+            continue
+        # Prefer the standard monthly class (tradingClass == symbol); else first match.
+        standard = [c for c in contracts if c.tradingClass == symbol]
+        resolved.append(standard[0] if standard else contracts[0])
+    return resolved
+
+
 async def get_option_quotes(ib: IB, symbol: str, expiry: str, strikes: list, right: str) -> list:
     """Get quotes for options at given strikes and expiry."""
     if _is_futures(symbol):
-        contracts = [FuturesOption(symbol, expiry, strike, right, "CME") for strike in strikes]
+        # reqContractDetails returns concrete, already-qualified contracts (conId set),
+        # disambiguating the tradingClass collision that breaks qualifyContractsAsync.
+        qualified = await _resolve_fop_contracts(ib, symbol, expiry, strikes, right)
+        if not qualified:
+            return []
     else:
         contracts = [Option(symbol, expiry, strike, right, "SMART") for strike in strikes]
+        try:
+            qualified = await asyncio.wait_for(ib.qualifyContractsAsync(*contracts), timeout=10)
+        except asyncio.TimeoutError:
+            return []
 
-    try:
-        qualified = await asyncio.wait_for(ib.qualifyContractsAsync(*contracts), timeout=10)
-    except asyncio.TimeoutError:
-        return []
-
-    # Filter out None values (contracts that don't exist)
-    qualified = [c for c in qualified if c is not None]
-    if not qualified:
-        return []
+        # Filter out None values (contracts that don't exist)
+        qualified = [c for c in qualified if c is not None]
+        if not qualified:
+            return []
 
     tickers = await asyncio.wait_for(ib.reqTickersAsync(*qualified), timeout=15)
 
