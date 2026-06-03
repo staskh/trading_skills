@@ -593,7 +593,9 @@ async def _fetch_single_option_quote(
 
     bid = ticker.bid if ticker.bid and ticker.bid > 0 else None
     ask = ticker.ask if ticker.ask and ticker.ask > 0 else None
-    last = ticker.last if ticker.last and ticker.last > 0 else None
+    last = (ticker.last if ticker.last and ticker.last > 0 else None) or (
+        ticker.close if ticker.close and ticker.close > 0 else None
+    )
 
     ib_delta = None
     ib_iv_pct = None
@@ -653,7 +655,9 @@ async def _fetch_option_quotes_batch(
         bid = t.bid if t.bid and t.bid > 0 else None
         ask = t.ask if t.ask and t.ask > 0 else None
         mid = (bid + ask) / 2 if bid and ask else (bid or ask or 0)
-        last = t.last if t.last and t.last > 0 else None
+        last = (t.last if t.last and t.last > 0 else None) or (
+            t.close if t.close and t.close > 0 else None
+        )
         results.append(
             {
                 "strike": t.contract.strike,

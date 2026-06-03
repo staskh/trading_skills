@@ -2,12 +2,16 @@
 # ABOUTME: All tests run without IBKR dependency — pure calculation coverage.
 
 
+import asyncio
+import math
 from datetime import date, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from trading_skills.broker.pmcc_advisor import (
+    _fetch_option_quotes_batch,
+    _fetch_single_option_quote,
     build_comparison_table,
     calc_assignment_prob,
     calc_bs_price,
@@ -396,7 +400,11 @@ def test_calc_pnl_if_assigned_qty_one_contract():
 # ---------------------------------------------------------------------------
 
 
-def _make_quote(strike, bid, ask, expiry="20260601"):
+_EXP_ROLL = (date.today() + timedelta(days=30)).strftime("%Y%m%d")
+
+
+def _make_quote(strike, bid, ask, expiry=None):
+    expiry = expiry or _EXP_ROLL
     mid = (bid + ask) / 2 if bid and ask else 0
     return {"strike": strike, "bid": bid, "ask": ask, "mid": mid, "last": bid, "expiry": expiry}
 
@@ -404,11 +412,11 @@ def _make_quote(strike, bid, ask, expiry="20260601"):
 def test_find_best_rolls_returns_at_most_3():
     # Many candidates, but we only want top 3
     roll_chains = {
-        "20260601": [
-            _make_quote(115, 1.0, 1.20, "20260601"),  # lower delta, credit roll
-            _make_quote(120, 0.80, 1.00, "20260601"),
-            _make_quote(125, 0.60, 0.80, "20260601"),
-            _make_quote(130, 0.40, 0.60, "20260601"),
+        _EXP_ROLL: [
+            _make_quote(115, 1.0, 1.20, _EXP_ROLL),  # lower delta, credit roll
+            _make_quote(120, 0.80, 1.00, _EXP_ROLL),
+            _make_quote(125, 0.60, 0.80, _EXP_ROLL),
+            _make_quote(130, 0.40, 0.60, _EXP_ROLL),
         ],
     }
     rolls = find_best_rolls(
@@ -435,9 +443,9 @@ def test_find_best_rolls_filters_by_delta():
     # At spot=108, IV=0.3, strike=109, 30 dte → delta ≈ 0.49 (high)
     # strike=125, 30 dte → delta should be much lower
     roll_chains = {
-        "20260601": [
-            _make_quote(109, 3.50, 3.80, "20260601"),  # near ATM, high delta — should be filtered
-            _make_quote(130, 0.50, 0.70, "20260601"),  # OTM, low delta — should pass
+        _EXP_ROLL: [
+            _make_quote(109, 3.50, 3.80, _EXP_ROLL),  # near ATM, high delta — should be filtered
+            _make_quote(130, 0.50, 0.70, _EXP_ROLL),  # OTM, low delta — should pass
         ],
     }
     rolls = find_best_rolls(
@@ -464,9 +472,9 @@ def test_find_best_rolls_filters_by_delta():
 def test_find_best_rolls_requires_net_credit():
     """Candidates with debit > NET_CREDIT_MIN (-0.10) should be excluded."""
     roll_chains = {
-        "20260601": [
+        _EXP_ROLL: [
             # new mid = 0.25, current = 0.50 → net_credit = -0.25 < -0.10 → excluded
-            _make_quote(130, 0.20, 0.30, "20260601"),
+            _make_quote(130, 0.20, 0.30, _EXP_ROLL),
         ],
     }
     rolls = find_best_rolls(
@@ -490,8 +498,8 @@ def test_find_best_rolls_requires_net_credit():
 
 def test_find_best_rolls_result_fields():
     roll_chains = {
-        "20260601": [
-            _make_quote(120, 1.0, 1.20, "20260601"),
+        _EXP_ROLL: [
+            _make_quote(120, 1.0, 1.20, _EXP_ROLL),
         ],
     }
     rolls = find_best_rolls(
@@ -537,7 +545,7 @@ def test_find_best_rolls_profit_per_day_is_net_credit_per_day(monkeypatch):
     monkeypatch.setattr(pmcc_advisor, "days_to_expiry", _fixed_dte)
     # current short price = $2.00, roll mid = $3.10 → net_credit = $1.10
     roll_chains = {
-        "20260601": [_make_quote(120, 3.0, 3.20, "20260601")],
+        _EXP_ROLL: [_make_quote(120, 3.0, 3.20, _EXP_ROLL)],
     }
     rolls = find_best_rolls(
         current_short_strike=110,
@@ -600,7 +608,7 @@ def test_build_comparison_table_has_rolls():
     long_pos = {"strike": 90, "expiry": "20260918", "avg_cost": 18.0}
     roll1 = {
         "strike": 120,
-        "expiry": "20260601",
+        "expiry": _EXP_ROLL,
         "dte": 32,
         "delta": 0.25,
         "assignment_prob": 20.0,
@@ -959,3 +967,80 @@ def test_find_best_rolls_skips_same_expiry_as_current_short():
     if result:
         for r in result:
             assert r["expiry"] != same_expiry
+
+
+# ---------------------------------------------------------------------------
+# Off-hours option price fallback (_fetch_single_option_quote / _fetch_option_quotes_batch)
+# ---------------------------------------------------------------------------
+
+
+def _make_ticker(bid=math.nan, ask=math.nan, last=math.nan, close=math.nan, model_greeks=None):
+    t = MagicMock()
+    t.bid = bid
+    t.ask = ask
+    t.last = last
+    t.close = close
+    t.modelGreeks = model_greeks
+    return t
+
+
+def _make_ib(ticker, contract=None):
+    if contract is None:
+        contract = MagicMock()
+    ib = MagicMock()
+    ib.qualifyContractsAsync = AsyncMock(return_value=[contract])
+    ib.reqMktData = MagicMock(return_value=ticker)
+    ib.cancelMktData = MagicMock()
+    return ib
+
+
+def test_fetch_single_option_quote_falls_back_to_close_when_last_is_nan():
+    """Off-hours: bid/ask/last are NaN but close has the session's closing price."""
+    ticker = _make_ticker(close=5.23)
+    contract = MagicMock()
+    contract.conId = 12345
+    ib = _make_ib(ticker, contract)
+
+    with patch("trading_skills.broker.pmcc_advisor.asyncio.sleep", new=AsyncMock()):
+        result = asyncio.run(_fetch_single_option_quote(ib, "AAPL", 200.0, "20260117", "C"))
+
+    assert result is not None
+    assert result["bid"] is None
+    assert result["ask"] is None
+    assert result["last"] == pytest.approx(5.23)
+    assert result["stale"] is True
+
+
+def test_fetch_single_option_quote_prefers_last_over_close():
+    """When last price is available, use it (not close)."""
+    ticker = _make_ticker(bid=4.90, ask=5.10, last=5.00, close=4.80)
+    contract = MagicMock()
+    contract.conId = 12345
+    ib = _make_ib(ticker, contract)
+
+    with patch("trading_skills.broker.pmcc_advisor.asyncio.sleep", new=AsyncMock()):
+        result = asyncio.run(_fetch_single_option_quote(ib, "AAPL", 200.0, "20260117", "C"))
+
+    assert result is not None
+    assert result["last"] == pytest.approx(5.00)
+    assert result["stale"] is False
+
+
+def test_fetch_option_quotes_batch_falls_back_to_close_when_last_is_nan():
+    """Off-hours batch: bid/ask/last are NaN but close has the session's closing price."""
+    ticker = _make_ticker(close=3.75)
+    contract = MagicMock()
+    contract.conId = 99
+    contract.strike = 210.0
+
+    ib = MagicMock()
+    ib.qualifyContractsAsync = AsyncMock(return_value=[contract])
+    ib.reqMktData = MagicMock(return_value=ticker)
+    ib.cancelMktData = MagicMock()
+
+    with patch("trading_skills.broker.pmcc_advisor.asyncio.sleep", new=AsyncMock()):
+        results = asyncio.run(_fetch_option_quotes_batch(ib, "AAPL", "20260117", [210.0], "C"))
+
+    assert len(results) == 1
+    assert results[0]["last"] == pytest.approx(3.75)
+    assert results[0]["stale"] is True
