@@ -76,10 +76,15 @@ def identify_trailable_positions(normalized: list[dict]) -> list[dict]:
 
 
 def _ts_key(position: dict) -> str:
-    """Position key embedded in TS_ order refs."""
+    """Position key embedded in TS_ order refs.
+
+    Right is included for options so a long call and long put on the same
+    symbol/strike/expiry don't collide and get conflated by existing-order
+    detection or overwrite cancellation.
+    """
     if position["type"] == "leaps":
         leaps = position["leaps"]
-        return f"{position['symbol']}_{leaps['strike']}_{leaps['expiry']}"
+        return f"{position['symbol']}_{leaps['strike']}_{leaps['expiry']}_{leaps['right']}"
     return f"{position['symbol']}_STK"
 
 
@@ -291,6 +296,7 @@ async def _cancel_orphan_orders(ib, orphan_orders: list[dict]) -> list[dict]:
 
 async def _place_simple_trail_order(
     ib,
+    contract,
     position: dict,
     qty: int,
     trail_pct: float | None,
@@ -298,21 +304,14 @@ async def _place_simple_trail_order(
     trail_stop_price: float,
     order_ref: str,
 ) -> dict:
-    """Place a TRAIL order for a naked LEAPS or stock position."""
-    from ib_async import Option, Order, Stock
+    """Place a TRAIL order for a naked LEAPS or stock position.
 
-    symbol = position["symbol"]
-    ptype = position["type"]
-
-    if ptype == "leaps":
-        leaps = position["leaps"]
-        contract = Option(symbol, leaps["expiry"], leaps["strike"], leaps["right"], "SMART")
-    else:
-        contract = Stock(symbol, "SMART", "USD")
-
-    qualified = await fetch_with_timeout(ib.qualifyContractsAsync(contract), timeout=10, default=[])
-    if not qualified:
-        return {"ok": False, "error": f"Could not qualify {symbol}"}
+    The contract must be pre-qualified by the caller. We deliberately do not
+    re-qualify here: an overwrite cancels the existing protective trail before
+    placing the replacement, so the only qualification gate must run upstream
+    — failing here would leave the position exposed.
+    """
+    from ib_async import Order
 
     order = Order()
     order.action = "SELL"
@@ -335,20 +334,22 @@ async def _place_simple_trail_order(
     if position.get("account"):
         order.account = position["account"]
 
-    trade = ib.placeOrder(qualified[0], order)
+    trade = ib.placeOrder(contract, order)
     return {"ok": True, "order_id": trade.order.orderId, "order_ref": order_ref}
 
 
 async def _execute_position_trail(
     ib,
     analysis: dict,
-    leaps_con_id: int | None,
-    stock_con_id: int | None,
+    leaps_contract,
+    stock_contract,
     open_orders: list[dict] | None = None,
 ) -> dict:
     """Place the trailing stop order for one position based on analysis.
 
-    On overwrite: cancels the existing TS_ order before placing the new one.
+    Caller must provide a pre-qualified IB Contract for the position type so
+    qualification can never fail after cancellation. On overwrite, cancels the
+    existing TS_ order before placing the replacement.
     """
     ptype = analysis["type"]
     symbol = analysis["symbol"]
@@ -359,29 +360,40 @@ async def _execute_position_trail(
     if action not in ("place_new", "overwrite"):
         return {"symbol": symbol, "skipped": True, "reason": action}
 
+    # Resolve the qualified contract BEFORE touching any open orders. A missing
+    # contract means upstream qualification failed; cancelling a protective
+    # trail and then failing to place the replacement would leave the position
+    # exposed, so the qualification gate must run before cancellation.
+    if ptype == "leaps":
+        if leaps_contract is None:
+            return {"symbol": symbol, "ok": False, "error": "no qualified LEAPS contract"}
+        contract = leaps_contract
+    else:
+        if stock_contract is None:
+            return {"symbol": symbol, "ok": False, "error": "no qualified stock contract"}
+        contract = stock_contract
+
     order_ref = f"{_TS_PREFIX}{_ts_key(analysis)}"
     position_account = analysis.get("account") or ""
 
-    if open_orders:
+    # Only overwrite cancels existing TS_ orders, and only TRAIL/TRAIL LIMIT
+    # ones — the rest of the module treats non-TRAIL TS_ refs as unmanaged.
+    if action == "overwrite" and open_orders:
         trades_by_id = {t.order.orderId: t for t in ib.openTrades()}
         for o in open_orders:
             if o.get("order_ref") != order_ref:
                 continue
             if (o.get("account") or "") != position_account:
                 continue
+            if o.get("order_type") not in _TRAIL_ORDER_TYPES:
+                continue
             oid = o.get("order_id")
             if oid and oid in trades_by_id:
                 ib.cancelOrder(trades_by_id[oid].order)
 
-    if ptype == "leaps":
-        if not leaps_con_id:
-            return {"symbol": symbol, "ok": False, "error": "no LEAPS conId"}
-    else:
-        if not stock_con_id:
-            return {"symbol": symbol, "ok": False, "error": "no stock conId"}
-
     return await _place_simple_trail_order(
         ib=ib,
+        contract=contract,
         position=analysis,
         qty=qty,
         trail_pct=trail["trail_pct"],
@@ -458,8 +470,12 @@ async def get_trailing_stop_data(
             orphan_orders = detect_orphan_trail_orders(account_scoped_orders, unfiltered_positions)
             existing_trails = _parse_existing_trails(account_scoped_orders)
 
+            cancel_results = []
+            if not dry_run and orphan_orders:
+                cancel_results = await _cancel_orphan_orders(ib, orphan_orders)
+
             if not all_positions:
-                return {
+                empty_output = {
                     "generated_at": generated_at_str(),
                     "data_delay": "real-time",
                     "dry_run": dry_run,
@@ -473,10 +489,9 @@ async def get_trailing_stop_data(
                     "positions": [],
                     "message": "No trailable positions found (stocks + naked LEAPS only)",
                 }
-
-            cancel_results = []
-            if not dry_run and orphan_orders:
-                cancel_results = await _cancel_orphan_orders(ib, orphan_orders)
+                if not dry_run:
+                    empty_output["cancel_results"] = cancel_results
+                return empty_output
 
             # --- Market data ---
             unique_symbols = list({p["symbol"] for p in all_positions})
@@ -519,8 +534,12 @@ async def get_trailing_stop_data(
             }
 
             # --- Qualify contracts (execute mode) ---
-            stock_con_ids: dict[str, int] = {}
-            leaps_con_ids: dict[int, int] = {}
+            # Store the full qualified Contract objects (not just conIds) so
+            # _execute_position_trail can hand them straight to placeOrder
+            # without a second qualification call — re-qualifying at order time
+            # could fail after the existing protective trail was cancelled.
+            qualified_stock_contracts: dict[str, object] = {}
+            qualified_leaps_contracts: dict[int, object] = {}
             if not dry_run:
                 from ib_async import Option as IBOption
                 from ib_async import Stock
@@ -531,7 +550,7 @@ async def get_trailing_stop_data(
                     qs = await fetch_with_timeout(
                         ib.qualifyContractsAsync(*stock_contracts), timeout=15, default=[]
                     )
-                    stock_con_ids = {qc.symbol: qc.conId for qc in qs if qc is not None}
+                    qualified_stock_contracts = {qc.symbol: qc for qc in qs if qc is not None}
 
                 for pos in option_positions:
                     leaps = pos["leaps"]
@@ -546,7 +565,7 @@ async def get_trailing_stop_data(
                         ib.qualifyContractsAsync(leaps_contract), timeout=10, default=[]
                     )
                     if ql and ql[0] is not None:
-                        leaps_con_ids[id(pos)] = ql[0].conId
+                        qualified_leaps_contracts[id(pos)] = ql[0]
 
             # --- Per-position analysis ---
             analyzed_positions = []
@@ -582,8 +601,8 @@ async def get_trailing_stop_data(
                     res = await _execute_position_trail(
                         ib=ib,
                         analysis=analysis,
-                        leaps_con_id=leaps_con_ids.get(id(pos)),
-                        stock_con_id=stock_con_ids.get(sym),
+                        leaps_contract=qualified_leaps_contracts.get(id(pos)),
+                        stock_contract=qualified_stock_contracts.get(sym),
                         open_orders=open_orders,
                     )
                     order_results.append(res)

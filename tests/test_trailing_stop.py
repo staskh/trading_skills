@@ -2,6 +2,7 @@
 # ABOUTME: Analytics tests run without IBKR; data-layer tests use MagicMock.
 
 import asyncio
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,6 +19,7 @@ from trading_skills.broker.trailing_stop import (
     calc_trail_reference,
     detect_orphan_trail_orders,
     filter_orders_by_account,
+    get_trailing_stop_data,
     identify_trailable_positions,
     summarize_all_trail_orders,
 )
@@ -173,7 +175,19 @@ def test_ts_key_stock():
 
 
 def test_ts_key_leaps():
-    assert _ts_key(_leaps_pos("SOLO", strike=50.0, expiry="20260918")) == "SOLO_50.0_20260918"
+    assert (
+        _ts_key(_leaps_pos("SOLO", strike=50.0, expiry="20260918")) == "SOLO_50.0_20260918_C"
+    )
+
+
+def test_ts_key_leaps_call_and_put_differ():
+    """Same symbol/strike/expiry but different right must produce distinct keys."""
+    call_pos = _leaps_pos("SOLO", strike=50.0, expiry="20260918")
+    put_pos = _leaps_pos("SOLO", strike=50.0, expiry="20260918")
+    put_pos["leaps"]["right"] = "P"
+    assert _ts_key(call_pos) != _ts_key(put_pos)
+    assert _ts_key(call_pos) == "SOLO_50.0_20260918_C"
+    assert _ts_key(put_pos) == "SOLO_50.0_20260918_P"
 
 
 # ---------------------------------------------------------------------------
@@ -574,23 +588,23 @@ class TestPlaceSimpleTrailOrder:
         mock_ib.placeOrder.return_value = mock_trade
 
         pos = {"type": "stock", "symbol": "JOBY", "avg_cost": 5.0}
-        with patch(
-            "trading_skills.broker.trailing_stop.fetch_with_timeout",
-            new=AsyncMock(return_value=[self._qualified(111)]),
-        ):
-            result = asyncio.run(
-                _place_simple_trail_order(
-                    mock_ib,
-                    pos,
-                    qty=1000,
-                    trail_pct=20.0,
-                    trail_amt=None,
-                    trail_stop_price=6.0,
-                    order_ref="TS_JOBY_STK",
-                )
+        contract = self._qualified(111)
+        result = asyncio.run(
+            _place_simple_trail_order(
+                mock_ib,
+                contract,
+                pos,
+                qty=1000,
+                trail_pct=20.0,
+                trail_amt=None,
+                trail_stop_price=6.0,
+                order_ref="TS_JOBY_STK",
             )
+        )
         assert result["ok"] is True
+        placed_contract = mock_ib.placeOrder.call_args[0][0]
         placed = mock_ib.placeOrder.call_args[0][1]
+        assert placed_contract is contract
         assert placed.orderType == "TRAIL"
         assert placed.action == "SELL"
         assert placed.trailingPercent == 20.0
@@ -604,21 +618,18 @@ class TestPlaceSimpleTrailOrder:
         mock_ib.placeOrder.return_value = mock_trade
 
         pos = {"type": "stock", "symbol": "JOBY", "avg_cost": 5.0}
-        with patch(
-            "trading_skills.broker.trailing_stop.fetch_with_timeout",
-            new=AsyncMock(return_value=[self._qualified(111)]),
-        ):
-            asyncio.run(
-                _place_simple_trail_order(
-                    mock_ib,
-                    pos,
-                    qty=1000,
-                    trail_pct=None,
-                    trail_amt=1.5,
-                    trail_stop_price=6.0,
-                    order_ref="TS_JOBY_STK",
-                )
+        asyncio.run(
+            _place_simple_trail_order(
+                mock_ib,
+                self._qualified(111),
+                pos,
+                qty=1000,
+                trail_pct=None,
+                trail_amt=1.5,
+                trail_stop_price=6.0,
+                order_ref="TS_JOBY_STK",
             )
+        )
         placed = mock_ib.placeOrder.call_args[0][1]
         assert placed.auxPrice == 1.5
 
@@ -633,43 +644,43 @@ class TestPlaceSimpleTrailOrder:
             "symbol": "SOLO",
             "leaps": {"strike": 50.0, "expiry": "20260918", "right": "C", "avg_cost": 10.0},
         }
-        with patch(
-            "trading_skills.broker.trailing_stop.fetch_with_timeout",
-            new=AsyncMock(return_value=[self._qualified(333)]),
-        ):
-            result = asyncio.run(
-                _place_simple_trail_order(
-                    mock_ib,
-                    pos,
-                    qty=2,
-                    trail_pct=25.0,
-                    trail_amt=None,
-                    trail_stop_price=9.0,
-                    order_ref="TS_SOLO_50.0_20260918",
-                )
+        result = asyncio.run(
+            _place_simple_trail_order(
+                mock_ib,
+                self._qualified(333),
+                pos,
+                qty=2,
+                trail_pct=25.0,
+                trail_amt=None,
+                trail_stop_price=9.0,
+                order_ref="TS_SOLO_50.0_20260918_C",
             )
+        )
         assert result["ok"] is True
 
-    def test_qualify_fails(self):
+    def test_does_not_re_qualify_contract(self):
+        """Regression: qualification must happen upstream, not here. Re-qualifying at
+        order time would be a second chance to fail AFTER the existing protective trail
+        was cancelled in overwrite mode."""
         mock_ib = MagicMock()
+        mock_trade = MagicMock()
+        mock_trade.order.orderId = 101
+        mock_ib.placeOrder.return_value = mock_trade
+
         pos = {"type": "stock", "symbol": "JOBY", "avg_cost": 5.0}
-        with patch(
-            "trading_skills.broker.trailing_stop.fetch_with_timeout",
-            new=AsyncMock(return_value=[]),
-        ):
-            result = asyncio.run(
-                _place_simple_trail_order(
-                    mock_ib,
-                    pos,
-                    qty=1000,
-                    trail_pct=20.0,
-                    trail_amt=None,
-                    trail_stop_price=6.0,
-                    order_ref="TS_JOBY_STK",
-                )
+        asyncio.run(
+            _place_simple_trail_order(
+                mock_ib,
+                self._qualified(111),
+                pos,
+                qty=1000,
+                trail_pct=20.0,
+                trail_amt=None,
+                trail_stop_price=6.0,
+                order_ref="TS_JOBY_STK",
             )
-        assert result["ok"] is False
-        assert "error" in result
+        )
+        mock_ib.qualifyContractsAsync.assert_not_called()
 
     def test_sets_account_from_position(self):
         mock_ib = MagicMock()
@@ -678,21 +689,18 @@ class TestPlaceSimpleTrailOrder:
         mock_ib.placeOrder.return_value = mock_trade
 
         pos = {"type": "stock", "symbol": "JOBY", "account": "U790497", "avg_cost": 5.0}
-        with patch(
-            "trading_skills.broker.trailing_stop.fetch_with_timeout",
-            new=AsyncMock(return_value=[self._qualified(111)]),
-        ):
-            asyncio.run(
-                _place_simple_trail_order(
-                    mock_ib,
-                    pos,
-                    qty=1000,
-                    trail_pct=20.0,
-                    trail_amt=None,
-                    trail_stop_price=6.0,
-                    order_ref="TS_JOBY_STK",
-                )
+        asyncio.run(
+            _place_simple_trail_order(
+                mock_ib,
+                self._qualified(111),
+                pos,
+                qty=1000,
+                trail_pct=20.0,
+                trail_amt=None,
+                trail_stop_price=6.0,
+                order_ref="TS_JOBY_STK",
             )
+        )
         placed = mock_ib.placeOrder.call_args[0][1]
         assert placed.account == "U790497"
 
@@ -739,58 +747,80 @@ class TestExecutePositionTrail:
     def test_skips_when_preserve_existing(self):
         mock_ib = MagicMock()
         result = asyncio.run(
-            _execute_position_trail(mock_ib, self._stock_analysis("preserve_existing"), None, 111)
+            _execute_position_trail(
+                mock_ib,
+                self._stock_analysis("preserve_existing"),
+                leaps_contract=None,
+                stock_contract=MagicMock(),
+            )
         )
         assert result["skipped"] is True
         assert result["reason"] == "preserve_existing"
 
     def test_dispatches_stock(self):
         mock_ib = MagicMock()
+        stock_contract = MagicMock()
         expected = {"ok": True, "order_id": 1, "order_ref": "TS_JOBY_STK"}
         with patch(
             "trading_skills.broker.trailing_stop._place_simple_trail_order",
             new=AsyncMock(return_value=expected),
-        ):
+        ) as place_mock:
             result = asyncio.run(
                 _execute_position_trail(
-                    mock_ib, self._stock_analysis(), leaps_con_id=None, stock_con_id=111
+                    mock_ib,
+                    self._stock_analysis(),
+                    leaps_contract=None,
+                    stock_contract=stock_contract,
                 )
             )
         assert result["ok"] is True
+        # Pre-qualified contract must flow through unchanged.
+        assert place_mock.call_args.kwargs["contract"] is stock_contract
 
     def test_dispatches_leaps(self):
         mock_ib = MagicMock()
-        expected = {"ok": True, "order_id": 2, "order_ref": "TS_SOLO_50.0_20260918"}
+        leaps_contract = MagicMock()
+        expected = {"ok": True, "order_id": 2, "order_ref": "TS_SOLO_50.0_20260918_C"}
         with patch(
             "trading_skills.broker.trailing_stop._place_simple_trail_order",
             new=AsyncMock(return_value=expected),
-        ):
+        ) as place_mock:
             result = asyncio.run(
                 _execute_position_trail(
-                    mock_ib, self._leaps_analysis(), leaps_con_id=222, stock_con_id=None
+                    mock_ib,
+                    self._leaps_analysis(),
+                    leaps_contract=leaps_contract,
+                    stock_contract=None,
                 )
             )
         assert result["ok"] is True
+        assert place_mock.call_args.kwargs["contract"] is leaps_contract
 
-    def test_stock_without_con_id_errors(self):
+    def test_stock_without_contract_errors(self):
         mock_ib = MagicMock()
         result = asyncio.run(
             _execute_position_trail(
-                mock_ib, self._stock_analysis(), leaps_con_id=None, stock_con_id=None
+                mock_ib,
+                self._stock_analysis(),
+                leaps_contract=None,
+                stock_contract=None,
             )
         )
         assert result["ok"] is False
-        assert "stock conId" in result["error"]
+        assert "stock" in result["error"]
 
-    def test_leaps_without_con_id_errors(self):
+    def test_leaps_without_contract_errors(self):
         mock_ib = MagicMock()
         result = asyncio.run(
             _execute_position_trail(
-                mock_ib, self._leaps_analysis(), leaps_con_id=None, stock_con_id=None
+                mock_ib,
+                self._leaps_analysis(),
+                leaps_contract=None,
+                stock_contract=None,
             )
         )
         assert result["ok"] is False
-        assert "LEAPS conId" in result["error"]
+        assert "LEAPS" in result["error"]
 
     def test_overwrite_cancels_existing_first(self):
         """When action=overwrite, existing TS_ order for this position+account must be cancelled."""
@@ -798,7 +828,12 @@ class TestExecutePositionTrail:
         existing_trade = MagicMock()
         existing_trade.order.orderId = 99
         mock_ib.openTrades.return_value = [existing_trade]
-        existing_order = {"order_ref": "TS_JOBY_STK", "account": "U123", "order_id": 99}
+        existing_order = {
+            "order_ref": "TS_JOBY_STK",
+            "account": "U123",
+            "order_id": 99,
+            "order_type": "TRAIL",
+        }
 
         with patch(
             "trading_skills.broker.trailing_stop._place_simple_trail_order",
@@ -808,10 +843,268 @@ class TestExecutePositionTrail:
                 _execute_position_trail(
                     mock_ib,
                     self._stock_analysis("overwrite"),
-                    leaps_con_id=None,
-                    stock_con_id=111,
+                    leaps_contract=None,
+                    stock_contract=MagicMock(),
                     open_orders=[existing_order],
                 )
             )
 
         mock_ib.cancelOrder.assert_called_once_with(existing_trade.order)
+
+    def test_place_new_does_not_cancel_orders_with_matching_ref(self):
+        """Defensive: place_new must never cancel orders, even one that happens to share the ref.
+        If a TS_ order is open for this position+account, action should have been preserve_existing
+        or overwrite — place_new with a colliding ref means upstream state is stale, not that we
+        should silently destroy the existing protection."""
+        mock_ib = MagicMock()
+        existing_trade = MagicMock()
+        existing_trade.order.orderId = 99
+        mock_ib.openTrades.return_value = [existing_trade]
+        existing_order = {
+            "order_ref": "TS_JOBY_STK",
+            "account": "U123",
+            "order_id": 99,
+            "order_type": "TRAIL",
+        }
+
+        with patch(
+            "trading_skills.broker.trailing_stop._place_simple_trail_order",
+            new=AsyncMock(return_value={"ok": True, "order_id": 1}),
+        ):
+            asyncio.run(
+                _execute_position_trail(
+                    mock_ib,
+                    self._stock_analysis("place_new"),
+                    leaps_contract=None,
+                    stock_contract=MagicMock(),
+                    open_orders=[existing_order],
+                )
+            )
+
+        mock_ib.cancelOrder.assert_not_called()
+
+    def test_overwrite_validates_contract_before_cancelling(self):
+        """Regression: missing qualified contract must not leave the position unprotected.
+        The existing protective trail must NOT be cancelled when we can't place its replacement."""
+        mock_ib = MagicMock()
+        existing_trade = MagicMock()
+        existing_trade.order.orderId = 99
+        mock_ib.openTrades.return_value = [existing_trade]
+        existing_order = {
+            "order_ref": "TS_JOBY_STK",
+            "account": "U123",
+            "order_id": 99,
+            "order_type": "TRAIL",
+        }
+
+        result = asyncio.run(
+            _execute_position_trail(
+                mock_ib,
+                self._stock_analysis("overwrite"),
+                leaps_contract=None,
+                stock_contract=None,  # qualification failed
+                open_orders=[existing_order],
+            )
+        )
+
+        assert result["ok"] is False
+        assert "stock" in result["error"]
+        mock_ib.cancelOrder.assert_not_called()
+
+    def test_overwrite_ignores_non_trail_orders_sharing_ref(self):
+        """A non-TRAIL order sharing the TS_ ref isn't ours to manage (other paths in the
+        module ignore non-TRAIL TS_ refs), so overwrite must not cancel it either."""
+        mock_ib = MagicMock()
+        existing_trade = MagicMock()
+        existing_trade.order.orderId = 99
+        mock_ib.openTrades.return_value = [existing_trade]
+        # Same ref+account but a MKT order — not a trailing stop, even though
+        # it carries our prefix. Could be a manually-placed order or stale state.
+        existing_order = {
+            "order_ref": "TS_JOBY_STK",
+            "account": "U123",
+            "order_id": 99,
+            "order_type": "MKT",
+        }
+
+        with patch(
+            "trading_skills.broker.trailing_stop._place_simple_trail_order",
+            new=AsyncMock(return_value={"ok": True, "order_id": 1}),
+        ):
+            asyncio.run(
+                _execute_position_trail(
+                    mock_ib,
+                    self._stock_analysis("overwrite"),
+                    leaps_contract=None,
+                    stock_contract=MagicMock(),
+                    open_orders=[existing_order],
+                )
+            )
+
+        mock_ib.cancelOrder.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# get_trailing_stop_data — minimal integration (mocked IB)
+# ---------------------------------------------------------------------------
+
+MODULE = "trading_skills.broker.trailing_stop"
+
+
+def _trail_trade(order_ref, account="U123", order_id=1, symbol="JOBY"):
+    """Mock IB trade representing an open TS_ TRAIL order."""
+    trade = MagicMock()
+    trade.contract.symbol = symbol
+    trade.contract.secType = "STK"
+    trade.contract.strike = 0.0
+    trade.contract.lastTradeDateOrContractMonth = ""
+    trade.contract.right = ""
+    trade.order.orderId = order_id
+    trade.order.orderRef = order_ref
+    trade.order.account = account
+    trade.order.action = "SELL"
+    trade.order.orderType = "TRAIL"
+    trade.order.totalQuantity = 1000
+    trade.order.trailingPercent = 20.0
+    trade.order.auxPrice = 0.0
+    trade.order.trailStopPrice = 6.0
+    return trade
+
+
+class TestGetTrailingStopData:
+    def _make_mock_ib(self, managed=("U123",), open_trades=()):
+        mock_ib = MagicMock()
+        mock_ib.managedAccounts.return_value = list(managed)
+        mock_ib.positions.return_value = []
+        mock_ib.reqAllOpenOrdersAsync = AsyncMock(return_value=[])
+        mock_ib.openTrades.return_value = list(open_trades)
+        return mock_ib
+
+    def _ib_context(self, mock_ib):
+        @asynccontextmanager
+        async def _ctx(*args, **kwargs):
+            yield mock_ib
+
+        return _ctx
+
+    def _patches(self, mock_ib, positions=None):
+        """Common patches for an empty/no-market-data path."""
+        return (
+            patch(f"{MODULE}.ib_connection", self._ib_context(mock_ib)),
+            patch(f"{MODULE}.asyncio.sleep", new=AsyncMock()),
+            patch(f"{MODULE}.fetch_positions", new=AsyncMock(return_value=positions or [])),
+            patch(f"{MODULE}.fetch_with_timeout", new=AsyncMock(return_value=[])),
+        )
+
+    def test_rejects_both_trail_pct_and_trail_amt(self):
+        result = asyncio.run(get_trailing_stop_data(trail_pct=20.0, trail_amt=1.5))
+        assert "error" in result
+        assert "exactly one" in result["error"]
+
+    def test_rejects_neither_trail_pct_nor_trail_amt(self):
+        result = asyncio.run(get_trailing_stop_data(trail_pct=None, trail_amt=None))
+        assert "error" in result
+        assert "Must specify" in result["error"]
+
+    def test_returns_error_for_unknown_account(self):
+        mock_ib = self._make_mock_ib(managed=("U123",))
+        with (
+            patch(f"{MODULE}.ib_connection", self._ib_context(mock_ib)),
+            patch(f"{MODULE}.asyncio.sleep", new=AsyncMock()),
+        ):
+            result = asyncio.run(
+                get_trailing_stop_data(port=7497, account="UNKNOWN", dry_run=True)
+            )
+        assert "error" in result
+        assert "UNKNOWN" in result["error"]
+
+    def test_returns_empty_positions_message(self):
+        mock_ib = self._make_mock_ib()
+        with (
+            patch(f"{MODULE}.ib_connection", self._ib_context(mock_ib)),
+            patch(f"{MODULE}.asyncio.sleep", new=AsyncMock()),
+            patch(f"{MODULE}.fetch_positions", new=AsyncMock(return_value=[])),
+            patch(f"{MODULE}.fetch_with_timeout", new=AsyncMock(return_value=[])),
+        ):
+            result = asyncio.run(get_trailing_stop_data(port=7497, dry_run=True))
+
+        assert result["dry_run"] is True
+        assert result["positions"] == []
+        assert "No trailable positions" in result["message"]
+        assert result["accounts"] == ["U123"]
+        # Dry-run path must not surface execute-only keys
+        assert "cancel_results" not in result
+        assert "order_results" not in result
+
+    def test_symbols_filter_applied(self):
+        mock_ib = self._make_mock_ib()
+        with (
+            patch(f"{MODULE}.ib_connection", self._ib_context(mock_ib)),
+            patch(f"{MODULE}.asyncio.sleep", new=AsyncMock()),
+            patch(f"{MODULE}.fetch_positions", new=AsyncMock(return_value=[])),
+            patch(f"{MODULE}.fetch_with_timeout", new=AsyncMock(return_value=[])),
+        ):
+            result = asyncio.run(
+                get_trailing_stop_data(port=7497, symbols=["nvda"], dry_run=True)
+            )
+        assert result["symbols_filter"] == ["NVDA"]
+        assert result["positions"] == []
+
+    def test_execute_cancels_orphan_when_no_positions(self):
+        """Regression: an orphan TS_ order in execute mode must be cancelled even when no
+        trailable positions exist, and its cancellation result must appear in the response."""
+        trade = _trail_trade(order_ref="TS_JOBY_STK", account="U123", order_id=42)
+        mock_ib = self._make_mock_ib(open_trades=[trade])
+
+        with (
+            patch(f"{MODULE}.ib_connection", self._ib_context(mock_ib)),
+            patch(f"{MODULE}.asyncio.sleep", new=AsyncMock()),
+            patch(f"{MODULE}.fetch_positions", new=AsyncMock(return_value=[])),
+            patch(f"{MODULE}.fetch_with_timeout", new=AsyncMock(return_value=[])),
+        ):
+            result = asyncio.run(get_trailing_stop_data(port=7497, dry_run=False))
+
+        assert result["dry_run"] is False
+        assert result["positions"] == []
+        assert len(result["orphan_orders"]) == 1
+        assert result["orphan_orders"][0]["order_ref"] == "TS_JOBY_STK"
+        assert "cancel_results" in result
+        assert len(result["cancel_results"]) == 1
+        assert result["cancel_results"][0]["cancelled"] is True
+        assert result["cancel_results"][0]["order_id"] == 42
+        mock_ib.cancelOrder.assert_called_once_with(trade.order)
+
+    def test_dry_run_with_orphan_does_not_cancel(self):
+        """Orphans are detected and reported in dry-run, but not cancelled."""
+        trade = _trail_trade(order_ref="TS_JOBY_STK", account="U123", order_id=42)
+        mock_ib = self._make_mock_ib(open_trades=[trade])
+
+        with (
+            patch(f"{MODULE}.ib_connection", self._ib_context(mock_ib)),
+            patch(f"{MODULE}.asyncio.sleep", new=AsyncMock()),
+            patch(f"{MODULE}.fetch_positions", new=AsyncMock(return_value=[])),
+            patch(f"{MODULE}.fetch_with_timeout", new=AsyncMock(return_value=[])),
+        ):
+            result = asyncio.run(get_trailing_stop_data(port=7497, dry_run=True))
+
+        assert result["dry_run"] is True
+        assert len(result["orphan_orders"]) == 1
+        assert "cancel_results" not in result
+        mock_ib.cancelOrder.assert_not_called()
+
+    def test_account_scoping_ignores_orders_in_other_accounts(self):
+        """A TS_ order in an unmanaged/unqueried account must not become an orphan."""
+        trade = _trail_trade(order_ref="TS_JOBY_STK", account="U999", order_id=42)
+        mock_ib = self._make_mock_ib(managed=("U123",), open_trades=[trade])
+
+        with (
+            patch(f"{MODULE}.ib_connection", self._ib_context(mock_ib)),
+            patch(f"{MODULE}.asyncio.sleep", new=AsyncMock()),
+            patch(f"{MODULE}.fetch_positions", new=AsyncMock(return_value=[])),
+            patch(f"{MODULE}.fetch_with_timeout", new=AsyncMock(return_value=[])),
+        ):
+            result = asyncio.run(get_trailing_stop_data(port=7497, dry_run=False))
+
+        assert result["orphan_orders"] == []
+        assert result["cancel_results"] == []
+        mock_ib.cancelOrder.assert_not_called()

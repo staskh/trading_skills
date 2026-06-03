@@ -135,7 +135,7 @@ Per-position result with `order_id` and `order_ref`.
 
 ## Order Identification
 
-- `TS_{SYM}_{STRIKE}_{EXPIRY}` — naked LEAPS TRAIL orders
+- `TS_{SYM}_{STRIKE}_{EXPIRY}_{RIGHT}` — naked LEAPS TRAIL orders (right is `C` or `P` so calls and puts on the same strike/expiry don't collide)
 - `TS_{SYM}_STK` — stock TRAIL orders
 
 ## Architecture
