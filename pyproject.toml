@@ -18,6 +18,7 @@ dependencies = [
     "mcp>=1.25.0",
     "lxml>=6.0.2",
     "massive>=2.4.0",
+    "boto3>=1.34",
     "pandas-market-calendars>=5.3.1.2",
     "plotly>=6.6.0",
     "mistune>=3.2",
