@@ -49,6 +49,7 @@ class TestMCPServerImport:
             "ib_option_chain",
             "ib_delta_exposure",
             "ib_collar",
+            "ib_trailing_stop",
             "get_version",
         ]
         for tool_name in expected_tools:
@@ -209,6 +210,15 @@ class TestIBTools:
 
         result = asyncio.run(ib_delta_exposure(port=7497))
         assert result["connected"] is False
+        assert "error" in result
+
+    def test_ib_trailing_stop_handles_no_connection(self):
+        """ib_trailing_stop returns error when IB not connected."""
+        import asyncio
+
+        from mcp_server.server import ib_trailing_stop
+
+        result = asyncio.run(ib_trailing_stop(port=7497))
         assert "error" in result
 
     def test_ib_collar_handles_no_connection(self):
