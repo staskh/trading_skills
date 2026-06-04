@@ -7,9 +7,12 @@ dependencies: ["trading-skills"]
 # IB Option Chain
 
 Fetch option chain data from Interactive Brokers for a specific expiration date.
-Handles **equities/ETFs** (Stock/OPT) and **futures options** (FOP) — the asset type is
-detected automatically from the symbol (e.g. `NQ`, `ES`, `CL`, `GC` are treated as
-futures with FOP options on their correct exchange and contract multiplier).
+Handles **equities/ETFs** (Stock/OPT) and **futures options** (FOP). The asset type and
+exchange are resolved from **IB contract details** (no hardcoded symbol table): auto-detect
+tries a SMART stock first and falls back to a future when no stock exists (so `NQ`, `GC`,
+`RTY` resolve as futures, while `AAPL` resolves as a stock even though it has an obscure
+single-stock future). Tickers that are **both** a stock and a futures root (e.g. `ES`=Eversource,
+`CL`=Colgate) default to the equity — pass `--sec-type fut` to force the future.
 
 ## Prerequisites
 
@@ -31,7 +34,8 @@ uv run python scripts/options.py SYMBOL --expiry YYYYMMDD
 
 ## Arguments
 
-- `SYMBOL` - Ticker symbol. Equity/ETF (e.g., AAPL, SPY, TSLA) or futures root (e.g., NQ, ES, CL, GC) — futures are auto-detected and use FOP contracts.
+- `SYMBOL` - Ticker symbol. Equity/ETF (e.g., AAPL, SPY, TSLA) or futures root (e.g., NQ, ES, CL, GC) — asset type is auto-detected via IB.
+- `--sec-type {stk,fut}` - Force the asset type. Default: auto-detect (stock-first). Use `fut` for ambiguous roots like ES/CL when you mean the future.
 - `--expiries` - List available expiration dates only
 - `--expiry YYYYMMDD` - Fetch chain for specific date (IB format: YYYYMMDD, no dashes)
 - `--port` - IB port (default: 7496 for live trading)

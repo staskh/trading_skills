@@ -1,52 +1,40 @@
-# ABOUTME: Unit tests for futures classification + FOP greeks/quote extraction (pure, no IB).
-# ABOUTME: Covers is_futures/futures_exchange and options._extract_greeks/_quote_row.
+# ABOUTME: Unit tests for FOP exchange selection + greeks/quote extraction (pure, no IB).
+# ABOUTME: Covers futures._pick_future_exchange and options._extract_greeks/_quote_row.
 
 from types import SimpleNamespace
 
-from trading_skills.broker.futures import (
-    FUTURES_SYMBOLS,
-    futures_exchange,
-    futures_underlying,
-    is_futures,
-)
+from trading_skills.broker.futures import _pick_future_exchange
 from trading_skills.broker.options import _extract_greeks, _quote_row
 
 
-class TestIsFutures:
-    def test_known_futures_true(self):
-        for s in ("NQ", "ES", "CL", "GC", "ZB", "MNQ"):
-            assert is_futures(s)
-
-    def test_case_insensitive(self):
-        assert is_futures("nq")
-
-    def test_equities_and_etfs_false(self):
-        for s in ("AAPL", "SPY", "QQQ", "MSFT", "IWM"):
-            assert not is_futures(s)
+def _fut(expiry, exchange):
+    return SimpleNamespace(lastTradeDateOrContractMonth=expiry, exchange=exchange)
 
 
-class TestFuturesExchange:
-    def test_correct_exchange_per_root(self):
-        assert futures_exchange("NQ") == "CME"
-        assert futures_exchange("ES") == "CME"
-        assert futures_exchange("CL") == "NYMEX"
-        assert futures_exchange("NG") == "NYMEX"
-        assert futures_exchange("GC") == "COMEX"
-        assert futures_exchange("SI") == "COMEX"
-        assert futures_exchange("ZB") == "CBOT"
-        assert futures_exchange("YM") == "CBOT"
+class TestPickFutureExchange:
+    def test_picks_nearest_expiry_exchange(self):
+        contracts = [_fut("20260919", "CME"), _fut("20260618", "CME"), _fut("20261218", "CME")]
+        assert _pick_future_exchange(contracts) == "CME"
 
-    def test_unknown_defaults_cme(self):
-        assert futures_exchange("ZZZ") == "CME"
+    def test_respects_actual_exchange_value(self):
+        # Whatever IB reports is returned verbatim (no hardcoded assumption).
+        assert _pick_future_exchange([_fut("20260720", "NYMEX")]) == "NYMEX"
+        assert _pick_future_exchange([_fut("20260828", "COMEX")]) == "COMEX"
 
-    def test_underlying_uses_exchange(self):
-        c = futures_underlying("CL")
-        assert c.symbol == "CL"
-        assert c.exchange == "NYMEX"
+    def test_empty_returns_none(self):
+        assert _pick_future_exchange([]) is None
 
-    def test_all_symbols_have_exchange(self):
-        for s in FUTURES_SYMBOLS:
-            assert futures_exchange(s) in {"CME", "CBOT", "NYMEX", "COMEX"}
+    def test_contracts_without_expiry_or_exchange_ignored(self):
+        contracts = [
+            None,
+            SimpleNamespace(lastTradeDateOrContractMonth="", exchange="CME"),
+            SimpleNamespace(lastTradeDateOrContractMonth="20260618", exchange=None),
+        ]
+        assert _pick_future_exchange(contracts) is None
+
+    def test_mixed_valid_and_invalid(self):
+        contracts = [None, _fut("20260618", "CBOT"), SimpleNamespace()]
+        assert _pick_future_exchange(contracts) == "CBOT"
 
 
 class TestExtractGreeks:

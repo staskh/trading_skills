@@ -1,5 +1,5 @@
 # ABOUTME: Fetches option chain data from Interactive Brokers (equities/ETFs and futures).
-# ABOUTME: Supports listing expiries and fetching full chains with quotes + model Greeks.
+# ABOUTME: Asset type/exchange come from IB contract details; chains include model Greeks.
 
 import asyncio
 import logging
@@ -9,9 +9,8 @@ from ib_async import IB, Contract, Option, Stock
 
 from trading_skills.broker.connection import CLIENT_IDS, best_option_chain, ib_connection
 from trading_skills.broker.futures import (
-    futures_exchange,
-    futures_underlying,
-    is_futures,
+    detect_future_exchange,
+    front_future,
     resolve_fop_contracts,
 )
 
@@ -46,27 +45,69 @@ def _extract_greeks(model_greeks) -> dict | None:
     return greeks
 
 
-async def get_expiries(symbol: str, port: int = 7496) -> dict:
+async def _resolve_underlying(ib: IB, symbol: str, sec_type: str | None) -> tuple:
+    """Resolve the underlying contract and asset type.
+
+    Returns ``(asset_type, qualified_contract, exchange)`` where asset_type is
+    "future"/"stock" and exchange is the futures exchange (None for stocks).
+    asset_type is "unknown" with a None contract when nothing resolves.
+
+    ``sec_type`` is an optional caller override ("stk"/"fut"). When omitted, auto-detect
+    prefers the **equity**: it tries a SMART stock first and only falls back to a future
+    if no stock qualifies. This avoids misrouting equities that happen to have obscure
+    single-stock futures (e.g. AAPL on MEXDER), while NQ/ES/GC/RTY — which have no SMART
+    stock — resolve as futures. Tickers that are BOTH (e.g. ES=Eversource, CL=Colgate)
+    default to the equity; pass ``sec_type="fut"`` to force the future.
+    """
+    want = (sec_type or "").lower()
+
+    if want == "fut":
+        exchange = await detect_future_exchange(ib, symbol)
+        if not exchange:
+            return "unknown", None, None
+        contract = await front_future(ib, symbol, exchange)
+        return ("future", contract, exchange) if contract else ("unknown", None, None)
+
+    # Explicit "stk" or auto: try the equity first. A failed qualify for a futures
+    # root (e.g. NQ) is expected, so suppress the ib_async "Error 200" noise.
+    stock = Stock(symbol, "SMART", "USD")
+    ib_logger = logging.getLogger("ib_async")
+    prev_level = ib_logger.level
+    ib_logger.setLevel(logging.CRITICAL)
+    try:
+        qualified = await ib.qualifyContractsAsync(stock)
+    finally:
+        ib_logger.setLevel(prev_level)
+    if qualified and qualified[0] is not None and qualified[0].conId:
+        return "stock", qualified[0], None
+    if want == "stk":
+        return "unknown", None, None
+
+    # Auto fallback: no stock — try a future.
+    exchange = await detect_future_exchange(ib, symbol)
+    if exchange:
+        contract = await front_future(ib, symbol, exchange)
+        if contract:
+            return "future", contract, exchange
+    return "unknown", None, None
+
+
+async def _sec_def_params(ib: IB, symbol: str, asset_type: str, contract: Contract, exchange):
+    """reqSecDefOptParams for an already-qualified underlying."""
+    if asset_type == "future":
+        return await ib.reqSecDefOptParamsAsync(symbol.upper(), exchange, "FUT", contract.conId)
+    return await ib.reqSecDefOptParamsAsync(symbol, "", "STK", contract.conId)
+
+
+async def get_expiries(symbol: str, port: int = 7496, sec_type: str | None = None) -> dict:
     """Get available option expiration dates from IB (equity/ETF or futures)."""
     try:
         async with ib_connection(port, CLIENT_IDS["options_expiries"]) as ib:
-            if is_futures(symbol):
-                fut = futures_underlying(symbol)
-                qualified = await ib.qualifyContractsAsync(fut)
-                if not qualified or qualified[0] is None or not qualified[0].conId:
-                    return {"success": False, "error": f"Unknown futures symbol: {symbol}"}
-                chains = await ib.reqSecDefOptParamsAsync(
-                    symbol.upper(), futures_exchange(symbol), "FUT", qualified[0].conId
-                )
-                asset_type = "future"
-            else:
-                stock = Stock(symbol, "SMART", "USD")
-                qualified = await ib.qualifyContractsAsync(stock)
-                if not qualified or qualified[0] is None or not qualified[0].conId:
-                    return {"success": False, "error": f"Unknown symbol: {symbol}"}
-                chains = await ib.reqSecDefOptParamsAsync(symbol, "", "STK", stock.conId)
-                asset_type = "stock"
+            asset_type, contract, exchange = await _resolve_underlying(ib, symbol, sec_type)
+            if contract is None:
+                return {"success": False, "error": f"Unknown symbol: {symbol}"}
 
+            chains = await _sec_def_params(ib, symbol, asset_type, contract, exchange)
             if not chains:
                 return {"success": False, "error": f"No options found for {symbol}"}
 
@@ -92,28 +133,21 @@ async def _underlying_price(ib: IB, contract) -> float | None:
     return price
 
 
-async def get_option_chain(symbol: str, expiry: str, port: int = 7496) -> dict:
+async def get_option_chain(
+    symbol: str, expiry: str, port: int = 7496, sec_type: str | None = None
+) -> dict:
     """Fetch option chain for a specific expiration date from IB (equity/ETF or futures)."""
     try:
         async with ib_connection(port, CLIENT_IDS["options_chain"]) as ib:
             # Delayed-frozen data (type 4) returns last known values outside market hours.
             ib.reqMarketDataType(4)
 
-            futures = is_futures(symbol)
-            underlying: Contract
-            if futures:
-                underlying = futures_underlying(symbol)
-                qualified = await ib.qualifyContractsAsync(underlying)
-                if not qualified or qualified[0] is None or not qualified[0].conId:
-                    return {"success": False, "error": f"Unknown futures symbol: {symbol}"}
-                chains = await ib.reqSecDefOptParamsAsync(
-                    symbol.upper(), futures_exchange(symbol), "FUT", qualified[0].conId
-                )
-            else:
-                underlying = Stock(symbol, "SMART", "USD")
-                await ib.qualifyContractsAsync(underlying)
-                chains = await ib.reqSecDefOptParamsAsync(symbol, "", "STK", underlying.conId)
+            asset_type, underlying, exchange = await _resolve_underlying(ib, symbol, sec_type)
+            if underlying is None:
+                return {"success": False, "error": f"Unknown symbol: {symbol}"}
+            futures = asset_type == "future"
 
+            chains = await _sec_def_params(ib, symbol, asset_type, underlying, exchange)
             underlying_price = await _underlying_price(ib, underlying)
 
             if not chains:
@@ -135,11 +169,20 @@ async def get_option_chain(symbol: str, expiry: str, port: int = 7496) -> dict:
             prev_level = ib_logger.level
             ib_logger.setLevel(logging.CRITICAL)
             try:
-                fetch = _fetch_fop_quotes if futures else _fetch_quotes
-                calls, puts = await asyncio.gather(
-                    fetch(ib, symbol, expiry, strikes, "C", underlying_price),
-                    fetch(ib, symbol, expiry, strikes, "P", underlying_price),
-                )
+                if futures:
+                    calls, puts = await asyncio.gather(
+                        _fetch_fop_quotes(
+                            ib, symbol, expiry, strikes, "C", underlying_price, exchange
+                        ),
+                        _fetch_fop_quotes(
+                            ib, symbol, expiry, strikes, "P", underlying_price, exchange
+                        ),
+                    )
+                else:
+                    calls, puts = await asyncio.gather(
+                        _fetch_quotes(ib, symbol, expiry, strikes, "C", underlying_price),
+                        _fetch_quotes(ib, symbol, expiry, strikes, "P", underlying_price),
+                    )
             finally:
                 ib_logger.setLevel(prev_level)
 
@@ -147,7 +190,7 @@ async def get_option_chain(symbol: str, expiry: str, port: int = 7496) -> dict:
                 "success": True,
                 "symbol": symbol.upper(),
                 "source": "ibkr",
-                "asset_type": "future" if futures else "stock",
+                "asset_type": asset_type,
                 "expiry": expiry,
                 "underlying_price": underlying_price,
                 "calls": calls,
@@ -221,10 +264,16 @@ async def _fetch_quotes(
 
 
 async def _fetch_fop_quotes(
-    ib: IB, symbol: str, expiry: str, strikes: list, right: str, underlying_price: float
+    ib: IB,
+    symbol: str,
+    expiry: str,
+    strikes: list,
+    right: str,
+    underlying_price: float,
+    exchange: str,
 ) -> list:
     """Fetch futures-option (FOP) quotes + model Greeks for all strikes at expiry/right."""
-    qualified = await resolve_fop_contracts(ib, symbol, expiry, strikes, right)
+    qualified = await resolve_fop_contracts(ib, symbol, expiry, strikes, right, exchange)
     if not qualified:
         return []
 

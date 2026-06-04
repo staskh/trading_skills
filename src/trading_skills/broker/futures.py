@@ -1,63 +1,55 @@
-# ABOUTME: Shared helpers for futures + futures-options (FOP) contracts on IB.
-# ABOUTME: Classifies futures symbols, builds continuous-future underlyings, and resolves
-#          FuturesOption contracts disambiguating the tradingClass collision IB returns.
+# ABOUTME: Helpers for futures + futures-options (FOP) contracts on IB.
+# ABOUTME: Asset type and exchange are resolved from IB contract details (source of truth),
+#          not a hardcoded symbol/exchange table; FOP tradingClass collisions are disambiguated.
 
-from ib_async import ContFuture, FuturesOption
-
-# Futures root symbols and their primary exchange. Options on these are FOP, not OPT.
-# Exchange matters: ContFuture/FuturesOption fail to qualify on the wrong exchange.
-FUTURES_EXCHANGE = {
-    # CME (equity index + FX)
-    "NQ": "CME",
-    "ES": "CME",
-    "RTY": "CME",
-    "MNQ": "CME",
-    "MES": "CME",
-    "M2K": "CME",
-    "6E": "CME",
-    "6J": "CME",
-    "6B": "CME",
-    "6A": "CME",
-    "6C": "CME",
-    # CBOT (equity index + rates)
-    "YM": "CBOT",
-    "MYM": "CBOT",
-    "ZB": "CBOT",
-    "ZN": "CBOT",
-    "ZF": "CBOT",
-    "ZT": "CBOT",
-    # NYMEX (energy)
-    "CL": "NYMEX",
-    "NG": "NYMEX",
-    "MCL": "NYMEX",
-    # COMEX (metals)
-    "GC": "COMEX",
-    "SI": "COMEX",
-    "HG": "COMEX",
-    "MGC": "COMEX",
-}
-
-FUTURES_SYMBOLS = frozenset(FUTURES_EXCHANGE)
+from ib_async import ContFuture, Future, FuturesOption
 
 
-def is_futures(symbol: str) -> bool:
-    """True if ``symbol`` is a known futures root (options are FOP, not OPT)."""
-    return symbol.upper() in FUTURES_SYMBOLS
+def _pick_future_exchange(contracts: list) -> str | None:
+    """Exchange of the nearest-expiry future among ``contracts`` (pure, testable).
+
+    Returns None if no contract carries a usable expiry/exchange. All expiries of a
+    given root normally share an exchange, so the nearest one is a safe representative.
+    """
+    futs = [
+        c
+        for c in contracts
+        if c is not None
+        and getattr(c, "lastTradeDateOrContractMonth", None)
+        and getattr(c, "exchange", None)
+    ]
+    if not futs:
+        return None
+    nearest = min(futs, key=lambda c: c.lastTradeDateOrContractMonth)
+    return nearest.exchange
 
 
-def futures_exchange(symbol: str) -> str:
-    """Primary exchange for a futures root; defaults to CME for unknown roots."""
-    return FUTURES_EXCHANGE.get(symbol.upper(), "CME")
+async def detect_future_exchange(ib, symbol: str) -> str | None:
+    """Return the exchange if ``symbol`` trades as a future on IB, else None.
+
+    IB is the source of truth: we ask for FUT contract details for the bare symbol and
+    read the exchange back. No hardcoded list of futures roots or exchanges.
+    """
+    try:
+        details = await ib.reqContractDetailsAsync(Future(symbol.upper(), includeExpired=False))
+    except Exception:
+        return None
+    return _pick_future_exchange([d.contract for d in details if d.contract is not None])
 
 
-def futures_underlying(symbol: str) -> ContFuture:
-    """Continuous front-month future for ``symbol`` (resolves ambiguity to front month)."""
-    sym = symbol.upper()
-    return ContFuture(sym, exchange=futures_exchange(sym))
+async def front_future(ib, symbol: str, exchange: str):
+    """Qualified continuous front-month future for ``symbol`` on ``exchange`` (or None)."""
+    fut = ContFuture(symbol.upper(), exchange=exchange)
+    qualified = await ib.qualifyContractsAsync(fut)
+    if not qualified or qualified[0] is None or not qualified[0].conId:
+        return None
+    return qualified[0]
 
 
-async def resolve_fop_contracts(ib, symbol: str, expiry: str, strikes: list, right: str) -> list:
-    """Resolve concrete FuturesOption contracts for the given strikes.
+async def resolve_fop_contracts(
+    ib, symbol: str, expiry: str, strikes: list, right: str, exchange: str
+) -> list:
+    """Resolve concrete FuturesOption contracts for the given strikes on ``exchange``.
 
     IB returns multiple FOPs for the same (expiry, strike) when a standard monthly
     contract (``tradingClass == symbol``) and a weekly/daily contract (e.g. ``Q3D``)
@@ -67,10 +59,9 @@ async def resolve_fop_contracts(ib, symbol: str, expiry: str, strikes: list, rig
     per strike, preferring the standard monthly class.
     """
     sym = symbol.upper()
-    exch = futures_exchange(sym)
     resolved = []
     for strike in strikes:
-        base = FuturesOption(sym, expiry, strike, right, exchange=exch)
+        base = FuturesOption(sym, expiry, strike, right, exchange=exchange)
         try:
             details = await ib.reqContractDetailsAsync(base)
         except Exception:
