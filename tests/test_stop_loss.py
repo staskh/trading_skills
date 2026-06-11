@@ -2,6 +2,8 @@
 # ABOUTME: Analytics tests run without IBKR; data-layer tests use MagicMock.
 
 import asyncio
+import importlib.util
+import pathlib
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,6 +29,14 @@ from trading_skills.broker.stop_loss import (
     parse_legs_spec,
     summarize_all_conditional_orders,
 )
+
+_script_path = (
+    pathlib.Path(__file__).parent.parent / ".claude/skills/ib-stop-loss/scripts/stop_loss.py"
+)
+_spec = importlib.util.spec_from_file_location("stop_loss_script", _script_path)
+_script = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_script)
+normalize_symbols = _script.normalize_symbols
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -391,6 +401,30 @@ def _sl_order(order_ref, symbol="NVDA", order_id=1, account="U123"):
         "account": account,
         "conditions": [{"price": 20.0, "is_more": False}],
     }
+
+
+def test_normalize_symbols_none():
+    assert normalize_symbols(None) is None
+
+
+def test_normalize_symbols_space_separated():
+    assert normalize_symbols(["NVDA", "WMT"]) == ["NVDA", "WMT"]
+
+
+def test_normalize_symbols_comma_separated():
+    assert normalize_symbols(["LUNR,KO,COST"]) == ["LUNR", "KO", "COST"]
+
+
+def test_normalize_symbols_mixed():
+    assert normalize_symbols(["LUNR,KO", "COST"]) == ["LUNR", "KO", "COST"]
+
+
+def test_normalize_symbols_lowercased_input():
+    assert normalize_symbols(["nvda,wmt"]) == ["NVDA", "WMT"]
+
+
+def test_normalize_symbols_empty_list():
+    assert normalize_symbols([]) is None
 
 
 def test_detect_orphan_no_orphans():
