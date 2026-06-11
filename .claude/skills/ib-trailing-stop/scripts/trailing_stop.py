@@ -14,7 +14,7 @@ async def main():
     parser = argparse.ArgumentParser(
         description="Manage native TRAIL orders for stocks and naked LEAPS (PMCC excluded)"
     )
-    parser.add_argument("--port", type=int, default=7496, help="IB port (7496=live, 7497=paper)")
+    parser.add_argument("--port", type=int, default=7497, help="IB port (7496=live, 7497=paper)")
     parser.add_argument("--account", type=str, default=None, help="Specific account ID")
     parser.add_argument(
         "--symbols",

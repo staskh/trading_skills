@@ -8,11 +8,15 @@ dependencies: ["trading-skills"]
 
 Fetch current portfolio positions from Interactive Brokers.
 
-## Prerequisites
+## IB Connection
 
-User must have TWS or IB Gateway running locally with API enabled:
-- Paper trading: port 7497
-- Live trading: port 7496
+TWS or IB Gateway must be running locally with API enabled:
+- **Paper trading** — port 7497
+- **Live trading** — port 7496
+
+**Port fallback:** If the configured port fails, automatically retry on the other port.
+If the retry succeeds, save to memory which account type worked (live/paper) and reuse it for all IB skill calls in this and future sessions — until the user explicitly asks for the other account.
+If both ports fail, ask the user to verify that TWS or IB Gateway is running with API access enabled.
 
 ## Instructions
 
@@ -24,7 +28,7 @@ uv run python scripts/portfolio.py [--port PORT]
 
 ## Arguments
 
-- `--port` - IB port (default: 7496 for live trading)
+- `--port` - IB port (default: 7497 for paper trading)
 - `--account` - Specific IB account ID (optional, defaults to first account)
 
 ## Output

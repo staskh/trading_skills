@@ -584,7 +584,7 @@ def report_stock(symbol: str) -> dict:
 
 
 @mcp.tool()
-async def ib_account(port: int = 7496) -> dict:
+async def ib_account(port: int = 7497) -> dict:
     """Get account summary from Interactive Brokers.
 
     Returns cash balance, buying power, net liquidation value, and margin info.
@@ -597,7 +597,7 @@ async def ib_account(port: int = 7496) -> dict:
 
 
 @mcp.tool()
-async def ib_portfolio(port: int = 7496, account: str | None = None) -> dict:
+async def ib_portfolio(port: int = 7497, account: str | None = None) -> dict:
     """Get portfolio positions from Interactive Brokers.
 
     Returns all positions including stocks and options with market prices.
@@ -613,7 +613,7 @@ async def ib_portfolio(port: int = 7496, account: str | None = None) -> dict:
 @mcp.tool()
 async def ib_find_short_roll(
     symbol: str,
-    port: int = 7496,
+    port: int = 7497,
     account: str | None = None,
     strike: float | None = None,
     expiry: str | None = None,
@@ -642,7 +642,7 @@ async def ib_find_short_roll(
 
 @mcp.tool()
 async def ib_portfolio_action_report(
-    port: int = 7496,
+    port: int = 7497,
     account: str | None = None,
 ) -> dict:
     """Analyze portfolio positions with earnings dates and risk assessment.
@@ -664,7 +664,7 @@ async def ib_portfolio_action_report(
 
 
 @mcp.tool()
-async def ib_option_expiries(symbol: str, port: int = 7496) -> dict:
+async def ib_option_expiries(symbol: str, port: int = 7497) -> dict:
     """List available option expiration dates from Interactive Brokers.
 
     Requires TWS or IB Gateway running locally.
@@ -677,7 +677,7 @@ async def ib_option_expiries(symbol: str, port: int = 7496) -> dict:
 
 
 @mcp.tool()
-async def ib_option_chain(symbol: str, expiry: str, port: int = 7496) -> dict:
+async def ib_option_chain(symbol: str, expiry: str, port: int = 7497) -> dict:
     """Get option chain data from Interactive Brokers with real-time quotes.
 
     Returns calls and puts with strikes, bids, asks, volume, and implied volatility.
@@ -692,7 +692,7 @@ async def ib_option_chain(symbol: str, expiry: str, port: int = 7496) -> dict:
 
 
 @mcp.tool()
-async def ib_delta_exposure(port: int = 7496) -> dict:
+async def ib_delta_exposure(port: int = 7497) -> dict:
     """Calculate delta-adjusted notional exposure across all IBKR accounts.
 
     Computes option deltas using Black-Scholes and reports long/short exposure
@@ -707,7 +707,7 @@ async def ib_delta_exposure(port: int = 7496) -> dict:
 
 @mcp.tool()
 async def ib_pmcc_advisor(
-    port: int = 7496,
+    port: int = 7497,
     account: str | None = None,
     symbols: str | None = None,
     min_roll_dte: int = 7,
@@ -739,7 +739,7 @@ async def ib_pmcc_advisor(
 @mcp.tool()
 async def ib_collar(
     symbol: str,
-    port: int = 7496,
+    port: int = 7497,
     account: str | None = None,
 ) -> dict:
     """Generate tactical collar strategy report for protecting PMCC positions.
@@ -758,7 +758,7 @@ async def ib_collar(
 
 @mcp.tool()
 async def ib_stop_loss(
-    port: int = 7496,
+    port: int = 7497,
     account: str | None = None,
     symbols: str | None = None,
     stop_pct: float = 40.0,
@@ -801,7 +801,7 @@ async def ib_stop_loss(
 
 @mcp.tool()
 async def ib_trades_history(
-    port: int = 7496,
+    port: int = 7497,
     account: str | None = None,
     symbol: str | None = None,
     start_date: str | None = None,

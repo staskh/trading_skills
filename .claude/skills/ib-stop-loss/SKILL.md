@@ -10,11 +10,15 @@ Analyzes PMCC (diagonal call spread), naked LEAPS, and stock positions in the IB
 
 **Default mode is dry-run** — no orders are placed unless `--execute` is in the request.
 
-## Prerequisites
+## IB Connection
 
-TWS or IB Gateway running locally with API enabled:
-- Live trading: port 7496
-- Paper trading: port 7497
+TWS or IB Gateway must be running locally with API enabled:
+- **Paper trading** — port 7497
+- **Live trading** — port 7496
+
+**Port fallback:** If the configured port fails, automatically retry on the other port.
+If the retry succeeds, save to memory which account type worked (live/paper) and reuse it for all IB skill calls in this and future sessions — until the user explicitly asks for the other account.
+If both ports fail, ask the user to verify that TWS or IB Gateway is running with API access enabled.
 
 ## Instructions
 
@@ -22,17 +26,17 @@ TWS or IB Gateway running locally with API enabled:
 
 Dry-run (default — no orders placed):
 ```bash
-uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496
+uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py
 ```
 
 Execute (cancel orphan orders + place SL_ conditional orders):
 ```bash
-uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496 --execute
+uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --execute
 ```
 
 Execute forced (basis = current mid price, can lower existing stops):
 ```bash
-uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --port 7496 --execute --forced
+uv run python .claude/skills/ib-stop-loss/scripts/stop_loss.py --execute --forced
 ```
 
 ### Step 2: Format the report
@@ -81,7 +85,7 @@ Group alerts by symbol. Types:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | 7496 | IB Gateway/TWS port |
+| `--port` | 7497 | IB Gateway/TWS port |
 | `--account` | all | Specific account ID |
 | `--symbols` | all | Analyze only these symbols |
 | `--legs` | none | Specific option legs: `SYMBOL:STRIKE[C\|P]:EXPIRY` (e.g. `IBKR:70C:20270115 IBKR:100C:20260918`). Right defaults to `C`. Takes precedence over `--symbols`. Use when multiple PMCC/LEAPS coexist on the same symbol and only one pairing should get a stop. |
