@@ -2,6 +2,8 @@
 # ABOUTME: Analytics tests run without IBKR; data-layer tests use MagicMock.
 
 import asyncio
+import importlib.util
+import pathlib
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,10 +26,17 @@ from trading_skills.broker.stop_loss import (
     filter_orders_by_account,
     get_stop_loss_data,
     identify_positions,
-    normalize_symbols,
     parse_legs_spec,
     summarize_all_conditional_orders,
 )
+
+_script_path = (
+    pathlib.Path(__file__).parent.parent / ".claude/skills/ib-stop-loss/scripts/stop_loss.py"
+)
+_spec = importlib.util.spec_from_file_location("stop_loss_script", _script_path)
+_script = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_script)
+normalize_symbols = _script.normalize_symbols
 
 # ---------------------------------------------------------------------------
 # Fixtures

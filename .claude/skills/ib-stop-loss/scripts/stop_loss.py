@@ -7,7 +7,15 @@ import asyncio
 import json
 import sys
 
-from trading_skills.broker.stop_loss import get_stop_loss_data, normalize_symbols
+from trading_skills.broker.stop_loss import get_stop_loss_data
+
+
+def normalize_symbols(symbols: list[str] | None) -> list[str] | None:
+    """Split comma-separated tokens so both '--symbols A B' and '--symbols A,B' work."""
+    if symbols is None:
+        return None
+    result = [s.upper() for tok in symbols for s in tok.split(",") if s]
+    return result or None
 
 
 async def main():

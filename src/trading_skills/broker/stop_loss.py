@@ -239,14 +239,6 @@ def _sl_fall_key(position: dict) -> str:
     return f"{position['symbol']}_STK"
 
 
-def normalize_symbols(symbols: list[str] | None) -> list[str] | None:
-    """Split comma-separated tokens so both '--symbols A B' and '--symbols A,B' work."""
-    if symbols is None:
-        return None
-    result = [s.upper() for tok in symbols for s in tok.split(",") if s]
-    return result or None
-
-
 def _stop_action(
     new_stop: float,
     existing_stop: float | None,
