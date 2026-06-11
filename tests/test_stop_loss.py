@@ -333,6 +333,36 @@ def test_build_overwrite_with_forced():
     assert result["stop_loss"]["action"] == "overwrite"
 
 
+def test_build_price_below_stop():
+    # current_mid is below the computed stop price — must not place order
+    pos = _pmcc_pos()
+    result = build_position_analysis(
+        position=pos,
+        underlying_price=219.05,
+        current_mid=20.0,  # below stop_price ~22.14 (50% stop on basis 44.27)
+        short_mids=[0.56],
+        existing_stop=None,
+        stop_pct=50.0,
+        forced=False,
+    )
+    assert result["stop_loss"]["action"] == "price_below_stop"
+
+
+def test_build_price_below_stop_with_existing():
+    # current_mid below stop price even when an existing stop is present
+    pos = _pmcc_pos()
+    result = build_position_analysis(
+        position=pos,
+        underlying_price=219.05,
+        current_mid=20.0,
+        short_mids=[0.56],
+        existing_stop=25.0,
+        stop_pct=50.0,
+        forced=False,
+    )
+    assert result["stop_loss"]["action"] == "price_below_stop"
+
+
 def test_build_forced_uses_current_mid_as_basis():
     pos = _pmcc_pos(leaps_cost=44.27)
     result = build_position_analysis(
