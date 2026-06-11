@@ -7,7 +7,7 @@ import asyncio
 import json
 import sys
 
-from trading_skills.broker.stop_loss import get_stop_loss_data
+from trading_skills.broker.stop_loss import get_stop_loss_data, normalize_symbols
 
 
 async def main():
@@ -89,7 +89,7 @@ async def main():
     result = await get_stop_loss_data(
         port=args.port,
         account=args.account,
-        symbols=args.symbols,
+        symbols=normalize_symbols(args.symbols),
         legs=args.legs,
         stop_pct=args.stop_pct,
         short_near_strike_pct=args.short_near_strike_pct,

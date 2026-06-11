@@ -24,6 +24,7 @@ from trading_skills.broker.stop_loss import (
     filter_orders_by_account,
     get_stop_loss_data,
     identify_positions,
+    normalize_symbols,
     parse_legs_spec,
     summarize_all_conditional_orders,
 )
@@ -391,6 +392,30 @@ def _sl_order(order_ref, symbol="NVDA", order_id=1, account="U123"):
         "account": account,
         "conditions": [{"price": 20.0, "is_more": False}],
     }
+
+
+def test_normalize_symbols_none():
+    assert normalize_symbols(None) is None
+
+
+def test_normalize_symbols_space_separated():
+    assert normalize_symbols(["NVDA", "WMT"]) == ["NVDA", "WMT"]
+
+
+def test_normalize_symbols_comma_separated():
+    assert normalize_symbols(["LUNR,KO,COST"]) == ["LUNR", "KO", "COST"]
+
+
+def test_normalize_symbols_mixed():
+    assert normalize_symbols(["LUNR,KO", "COST"]) == ["LUNR", "KO", "COST"]
+
+
+def test_normalize_symbols_lowercased_input():
+    assert normalize_symbols(["nvda,wmt"]) == ["NVDA", "WMT"]
+
+
+def test_normalize_symbols_empty_list():
+    assert normalize_symbols([]) is None
 
 
 def test_detect_orphan_no_orphans():
