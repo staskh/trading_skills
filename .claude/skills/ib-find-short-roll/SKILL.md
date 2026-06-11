@@ -8,11 +8,15 @@ dependencies: ["trading-skills"]
 
 Analyze roll options for short positions or find best short options to open against long stock using real-time data from Interactive Brokers.
 
-## Prerequisites
+## IB Connection
 
-User must have TWS or IB Gateway running locally with API enabled:
-- Paper trading: port 7497
-- Live trading: port 7496
+TWS or IB Gateway must be running locally with API enabled:
+- **Paper trading** — port 7497
+- **Live trading** — port 7496
+
+**Port fallback:** If the configured port fails, automatically retry on the other port.
+If the retry succeeds, save to memory which account type worked (live/paper) and reuse it for all IB skill calls in this and future sessions — until the user explicitly asks for the other account.
+If both ports fail, ask the user to verify that TWS or IB Gateway is running with API access enabled.
 
 ## Instructions
 
@@ -47,7 +51,7 @@ Present key findings to the user: recommended position, credit/debit, and the sa
 - `--strike` - Current short strike price (optional, auto-detects from portfolio)
 - `--expiry` - Current short expiration in YYYYMMDD format (optional, auto-detects)
 - `--right` - Option type: C for call, P for put (default: C)
-- `--port` - IB port (default: 7496 for live trading)
+- `--port` - IB port (default: 7497 for paper trading)
 - `--account` - Specific account ID (optional)
 
 ## JSON Output
@@ -72,7 +76,7 @@ The script outputs JSON with `mode` field indicating the analysis type:
 
 ```bash
 # Auto-detect GOOG position (short option, long option, or long stock)
-uv run python scripts/roll.py GOOG --port 7496
+uv run python scripts/roll.py GOOG --port 7497
 
 # Specify exact short position to roll
 uv run python scripts/roll.py GOOG --strike 350 --expiry 20260206 --right C

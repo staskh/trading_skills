@@ -8,11 +8,15 @@ dependencies: ["trading-skills"]
 
 Analyzes all PMCC (diagonal call spread) positions in the IB portfolio and provides actionable advice on the short leg: assignment risk, P&L projections per day, and ranked roll recommendations.
 
-## Prerequisites
+## IB Connection
 
-TWS or IB Gateway running locally with API enabled:
-- Live trading: port 7496
-- Paper trading: port 7497
+TWS or IB Gateway must be running locally with API enabled:
+- **Paper trading** — port 7497
+- **Live trading** — port 7496
+
+**Port fallback:** If the configured port fails, automatically retry on the other port.
+If the retry succeeds, save to memory which account type worked (live/paper) and reuse it for all IB skill calls in this and future sessions — until the user explicitly asks for the other account.
+If both ports fail, ask the user to verify that TWS or IB Gateway is running with API access enabled.
 
 ## Instructions
 
@@ -51,7 +55,7 @@ The report must include all sections per spread:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | 7496 | IB Gateway/TWS port |
+| `--port` | 7497 | IB Gateway/TWS port |
 | `--account` | all | Specific account ID |
 | `--min-roll-dte` | 7 | Minimum DTE for roll candidates |
 | `--price-mode` | mid | Option price: `mid` (bid+ask)/2 or `last` |
@@ -141,14 +145,14 @@ Ranked by: delta improvement (highest weight) → net credit → DTE extension.
 ## Example Usage
 
 ```bash
-# All accounts, live port
-uv run python .claude/skills/ib-pmcc-advisor/scripts/pmcc_advisor.py --port 7496
+# All accounts (paper, default)
+uv run python .claude/skills/ib-pmcc-advisor/scripts/pmcc_advisor.py
 
-# Specific account, 14-day minimum roll DTE, last-price mode
+# Live account, 14-day minimum roll DTE, last-price mode
 uv run python .claude/skills/ib-pmcc-advisor/scripts/pmcc_advisor.py --port 7496 --account Uxxxxxxxx --min-roll-dte 14 --price-mode last
 
 # Analyze only specific symbols
-uv run python .claude/skills/ib-pmcc-advisor/scripts/pmcc_advisor.py --port 7496 --symbols NVDA WMT
+uv run python .claude/skills/ib-pmcc-advisor/scripts/pmcc_advisor.py --symbols NVDA WMT
 ```
 
 ## Architecture
