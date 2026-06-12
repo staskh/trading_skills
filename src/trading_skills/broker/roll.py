@@ -9,36 +9,15 @@ from datetime import datetime
 from ib_async import IB, ContFuture, FuturesOption, Option, Stock
 
 from trading_skills.broker.connection import CLIENT_IDS, best_option_chain, ib_connection
+from trading_skills.broker.futures import FUTURES_EXCHANGE
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.utils import days_to_expiry, fetch_with_timeout
 
-# Known futures symbols — options are FOP, not OPT
-FUTURES_SYMBOLS = {
-    "NQ",
-    "ES",
-    "RTY",
-    "YM",
-    "CL",
-    "GC",
-    "SI",
-    "ZB",
-    "ZN",
-    "ZF",
-    "ZT",
-    "6E",
-    "6J",
-    "6B",
-}
 
-
-def _is_futures(symbol: str) -> bool:
-    return symbol.upper() in FUTURES_SYMBOLS
-
-
-async def get_underlying_contract(symbol: str):
+async def get_underlying_contract(symbol: str, is_fop: bool):
     """Return the appropriate underlying contract for a symbol."""
-    if _is_futures(symbol):
-        return ContFuture(symbol, "CME")
+    if is_fop:
+        return ContFuture(symbol, FUTURES_EXCHANGE[symbol.upper()])
     return Stock(symbol, "SMART", "USD")
 
 
@@ -51,16 +30,15 @@ async def get_current_position(ib: IB, symbol: str, account: str = None) -> dict
     else:
         positions = ib.positions()
 
-    sec_types = ("FOP", "OPT") if _is_futures(symbol) else ("OPT",)
-
-    # Find short option positions for this symbol
+    # Find short option positions for this symbol — accept FOP and OPT; secType tells us which.
     short_options = []
     for pos in positions:
         c = pos.contract
-        if c.symbol == symbol and c.secType in sec_types and pos.position < 0:
+        if c.symbol == symbol and c.secType in ("FOP", "OPT") and pos.position < 0:
             short_options.append(
                 {
                     "account": pos.account,
+                    "sec_type": c.secType,
                     "quantity": int(pos.position),
                     "strike": c.strike,
                     "expiry": c.lastTradeDateOrContractMonth,
@@ -116,16 +94,16 @@ async def get_long_option_position(
     else:
         positions = ib.positions()
 
-    sec_types = ("FOP", "OPT") if _is_futures(symbol) else ("OPT",)
-
-    # Find long option positions for this symbol
+    # Find long option positions for this symbol — accept FOP and OPT; secType tells us which.
     long_options = []
     for pos in positions:
         c = pos.contract
-        if c.symbol == symbol and c.secType in sec_types and pos.position > 0 and c.right == right:
+        right_match = c.symbol == symbol and c.secType in ("FOP", "OPT") and c.right == right
+        if right_match and pos.position > 0:
             long_options.append(
                 {
                     "account": pos.account,
+                    "sec_type": c.secType,
                     "quantity": int(pos.position),
                     "strike": c.strike,
                     "expiry": c.lastTradeDateOrContractMonth,
@@ -153,23 +131,24 @@ async def get_long_option_position(
     return long_options[0]
 
 
-async def get_underlying_price(ib: IB, symbol: str) -> float:
+async def get_underlying_price(ib: IB, symbol: str, is_fop: bool) -> float:
     """Get current underlying price (stock or continuous futures)."""
-    contract = await get_underlying_contract(symbol)
+    contract = await get_underlying_contract(symbol, is_fop)
     await ib.qualifyContractsAsync(contract)
     [ticker] = await ib.reqTickersAsync(contract)
     return ticker.marketPrice()
 
 
-async def get_option_chain_params(ib: IB, symbol: str) -> dict:
+async def get_option_chain_params(ib: IB, symbol: str, is_fop: bool) -> dict:
     """Get available expirations and strikes for symbol."""
-    if _is_futures(symbol):
+    if is_fop:
         # ContFuture always resolves to front-month, avoiding ambiguity
-        fut = ContFuture(symbol, exchange="CME")
+        exchange = FUTURES_EXCHANGE[symbol.upper()]
+        fut = ContFuture(symbol, exchange=exchange)
         qualified = await ib.qualifyContractsAsync(fut)
         if not qualified or qualified[0] is None:
             return {"expirations": [], "strikes": []}
-        chains = await ib.reqSecDefOptParamsAsync(symbol, "CME", "FUT", qualified[0].conId)
+        chains = await ib.reqSecDefOptParamsAsync(symbol, exchange, "FUT", qualified[0].conId)
     else:
         stock = Stock(symbol, "SMART", "USD")
         await ib.qualifyContractsAsync(stock)
@@ -199,7 +178,8 @@ async def _resolve_fop_contracts(
     """
     resolved = []
     for strike in strikes:
-        base = FuturesOption(symbol, expiry, strike, right, exchange="CME")
+        exchange = FUTURES_EXCHANGE[symbol.upper()]
+        base = FuturesOption(symbol, expiry, strike, right, exchange=exchange)
         details = await fetch_with_timeout(ib.reqContractDetailsAsync(base), timeout=10, default=[])
         contracts = [d.contract for d in details if d.contract is not None]
         if not contracts:
@@ -210,9 +190,11 @@ async def _resolve_fop_contracts(
     return resolved
 
 
-async def get_option_quotes(ib: IB, symbol: str, expiry: str, strikes: list, right: str) -> list:
+async def get_option_quotes(
+    ib: IB, symbol: str, expiry: str, strikes: list, right: str, is_fop: bool
+) -> list:
     """Get quotes for options at given strikes and expiry."""
-    if _is_futures(symbol):
+    if is_fop:
         # reqContractDetails returns concrete, already-qualified contracts (conId set),
         # disambiguating the tradingClass collision that breaks qualifyContractsAsync.
         qualified = await _resolve_fop_contracts(ib, symbol, expiry, strikes, right)
@@ -337,9 +319,9 @@ def calculate_roll_options(current: dict, target_quotes: list, buy_price: float)
     return rolls
 
 
-async def _find_roll(ib, symbol, current_position, chain_params):
+async def _find_roll(ib, symbol, current_position, chain_params, is_fop):
     """Find roll candidates for an existing short position."""
-    underlying_price = await get_underlying_price(ib, symbol)
+    underlying_price = await get_underlying_price(ib, symbol, is_fop)
 
     # Get current option quote for buy-to-close cost
     current_quotes = await get_option_quotes(
@@ -348,6 +330,7 @@ async def _find_roll(ib, symbol, current_position, chain_params):
         current_position["expiry"],
         [current_position["strike"]],
         current_position["right"],
+        is_fop,
     )
 
     if not current_quotes:
@@ -380,7 +363,9 @@ async def _find_roll(ib, symbol, current_position, chain_params):
     # Fetch quotes for each target expiration
     roll_data = {}
     for exp in future_exps:
-        quotes = await get_option_quotes(ib, symbol, exp, target_strikes, current_position["right"])
+        quotes = await get_option_quotes(
+            ib, symbol, exp, target_strikes, current_position["right"], is_fop
+        )
         roll_data[exp] = calculate_roll_options(current_position, quotes, buy_price)
 
     earnings_date = get_next_earnings_date(symbol)
@@ -404,9 +389,9 @@ async def _find_roll(ib, symbol, current_position, chain_params):
     }
 
 
-async def _find_spread(ib, symbol, long_option, right, chain_params):
+async def _find_spread(ib, symbol, long_option, right, chain_params, is_fop):
     """Find short candidates to create a vertical spread against a long option."""
-    underlying_price = await get_underlying_price(ib, symbol)
+    underlying_price = await get_underlying_price(ib, symbol, is_fop)
     if math.isnan(underlying_price):
         underlying_price = long_option["strike"]
         print(
@@ -435,7 +420,7 @@ async def _find_spread(ib, symbol, long_option, right, chain_params):
     # Fetch quotes and evaluate candidates
     candidates_by_expiry = {}
     for exp in target_exps:
-        quotes = await get_option_quotes(ib, symbol, exp, target_strikes, right)
+        quotes = await get_option_quotes(ib, symbol, exp, target_strikes, right, is_fop)
         dte = days_to_expiry(exp)
         candidates = evaluate_short_candidates(quotes, underlying_price, right, dte)
         if candidates:
@@ -463,9 +448,9 @@ async def _find_spread(ib, symbol, long_option, right, chain_params):
     }
 
 
-async def _find_new_short(ib, symbol, long_position, right, chain_params):
+async def _find_new_short(ib, symbol, long_position, right, chain_params, is_fop):
     """Find covered call/put candidates against a long stock position."""
-    underlying_price = await get_underlying_price(ib, symbol)
+    underlying_price = await get_underlying_price(ib, symbol, is_fop)
 
     # Future expirations from today
     today_str = datetime.now().strftime("%Y%m%d")
@@ -490,7 +475,7 @@ async def _find_new_short(ib, symbol, long_position, right, chain_params):
     # Fetch quotes and evaluate candidates
     candidates_by_expiry = {}
     for exp in future_exps:
-        quotes = await get_option_quotes(ib, symbol, exp, target_strikes, right)
+        quotes = await get_option_quotes(ib, symbol, exp, target_strikes, right, is_fop)
         dte = days_to_expiry(exp)
         candidates = evaluate_short_candidates(quotes, underlying_price, right, dte)
         if candidates:
@@ -533,33 +518,39 @@ async def find_roll_candidates(
     symbol = symbol.upper()
     try:
         async with ib_connection(port, CLIENT_IDS["roll"]) as ib:
-            chain_params = await get_option_chain_params(ib, symbol)
+            # Detect positions first so sec_type from IB determines is_fop.
+            current_position = await get_current_position(ib, symbol, account)
+            long_option = (
+                await get_long_option_position(ib, symbol, right, account)
+                if not current_position
+                else None
+            )
+            found = current_position or long_option
+            is_fop = found is not None and found["sec_type"] == "FOP"
+
+            chain_params = await get_option_chain_params(ib, symbol, is_fop)
 
             # Explicit strike/expiry → roll mode
             if strike and expiry:
-                current_position = {
+                explicit_position = {
                     "quantity": -1,
                     "strike": strike,
                     "expiry": expiry,
                     "right": right,
                     "account": account or "N/A",
                 }
-                return await _find_roll(ib, symbol, current_position, chain_params)
+                return await _find_roll(ib, symbol, explicit_position, chain_params, is_fop)
 
-            # Auto-detect: try short position first
-            current_position = await get_current_position(ib, symbol, account)
             if current_position:
-                return await _find_roll(ib, symbol, current_position, chain_params)
+                return await _find_roll(ib, symbol, current_position, chain_params, is_fop)
 
-            # No short → try long option for spread
-            long_option = await get_long_option_position(ib, symbol, right, account)
             if long_option:
-                return await _find_spread(ib, symbol, long_option, right, chain_params)
+                return await _find_spread(ib, symbol, long_option, right, chain_params, is_fop)
 
             # No long option → try long stock for covered call/put
             long_stock = await get_long_stock_position(ib, symbol, account)
             if long_stock:
-                return await _find_new_short(ib, symbol, long_stock, right, chain_params)
+                return await _find_new_short(ib, symbol, long_stock, right, chain_params, is_fop)
 
             return {
                 "error": f"No positions found for {symbol}. "

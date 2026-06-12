@@ -15,28 +15,10 @@ from trading_skills.broker.connection import (
     ib_connection,
     normalize_positions,
 )
+from trading_skills.broker.futures import futures_yahoo_ticker
 from trading_skills.earnings import get_earnings_info
 from trading_skills.technicals import compute_raw_indicators
 from trading_skills.utils import _NY, days_to_expiry, generated_at_str
-
-# Futures underlying -> Yahoo continuous-future ticker for technical indicators.
-# yfinance does not recognize the bare futures symbol (e.g. "NQ" -> "NQ=F").
-FUTURES_YAHOO = {
-    "NQ": "NQ=F",
-    "ES": "ES=F",
-    "RTY": "RTY=F",
-    "YM": "YM=F",
-    "CL": "CL=F",
-    "GC": "GC=F",
-    "SI": "SI=F",
-    "ZB": "ZB=F",
-    "ZN": "ZN=F",
-    "ZF": "ZF=F",
-    "ZT": "ZT=F",
-    "6E": "6E=F",
-    "6J": "6J=F",
-    "6B": "6B=F",
-}
 
 
 def fetch_earnings_date(symbol: str) -> dict:
@@ -54,7 +36,7 @@ def fetch_technicals(symbol: str, period: str = "3mo") -> dict:
     result = {"symbol": symbol}
 
     try:
-        ticker = yf.Ticker(FUTURES_YAHOO.get(symbol, symbol))
+        ticker = yf.Ticker(symbol)
         df = ticker.history(period=period)
 
         if df.empty or len(df) < 20:
@@ -376,7 +358,10 @@ def analyze_portfolio(data: dict) -> dict:
     print("Fetching technical indicators...", file=sys.stderr)
     technicals = {}
     for sym in all_symbols:
-        technicals[sym] = fetch_technicals(sym)
+        ticker = futures_yahoo_ticker(sym) if sym in futures_symbols else sym
+        t = fetch_technicals(ticker)
+        t["symbol"] = sym
+        technicals[sym] = t
 
     # Add days_to_exp and underlying_price to all positions
     for acc, positions in positions_by_account.items():

@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from ib_async import IB, ContFuture, Stock
 
+from trading_skills.broker.futures import FUTURES_EXCHANGE
 from trading_skills.utils import fetch_with_timeout
 
 # Documented clientId allocation — one source of truth for all broker modules.
@@ -93,25 +94,6 @@ def best_option_chain(chains: list):
     smart_chains = [c for c in chains if c.exchange == "SMART"]
     pool = smart_chains or chains
     return max(pool, key=lambda c: len(c.expirations))
-
-
-# Futures underlying -> exchange for ContFuture qualification.
-FUTURES_EXCHANGE = {
-    "NQ": "CME",
-    "ES": "CME",
-    "RTY": "CME",
-    "YM": "CBOT",
-    "CL": "NYMEX",
-    "GC": "COMEX",
-    "SI": "COMEX",
-    "ZB": "CBOT",
-    "ZN": "CBOT",
-    "ZF": "CBOT",
-    "ZT": "CBOT",
-    "6E": "CME",
-    "6J": "CME",
-    "6B": "CME",
-}
 
 
 async def _spot_from_contracts(ib: IB, contracts: list, timeout: float) -> dict[str, float]:

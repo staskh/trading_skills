@@ -34,6 +34,7 @@ from trading_skills.broker.portfolio_action import (
 from trading_skills.broker.roll import find_roll_candidates
 from trading_skills.broker.stop_loss import get_stop_loss_data
 from trading_skills.broker.trades import get_trades
+from trading_skills.broker.trailing_stop import get_trailing_stop_data
 from trading_skills.correlation import compute_correlation
 from trading_skills.earnings import get_earnings_info, get_multiple_earnings
 from trading_skills.fundamentals import get_fundamentals
@@ -793,6 +794,48 @@ async def ib_stop_loss(
         symbols=symbol_list,
         stop_pct=stop_pct,
         short_near_strike_pct=short_near_strike_pct,
+        price_mode=price_mode,
+        dry_run=not execute,
+        forced=forced,
+    )
+
+
+@mcp.tool()
+async def ib_trailing_stop(
+    port: int = 7496,
+    account: str | None = None,
+    symbols: str | None = None,
+    trail_pct: float | None = 20.0,
+    trail_amt: float | None = None,
+    price_mode: str = "mid",
+    execute: bool = False,
+    forced: bool = False,
+) -> dict:
+    """Manage IB native TRAIL orders for stocks and naked LEAPS positions.
+
+    Default mode is dry-run — no orders are placed unless execute=True.
+    PMCC positions are excluded; use ib_stop_loss for those.
+    Requires TWS or IB Gateway running locally.
+
+    Args:
+        port: IB port (7496 for live, 7497 for paper)
+        account: Specific account ID (optional)
+        symbols: Comma-separated symbols to filter (optional, e.g. 'JOBY,TSLA')
+        trail_pct: Trail amount as % of reference price (default 20, mutually exclusive
+            with trail_amt)
+        trail_amt: Trail amount in dollars (mutually exclusive with trail_pct)
+        price_mode: Option pricing — 'mid' (bid+ask)/2 or 'last' (LEAPS only)
+        execute: Cancel orphan TS_ orders and place new TRAIL orders (default False = dry-run)
+        forced: Cancel and replace existing TS_ orders with current parameters
+            (requires execute=True)
+    """
+    symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else None
+    return await get_trailing_stop_data(
+        port=port,
+        account=account,
+        symbols=symbol_list,
+        trail_pct=trail_pct,
+        trail_amt=trail_amt,
         price_mode=price_mode,
         dry_run=not execute,
         forced=forced,

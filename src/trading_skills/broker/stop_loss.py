@@ -280,7 +280,10 @@ def build_position_analysis(
     stop_price = round(basis * (1.0 - stop_pct / 100.0), 2)
     loss_pct = round((1.0 - current_mid / basis) * 100.0, 1) if current_mid and basis > 0 else None
 
-    stop_act = _stop_action(stop_price, existing_stop, forced)
+    if current_mid is not None and current_mid <= stop_price:
+        stop_act = "price_below_stop"
+    else:
+        stop_act = _stop_action(stop_price, existing_stop, forced)
     early_warning_pct = stop_pct / 2.0
     alert_soon = loss_pct is not None and loss_pct >= early_warning_pct
 
