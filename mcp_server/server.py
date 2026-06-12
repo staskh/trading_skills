@@ -44,7 +44,7 @@ from trading_skills.insider_trading import (
     get_insider_transactions,
     get_multiple_insider_transactions,
 )
-from trading_skills.massive.whales import whales_hunter
+from trading_skills.massive.whales import WhaleDataError, whales_hunter
 from trading_skills.news import get_news
 from trading_skills.options import get_expiries, get_option_chain
 from trading_skills.piotroski import calculate_piotroski_score
@@ -513,13 +513,16 @@ def whale_hunting(
     """
     import pandas as pd
 
-    result = whales_hunter(
-        symbol.upper(),
-        max_months=max_months,
-        precise=True,
-        sigma_z=sigma_z,
-        trading_date=trading_date,
-    )
+    try:
+        result = whales_hunter(
+            symbol.upper(),
+            max_months=max_months,
+            precise=True,
+            sigma_z=sigma_z,
+            trading_date=trading_date,
+        )
+    except WhaleDataError as exc:
+        return {"error": str(exc)}
 
     whales = result["whales"]
     call_invested = sum(
@@ -802,7 +805,7 @@ async def ib_stop_loss(
 
 @mcp.tool()
 async def ib_trailing_stop(
-    port: int = 7496,
+    port: int = 7497,
     account: str | None = None,
     symbols: str | None = None,
     trail_pct: float | None = 20.0,

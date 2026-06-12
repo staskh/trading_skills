@@ -142,5 +142,5 @@ async def fetch_futures_spot_prices(
     """
     if not symbols:
         return {}
-    contracts = [ContFuture(sym, FUTURES_EXCHANGE.get(sym, "CME")) for sym in symbols]
+    contracts = [ContFuture(sym, FUTURES_EXCHANGE[sym]) for sym in symbols]
     return await _spot_from_contracts(ib, contracts, timeout)

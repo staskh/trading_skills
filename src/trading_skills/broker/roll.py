@@ -151,8 +151,10 @@ async def get_option_chain_params(ib: IB, symbol: str, is_fop: bool) -> dict:
         chains = await ib.reqSecDefOptParamsAsync(symbol, exchange, "FUT", qualified[0].conId)
     else:
         stock = Stock(symbol, "SMART", "USD")
-        await ib.qualifyContractsAsync(stock)
-        chains = await ib.reqSecDefOptParamsAsync(symbol, "", "STK", stock.conId)
+        qualified = await ib.qualifyContractsAsync(stock)
+        if not qualified or qualified[0] is None:
+            return {"expirations": [], "strikes": []}
+        chains = await ib.reqSecDefOptParamsAsync(symbol, "", "STK", qualified[0].conId)
 
     if not chains:
         return {"expirations": [], "strikes": []}
@@ -366,7 +368,11 @@ async def _find_roll(ib, symbol, current_position, chain_params, is_fop):
         quotes = await get_option_quotes(
             ib, symbol, exp, target_strikes, current_position["right"], is_fop
         )
-        roll_data[exp] = calculate_roll_options(current_position, quotes, buy_price)
+        rolls = calculate_roll_options(current_position, quotes, buy_price)
+        # Exclude rolling into the exact same (expiry, strike) already held.
+        if exp == current_exp:
+            rolls = [r for r in rolls if r["strike"] != current_strike]
+        roll_data[exp] = rolls
 
     earnings_date = get_next_earnings_date(symbol)
 
@@ -526,7 +532,11 @@ async def find_roll_candidates(
                 else None
             )
             found = current_position or long_option
-            is_fop = found is not None and found["sec_type"] == "FOP"
+            if found is not None:
+                is_fop = found["sec_type"] == "FOP"
+            else:
+                # No position found — fall back to registry (covers explicit strike/expiry mode).
+                is_fop = symbol.upper() in FUTURES_EXCHANGE
 
             chain_params = await get_option_chain_params(ib, symbol, is_fop)
 
