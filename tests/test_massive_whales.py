@@ -1,12 +1,18 @@
 # ABOUTME: Integration tests for option_whales using real Polygon (massive) API.
 # ABOUTME: Validates per-second outlier detection by invested for a specific option contract.
 
+import os
 from datetime import date
 
 import pandas as pd
 import pytest
 
 from trading_skills.massive.whales import option_whales
+
+requires_massive = pytest.mark.skipif(
+    not os.getenv("MASSIVE_API_KEY"),
+    reason="MASSIVE_API_KEY not set",
+)
 
 # NVDA 170p 2026-03-20 — high-volume contract from known trading session
 TEST_CONTRACT = "O:NVDA260320P00170000"
@@ -29,6 +35,7 @@ REQUIRED_COLUMNS = {
 }
 
 
+@requires_massive
 class TestOptionWhales:
     def test_returns_dataframe(self):
         result = option_whales(TEST_CONTRACT, trading_date=TEST_DATE)

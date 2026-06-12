@@ -65,14 +65,17 @@ class TestWhalesHunter:
         result = whales_hunter("INVALIDXYZ123", trading_date=TEST_DATE, precise=False)
         assert result["whales"] == []
 
+    @requires_massive
     def test_precise_mode_source_is_massive_or_yahoo(self):
         result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=True)
         assert result["source"] in ("massive", "yahoo")
 
+    @requires_massive
     def test_precise_mode_returns_whales(self):
         result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=True)
         assert len(result["whales"]) > 0
 
+    @requires_massive
     def test_precise_mode_source_is_massive(self):
         result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=True)
         assert result["source"] == "massive"
