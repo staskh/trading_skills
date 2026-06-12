@@ -439,7 +439,7 @@ async def get_trailing_stop_data(
         }
 
     try:
-        async with ib_connection(port, CLIENT_IDS.get("trailing_stop", 15)) as ib:
+        async with ib_connection(port, CLIENT_IDS.get("trailing_stop", 15), readonly=dry_run) as ib:
             ib.reqMarketDataType(4)
             await asyncio.sleep(2)
 

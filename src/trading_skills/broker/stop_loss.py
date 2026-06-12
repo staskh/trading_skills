@@ -765,7 +765,7 @@ async def get_stop_loss_data(
     """
     try:
         legs_set = parse_legs_spec(legs)
-        async with ib_connection(port, CLIENT_IDS.get("stop_loss", 14)) as ib:
+        async with ib_connection(port, CLIENT_IDS.get("stop_loss", 14), readonly=dry_run) as ib:
             ib.reqMarketDataType(4)
             await asyncio.sleep(2)
 

@@ -27,14 +27,18 @@ CLIENT_IDS = {
 
 
 @asynccontextmanager
-async def ib_connection(port: int, client_id: int):
+async def ib_connection(port: int, client_id: int, readonly: bool = True):
     """Connect to IB, yield the IB instance, disconnect on exit.
+
+    readonly=True (default) tells ib_async not to issue the write-class startup
+    order-sync, which TWS otherwise flags as needing API write access (popup).
+    Order-placing skills pass readonly=False when actually executing.
 
     Raises ConnectionError if the initial connection fails.
     """
     ib = IB()
     try:
-        await ib.connectAsync(host="127.0.0.1", port=port, clientId=client_id)
+        await ib.connectAsync(host="127.0.0.1", port=port, clientId=client_id, readonly=readonly)
     except Exception as e:
         raise ConnectionError(f"Could not connect to IB on port {port}: {e}") from e
 
