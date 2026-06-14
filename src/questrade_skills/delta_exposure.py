@@ -3,12 +3,26 @@
 
 from datetime import date, datetime
 
-from trading_skills.black_scholes import black_scholes_delta, estimate_iv
-
 from questrade_skills.connection import get_accounts, get_symbols, qt_get
+from trading_skills.black_scholes import black_scholes_delta, estimate_iv
 
 RISK_FREE_RATE = 0.05
 OPTION_MULTIPLIER = 100
+
+
+def _to_yahoo_symbol(symbol: str) -> str:
+    """Map a Questrade symbol to its Yahoo Finance equivalent.
+
+    Questrade uses dotted share-class suffixes (e.g. "BTCX.B.TO", "RCI.B.TO")
+    while Yahoo Finance separates the share class with a hyphen instead
+    ("BTCX-B.TO", "RCI-B.TO"). Plain TICKER.EXCHANGE symbols (e.g. "XEQT.TO")
+    are left unchanged.
+    """
+    parts = symbol.split(".")
+    if len(parts) == 3:
+        base, share_class, exchange = parts
+        return f"{base}-{share_class}.{exchange}"
+    return symbol
 
 
 def _spot_prices(symbols: set[str]) -> dict[str, float]:
@@ -25,7 +39,7 @@ def _spot_prices(symbols: set[str]) -> dict[str, float]:
     prices = {}
     for sym in symbols:
         try:
-            info = yf.Ticker(sym).fast_info
+            info = yf.Ticker(_to_yahoo_symbol(sym)).fast_info
             px = info.get("last_price") or info.get("lastPrice")
             if px:
                 prices[sym] = float(px)
@@ -87,9 +101,7 @@ def get_delta_exposure(account: str | None = None, all_accounts: bool = True) ->
                 dte_years = max((expiry - today).days / 365.0, 0.001)
                 opt_type = "call" if (d.get("optionType") or "").lower() == "call" else "put"
                 iv = estimate_iv(spot, strike, dte_years, opt_type)
-                delta = black_scholes_delta(
-                    spot, strike, dte_years, RISK_FREE_RATE, iv, opt_type
-                )
+                delta = black_scholes_delta(spot, strike, dte_years, RISK_FREE_RATE, iv, opt_type)
                 raw_notional = spot * qty * OPTION_MULTIPLIER
                 delta_notional = delta * raw_notional
                 results.append(
