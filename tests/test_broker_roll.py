@@ -2,12 +2,15 @@
 # ABOUTME: Validates candidate evaluation and roll calculation logic.
 
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock
 
 import pytest
 
 from trading_skills.broker.roll import (
     calculate_roll_options,
     evaluate_short_candidates,
+    get_current_position,
+    get_long_option_position,
 )
 from trading_skills.utils import days_to_expiry
 
@@ -144,3 +147,68 @@ class TestCalculateRollOptions:
         assert len(result) == 1
         # 20% OTM should have penalty applied (score still calculated)
         assert result[0]["otm_pct"] == pytest.approx(20.0)
+
+
+def _make_position(symbol, sec_type, position, strike=100.0, expiry="20260620", right="C"):
+    """Build a mock IB position tuple."""
+    contract = MagicMock()
+    contract.symbol = symbol
+    contract.secType = sec_type
+    contract.strike = strike
+    contract.lastTradeDateOrContractMonth = expiry
+    contract.right = right
+    contract.multiplier = "20"
+    pos = MagicMock()
+    pos.contract = contract
+    pos.position = position
+    pos.account = "DU123456"
+    pos.avgCost = 500.0
+    return pos
+
+
+class TestGetCurrentPositionFop:
+    """get_current_position must include FOP short positions and surface sec_type."""
+
+    @pytest.mark.asyncio
+    async def test_returns_fop_short_position(self):
+        ib = MagicMock()
+        ib.positions = MagicMock(return_value=[_make_position("NQ", "FOP", -1, strike=21000.0)])
+        result = await get_current_position(ib, "NQ")
+        assert result is not None
+        assert result["sec_type"] == "FOP"
+        assert result["strike"] == 21000.0
+
+    @pytest.mark.asyncio
+    async def test_returns_opt_short_position(self):
+        ib = MagicMock()
+        ib.positions = MagicMock(return_value=[_make_position("AAPL", "OPT", -2, strike=200.0)])
+        result = await get_current_position(ib, "AAPL")
+        assert result is not None
+        assert result["sec_type"] == "OPT"
+
+    @pytest.mark.asyncio
+    async def test_ignores_long_positions(self):
+        ib = MagicMock()
+        ib.positions = MagicMock(return_value=[_make_position("NQ", "FOP", 1, strike=21000.0)])
+        result = await get_current_position(ib, "NQ")
+        assert result is None
+
+
+class TestGetLongOptionPositionFop:
+    """get_long_option_position must include FOP long positions and surface sec_type."""
+
+    @pytest.mark.asyncio
+    async def test_returns_fop_long_position(self):
+        ib = MagicMock()
+        ib.positions = MagicMock(return_value=[_make_position("NQ", "FOP", 1, strike=20000.0)])
+        result = await get_long_option_position(ib, "NQ", "C")
+        assert result is not None
+        assert result["sec_type"] == "FOP"
+        assert result["strike"] == 20000.0
+
+    @pytest.mark.asyncio
+    async def test_ignores_short_positions(self):
+        ib = MagicMock()
+        ib.positions = MagicMock(return_value=[_make_position("NQ", "FOP", -1, strike=20000.0)])
+        result = await get_long_option_position(ib, "NQ", "C")
+        assert result is None

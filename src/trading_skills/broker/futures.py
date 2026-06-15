@@ -5,6 +5,17 @@
 from ib_async import ContFuture, Future, FuturesOption
 
 
+def futures_yahoo_ticker(symbol: str) -> str:
+    """Return the Yahoo Finance continuous-futures ticker for a symbol.
+
+    Appends the '=F' suffix required by yfinance (e.g. NQ -> NQ=F).
+    Safe to call repeatedly — already-suffixed symbols are returned unchanged.
+    """
+    if symbol.endswith("=F"):
+        return symbol
+    return f"{symbol}=F"
+
+
 def _pick_future_exchange(contracts: list) -> str | None:
     """Exchange of the nearest-expiry future among ``contracts`` (pure, testable).
 
