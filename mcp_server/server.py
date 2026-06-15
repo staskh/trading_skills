@@ -805,7 +805,7 @@ async def ib_stop_loss(
 
 @mcp.tool()
 async def ib_trailing_stop(
-    port: int = 7496,
+    port: int = 7497,
     account: str | None = None,
     symbols: str | None = None,
     trail_pct: float | None = 20.0,
