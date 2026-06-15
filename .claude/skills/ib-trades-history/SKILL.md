@@ -8,11 +8,15 @@ dependencies: ["trading-skills"]
 
 Fetch trade executions from Interactive Brokers.
 
-## Prerequisites
+## IB Connection
 
-User must have TWS or IB Gateway running locally with API enabled:
-- Paper trading: port 7497
-- Live trading: port 7496
+TWS or IB Gateway must be running locally with API enabled:
+- **Paper trading** — port 7497
+- **Live trading** — port 7496
+
+**Port fallback:** If the configured port fails, automatically retry on the other port.
+If the retry succeeds, save to memory which account type worked (live/paper) and reuse it for all IB skill calls in this and future sessions — until the user explicitly asks for the other account.
+If both ports fail, ask the user to verify that TWS or IB Gateway is running with API access enabled.
 
 For full trade history beyond ~7 days, the user needs a Flex Web Service token and a pre-configured Trade query in IBKR Account Management.
 
@@ -45,7 +49,7 @@ uv run python .claude/skills/ib-trades-history/scripts/trades.py --file exports/
 
 ## Arguments
 
-- `--port` - IB port (default: 7496 for live trading)
+- `--port` - IB port (default: 7497 for paper trading)
 - `--account` - Specific account ID to filter
 - `--all-accounts` - Fetch trades for all managed accounts
 - `--symbol` - Filter trades by symbol (e.g., AAPL)

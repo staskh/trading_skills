@@ -11,7 +11,7 @@ from trading_skills.broker.trades import get_trades
 
 async def main():
     parser = argparse.ArgumentParser(description="Fetch IB trade executions")
-    parser.add_argument("--port", type=int, default=7496, help="IB port (7496=live, 7497=paper)")
+    parser.add_argument("--port", type=int, default=7497, help="IB port (7496=live, 7497=paper)")
     parser.add_argument("--account", type=str, default=None, help="Specific account ID to filter")
     parser.add_argument(
         "--all-accounts", action="store_true", help="Fetch trades for all managed accounts"

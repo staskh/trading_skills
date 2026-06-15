@@ -16,7 +16,7 @@ async def main():
     parser.add_argument("--strike", type=float, default=None, help="Current short strike")
     parser.add_argument("--expiry", type=str, default=None, help="Current expiry (YYYYMMDD)")
     parser.add_argument("--right", type=str, default="C", choices=["C", "P"], help="Call or Put")
-    parser.add_argument("--port", type=int, default=7496, help="IB port")
+    parser.add_argument("--port", type=int, default=7497, help="IB port")
     parser.add_argument("--account", type=str, default=None, help="Account ID")
 
     args = parser.parse_args()

@@ -14,11 +14,15 @@ trailing stop on the PMCC long leg would break the hedge at trigger).
 
 **Default mode is dry-run** — no orders are placed unless `--execute` is in the request.
 
-## Prerequisites
+## IB Connection
 
-TWS or IB Gateway running locally with API enabled:
-- Live trading: port 7496
-- Paper trading: port 7497
+TWS or IB Gateway must be running locally with API enabled:
+- **Paper trading** — port 7497
+- **Live trading** — port 7496
+
+**Port fallback:** If the configured port fails, automatically retry on the other port.
+If the retry succeeds, save to memory which account type worked (live/paper) and reuse it for all IB skill calls in this and future sessions — until the user explicitly asks for the other account.
+If both ports fail, ask the user to verify that TWS or IB Gateway is running with API access enabled.
 
 ## Instructions
 
@@ -26,17 +30,17 @@ TWS or IB Gateway running locally with API enabled:
 
 Dry-run (default — no orders placed):
 ```bash
-uv run python .claude/skills/ib-trailing-stop/scripts/trailing_stop.py --port 7496 --symbols JOBY --trail-pct 20
+uv run python .claude/skills/ib-trailing-stop/scripts/trailing_stop.py --symbols JOBY --trail-pct 20
 ```
 
 Execute (cancel orphan TS_ orders + place new TS_ TRAIL orders):
 ```bash
-uv run python .claude/skills/ib-trailing-stop/scripts/trailing_stop.py --port 7496 --symbols JOBY --trail-pct 20 --execute
+uv run python .claude/skills/ib-trailing-stop/scripts/trailing_stop.py --symbols JOBY --trail-pct 20 --execute
 ```
 
 Execute forced (cancel + replace existing TS_ orders with current parameters):
 ```bash
-uv run python .claude/skills/ib-trailing-stop/scripts/trailing_stop.py --port 7496 --execute --forced
+uv run python .claude/skills/ib-trailing-stop/scripts/trailing_stop.py --execute --forced
 ```
 
 ### Step 2: Format the report
@@ -79,7 +83,7 @@ Per-position result with `order_id` and `order_ref`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | 7496 | IB Gateway/TWS port |
+| `--port` | 7497 | IB Gateway/TWS port |
 | `--account` | all | Specific account ID |
 | `--symbols` | all | Analyze only these symbols |
 | `--trail-pct` | 20 | Trail amount as percentage of reference |

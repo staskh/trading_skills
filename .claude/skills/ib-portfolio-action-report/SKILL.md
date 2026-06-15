@@ -8,11 +8,15 @@ dependencies: ["trading-skills"]
 
 Generate a comprehensive portfolio action report that analyzes all positions across Interactive Brokers accounts, fetches earnings dates, and provides traffic-light risk indicators (🔴🟡🟢) for each position.
 
-## Prerequisites
+## IB Connection
 
-User must have TWS or IB Gateway running locally with API enabled:
-- Paper trading: port 7497
-- Live trading: port 7496
+TWS or IB Gateway must be running locally with API enabled:
+- **Paper trading** — port 7497
+- **Live trading** — port 7496
+
+**Port fallback:** If the configured port fails, automatically retry on the other port.
+If the retry succeeds, save to memory which account type worked (live/paper) and reuse it for all IB skill calls in this and future sessions — until the user explicitly asks for the other account.
+If both ports fail, ask the user to verify that TWS or IB Gateway is running with API access enabled.
 
 ## Instructions
 
@@ -38,7 +42,7 @@ Present critical findings to the user: red/yellow items requiring attention, top
 
 ## Arguments
 
-- `--port` - IB port (default: 7496 for live trading)
+- `--port` - IB port (default: 7497 for paper trading)
 - `--account` - Specific account ID to analyze (optional, defaults to all accounts)
 
 ## JSON Output
@@ -72,11 +76,14 @@ The script returns structured JSON with:
 ## Example Usage
 
 ```bash
-# All accounts on live trading port
+# All accounts (paper, default)
+uv run python scripts/report.py
+
+# Live account
 uv run python scripts/report.py --port 7496
 
 # Specific account
-uv run python scripts/report.py --port 7496 --account U790497
+uv run python scripts/report.py --account U790497
 ```
 
 ## Dependencies
