@@ -10,6 +10,14 @@ import sys
 from trading_skills.broker.stop_loss import get_stop_loss_data
 
 
+def normalize_symbols(symbols: list[str] | None) -> list[str] | None:
+    """Split comma-separated tokens so both '--symbols A B' and '--symbols A,B' work."""
+    if symbols is None:
+        return None
+    result = [s.upper() for tok in symbols for s in tok.split(",") if s]
+    return result or None
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description="Manage conditional stop-loss orders for PMCC, naked LEAPS, and stock positions"
@@ -89,7 +97,7 @@ async def main():
     result = await get_stop_loss_data(
         port=args.port,
         account=args.account,
-        symbols=args.symbols,
+        symbols=normalize_symbols(args.symbols),
         legs=args.legs,
         stop_pct=args.stop_pct,
         short_near_strike_pct=args.short_near_strike_pct,

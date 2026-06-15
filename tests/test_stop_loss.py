@@ -2,6 +2,8 @@
 # ABOUTME: Analytics tests run without IBKR; data-layer tests use MagicMock.
 
 import asyncio
+import importlib.util
+import pathlib
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,6 +29,14 @@ from trading_skills.broker.stop_loss import (
     parse_legs_spec,
     summarize_all_conditional_orders,
 )
+
+_script_path = (
+    pathlib.Path(__file__).parent.parent / ".claude/skills/ib-stop-loss/scripts/stop_loss.py"
+)
+_spec = importlib.util.spec_from_file_location("stop_loss_script", _script_path)
+_script = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_script)
+normalize_symbols = _script.normalize_symbols
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -333,6 +343,36 @@ def test_build_overwrite_with_forced():
     assert result["stop_loss"]["action"] == "overwrite"
 
 
+def test_build_price_below_stop():
+    # current_mid is below the computed stop price — must not place order
+    pos = _pmcc_pos()
+    result = build_position_analysis(
+        position=pos,
+        underlying_price=219.05,
+        current_mid=20.0,  # below stop_price ~22.14 (50% stop on basis 44.27)
+        short_mids=[0.56],
+        existing_stop=None,
+        stop_pct=50.0,
+        forced=False,
+    )
+    assert result["stop_loss"]["action"] == "price_below_stop"
+
+
+def test_build_price_below_stop_with_existing():
+    # current_mid below stop price even when an existing stop is present
+    pos = _pmcc_pos()
+    result = build_position_analysis(
+        position=pos,
+        underlying_price=219.05,
+        current_mid=20.0,
+        short_mids=[0.56],
+        existing_stop=25.0,
+        stop_pct=50.0,
+        forced=False,
+    )
+    assert result["stop_loss"]["action"] == "price_below_stop"
+
+
 def test_build_forced_uses_current_mid_as_basis():
     pos = _pmcc_pos(leaps_cost=44.27)
     result = build_position_analysis(
@@ -361,6 +401,30 @@ def _sl_order(order_ref, symbol="NVDA", order_id=1, account="U123"):
         "account": account,
         "conditions": [{"price": 20.0, "is_more": False}],
     }
+
+
+def test_normalize_symbols_none():
+    assert normalize_symbols(None) is None
+
+
+def test_normalize_symbols_space_separated():
+    assert normalize_symbols(["NVDA", "WMT"]) == ["NVDA", "WMT"]
+
+
+def test_normalize_symbols_comma_separated():
+    assert normalize_symbols(["LUNR,KO,COST"]) == ["LUNR", "KO", "COST"]
+
+
+def test_normalize_symbols_mixed():
+    assert normalize_symbols(["LUNR,KO", "COST"]) == ["LUNR", "KO", "COST"]
+
+
+def test_normalize_symbols_lowercased_input():
+    assert normalize_symbols(["nvda,wmt"]) == ["NVDA", "WMT"]
+
+
+def test_normalize_symbols_empty_list():
+    assert normalize_symbols([]) is None
 
 
 def test_detect_orphan_no_orphans():

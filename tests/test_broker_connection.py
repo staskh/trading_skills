@@ -33,8 +33,26 @@ class TestIbConnection:
 
             result = asyncio.run(run())
             assert result is mock_ib
-            mock_ib.connectAsync.assert_called_once_with(host="127.0.0.1", port=7496, clientId=1)
+            mock_ib.connectAsync.assert_called_once_with(
+                host="127.0.0.1", port=7496, clientId=1, readonly=True
+            )
             mock_ib.disconnect.assert_called_once()
+
+    def test_passes_readonly_flag_through(self):
+        with patch(f"{MODULE}.IB") as MockIB:
+            mock_ib = MagicMock()
+            mock_ib.connectAsync = AsyncMock()
+            mock_ib.disconnect = MagicMock()
+            MockIB.return_value = mock_ib
+
+            async def run():
+                async with ib_connection(7496, 1, readonly=False):
+                    pass
+
+            asyncio.run(run())
+            mock_ib.connectAsync.assert_called_once_with(
+                host="127.0.0.1", port=7496, clientId=1, readonly=False
+            )
 
     def test_disconnects_on_exception(self):
         with patch(f"{MODULE}.IB") as MockIB:
