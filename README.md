@@ -4,6 +4,8 @@ Most retail traders juggle 5+ tabs — broker, charting platform, screener, news
 
 Ask a question in plain English, get back real data: technicals, fundamentals, option Greeks, risk metrics, earnings dates, correlation matrices, and full PDF reports. Connect your Interactive Brokers account and it manages your portfolio too — finds roll candidates for expiring shorts, flags earnings risk, and generates action reports.
 
+[![Star History Chart](https://api.star-history.com/chart?repos=staskh/trading_skills&type=date&legend=bottom-right)](https://www.star-history.com/?repos=staskh%2Ftrading_skills&type=date&legend=bottom-right)
+
 **Who is this for?**
 - **Retail options traders** who sell premium, run PMCCs, or manage covered calls
 - **Self-directed investors** who want quick fundamental + technical scans without switching tools
