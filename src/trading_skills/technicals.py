@@ -137,6 +137,7 @@ def compute_indicators(
 
     ticker = yf.Ticker(symbol)
     df = ticker.history(period=period)
+    df = df.dropna(subset=["Close"])
 
     if df.empty:
         return {"error": f"No data for {symbol}"}

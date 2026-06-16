@@ -15,6 +15,7 @@ def calculate_risk_metrics(
 
     # Get historical data
     hist = ticker.history(period=period)
+    hist = hist.dropna(subset=["Close"])
     if hist.empty:
         return {"error": f"No data for {symbol}"}
 
