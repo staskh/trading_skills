@@ -253,7 +253,8 @@ async def _fetch_quotes(
     except asyncio.TimeoutError:
         return []
 
-    await asyncio.sleep(1)  # IB streams data asynchronously
+    # Allow data to arrive (IB streams data asynchronously)
+    await asyncio.sleep(1)
 
     results = [
         _quote_row(t, right, underlying_price, include_multiplier=False)
