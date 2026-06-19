@@ -57,6 +57,8 @@ Use `recommendation.recommendation_level` to label: "positive" = BUY, "neutral" 
 | ADX | `X.X` | Strong(≥40)/Moderate(25-40)/Weak(<25) Trend |
 | Next Earnings | `YYYY-MM-DD` | `BMO`/`AMC` |
 
+> When `earnings_risk.next_earnings_source` is not `yfinance`, label the date's provenance after it — e.g. `2026-08-19 (estimated from SEC filing cadence)` for `sec_estimate`, or `(NASDAQ)` for `nasdaq` — so an estimated date is never shown as confirmed.
+
 **Signals:** List `trend_analysis.signals` as bullet points.
 
 ### 5. Fundamental Analysis

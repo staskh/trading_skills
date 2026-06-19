@@ -227,6 +227,7 @@ class TestAnalyzeSpreads:
 class TestFetchData:
     """Tests for fetch_data with mocked dependencies."""
 
+    @patch(f"{MODULE}.resolve_next_earnings_date")
     @patch(f"{MODULE}.compute_earnings_move_stats")
     @patch(f"{MODULE}.analyze_spreads")
     @patch(f"{MODULE}.calculate_piotroski_score")
@@ -234,7 +235,7 @@ class TestFetchData:
     @patch(f"{MODULE}.analyze_pmcc")
     @patch(f"{MODULE}.compute_bullish_score")
     def test_returns_all_sections(
-        self, mock_bullish, mock_pmcc, mock_fund, mock_pio, mock_spreads, mock_emove
+        self, mock_bullish, mock_pmcc, mock_fund, mock_pio, mock_spreads, mock_emove, mock_resolve
     ):
         mock_bullish.return_value = {"score": 5.0}
         mock_pmcc.return_value = {"pmcc_score": 7}
@@ -242,6 +243,7 @@ class TestFetchData:
         mock_pio.return_value = {"score": 7}
         mock_spreads.return_value = {"strategies": {}}
         mock_emove.return_value = {"data_available": False}
+        mock_resolve.return_value = {"date": None, "source": None}
 
         result = fetch_data("AAPL")
         assert result["symbol"] == "AAPL"
@@ -252,6 +254,7 @@ class TestFetchData:
         assert "spreads" in result
         assert "earnings_move" in result
 
+    @patch(f"{MODULE}.resolve_next_earnings_date")
     @patch(f"{MODULE}.compute_earnings_move_stats")
     @patch(f"{MODULE}.analyze_spreads")
     @patch(f"{MODULE}.calculate_piotroski_score")
@@ -259,7 +262,7 @@ class TestFetchData:
     @patch(f"{MODULE}.analyze_pmcc")
     @patch(f"{MODULE}.compute_bullish_score")
     def test_handles_none_returns(
-        self, mock_bullish, mock_pmcc, mock_fund, mock_pio, mock_spreads, mock_emove
+        self, mock_bullish, mock_pmcc, mock_fund, mock_pio, mock_spreads, mock_emove, mock_resolve
     ):
         mock_bullish.return_value = None
         mock_pmcc.return_value = None
@@ -267,11 +270,13 @@ class TestFetchData:
         mock_pio.return_value = {}
         mock_spreads.return_value = {}
         mock_emove.return_value = {"data_available": False}
+        mock_resolve.return_value = {"date": None, "source": None}
 
         result = fetch_data("INVALID")
         assert result["bullish"] == {}
         assert result["pmcc"] == {}
 
+    @patch(f"{MODULE}.resolve_next_earnings_date")
     @patch(f"{MODULE}.compute_earnings_move_stats")
     @patch(f"{MODULE}.get_insider_transactions")
     @patch(f"{MODULE}.analyze_spreads")
@@ -290,6 +295,7 @@ class TestFetchData:
         mock_spreads,
         mock_insider,
         mock_emove,
+        mock_resolve,
     ):
         """fetch_data creates one yf.Ticker and passes it to all analysis functions."""
         mock_ticker = MagicMock()
@@ -301,6 +307,7 @@ class TestFetchData:
         mock_spreads.return_value = {}
         mock_insider.return_value = {}
         mock_emove.return_value = {}
+        mock_resolve.return_value = {"date": None, "source": None}
 
         fetch_data("AAPL")
 
@@ -312,3 +319,4 @@ class TestFetchData:
         mock_spreads.assert_called_once_with("AAPL", ticker=mock_ticker)
         mock_insider.assert_called_once_with("AAPL", ticker=mock_ticker)
         mock_emove.assert_called_once_with("AAPL", ticker=mock_ticker)
+        mock_resolve.assert_called_once_with("AAPL")

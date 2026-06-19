@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 import yfinance as yf
 
+from trading_skills.data_sources import resolve_past_earnings_dates
+
 _NY = ZoneInfo("America/New_York")
 
 # Magnitude thresholds (fraction, not percent) for classifying a name's typical
@@ -137,28 +139,52 @@ def summarize_moves(moves: list[float]) -> dict:
     }
 
 
+def _yf_past_earnings_dates(ticker, lookback: int) -> list:
+    """Past earnings timestamps from yfinance, most-recent-first ([] on failure)."""
+    try:
+        earnings = ticker.earnings_dates
+        if earnings is None or earnings.empty:
+            return []
+        now = datetime.now(_NY)
+        past = earnings[earnings.index < now].sort_index(ascending=False)
+        return list(past.index[:lookback])
+    except Exception:
+        return []
+
+
+def _fallback_past_earnings_dates(symbol: str, lookback: int) -> list:
+    """Past earnings dates from the SEC EDGAR fallback (8-K filing dates).
+
+    8-K Item 2.02 filing dates can lag the actual print by a session (an
+    after-close report is sometimes filed the next morning). reaction_moves
+    measures the larger move across the [prior, on/after, next] sessions, so a
+    one-session offset is largely absorbed; this path only runs when yfinance's
+    own (more precise) dates are unavailable.
+    """
+    today = datetime.now(_NY).date()
+    dates = resolve_past_earnings_dates(symbol, limit=lookback * 2)
+    past = [d for d in dates if (_to_date(d) and _to_date(d) < today)]
+    return past[:lookback]
+
+
 def compute_earnings_move_stats(symbol: str, ticker=None, lookback_quarters: int = 8) -> dict:
     """Compute the distribution of historical 1-day post-earnings moves.
 
-    Joins past earnings dates (``ticker.earnings_dates``) with ~2y of daily
-    price history. All network access is best-effort: any failure (including
-    Yahoo rate limiting) yields ``{"data_available": False}`` so callers can
-    abstain rather than crash.
+    Joins past earnings dates with ~2y of daily price history. Earnings dates
+    come from yfinance, falling back to SEC EDGAR (8-K Item 2.02) when Yahoo is
+    empty/blocked. The price history below still requires yfinance, so a Yahoo
+    outage yields ``{"data_available": False}`` even with SEC dates in hand.
+    All network access is best-effort and never raises.
     """
     result = {"symbol": symbol.upper(), "data_available": False}
     try:
         ticker = ticker or yf.Ticker(symbol)
 
-        earnings = ticker.earnings_dates
-        if earnings is None or earnings.empty:
+        earnings_idx = _yf_past_earnings_dates(ticker, lookback_quarters)
+        if not earnings_idx:
+            earnings_idx = _fallback_past_earnings_dates(symbol, lookback_quarters)
+        if not earnings_idx:
             return result
-
-        # Past announcements only, most-recent-first, capped to the lookback.
-        now = datetime.now(_NY)
-        past = earnings[earnings.index < now].sort_index(ascending=False)
-        if past.empty:
-            return result
-        earnings_idx = list(past.index[:lookback_quarters])
 
         hist = ticker.history(period="2y")
         if hist is None or hist.empty or "Close" not in hist:

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 import yfinance as yf
 
+from trading_skills.data_sources import resolve_next_earnings_date
 from trading_skills.earnings_move import adaptive_earnings_gate, compute_earnings_move_stats
 from trading_skills.fundamentals import get_fundamentals
 from trading_skills.insider_trading import get_insider_transactions
@@ -216,6 +217,15 @@ def fetch_data(symbol: str) -> dict:
 
     # Bullish scanner
     bullish_data = compute_bullish_score(symbol, ticker=ticker) or {}
+
+    # Backfill the next earnings date from the fallback chain (NASDAQ / SEC
+    # cadence estimate) when yfinance did not supply one — keeps the earnings
+    # gate working even when Yahoo is blocked.
+    if not bullish_data.get("next_earnings"):
+        fb = resolve_next_earnings_date(symbol)
+        if fb.get("date"):
+            bullish_data["next_earnings"] = fb["date"]
+            bullish_data["next_earnings_source"] = fb["source"]
 
     # PMCC scanner
     pmcc_data = analyze_pmcc(symbol, ticker=ticker) or {}
@@ -453,6 +463,7 @@ def generate_report_data(symbol: str) -> dict:
         },
         "earnings_risk": {
             "next_earnings": data.get("bullish", {}).get("next_earnings"),
+            "next_earnings_source": data.get("bullish", {}).get("next_earnings_source", "yfinance"),
             "earnings_timing": data.get("bullish", {}).get("earnings_timing"),
             "historical_move": data.get("earnings_move", {}),
             "gate": recommendation.get("earnings_gate", {}),
