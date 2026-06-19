@@ -324,8 +324,12 @@ The MCP server (`mcp_server/server.py`) wraps the same Python scripts as tools f
 
 | Source | Used by | Notes |
 |--------|---------|-------|
-| [Yahoo Finance](https://finance.yahoo.com/) | All market data, fundamental, and options skills | Free; up to 15-minute delay |
+| [Yahoo Finance](https://finance.yahoo.com/) | Primary for all market data, fundamental, and options skills | Free; up to 15-minute delay |
+| [SEC EDGAR](https://www.sec.gov/) | Fallback for earnings-release dates (8-K Item 2.02) and fundamentals | Free, official; set `TRADING_SKILLS_SEC_UA` to a contact email (www.sec.gov returns 403 without one) |
+| [NASDAQ](https://www.nasdaq.com/) | Fallback for EPS surprise history, next-earnings date, and ~2y daily price history | Free; undocumented API |
 | [Massive](https://massive.com/) (formerly Polygon.io) | `whale-hunting` (`whale_hunting` MCP tool) | Paid API key required; see setup section below |
+
+When Yahoo is rate-limited or blocked, earnings data (release dates, EPS surprise, and post-earnings price moves) falls back to SEC EDGAR + NASDAQ via `src/trading_skills/data_sources/`, so the `earnings-calendar` skill and `report-stock`'s earnings gate keep working. Option chains have no fallback (Yahoo only).
 
 ## License
 
