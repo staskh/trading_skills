@@ -7,9 +7,10 @@ from bisect import bisect_left
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 import yfinance as yf
 
-from trading_skills.data_sources import resolve_past_earnings_dates
+from trading_skills.data_sources import nasdaq, resolve_past_earnings_dates
 
 _NY = ZoneInfo("America/New_York")
 
@@ -167,14 +168,38 @@ def _fallback_past_earnings_dates(symbol: str, lookback: int) -> list:
     return past[:lookback]
 
 
+def _yf_price_history(ticker):
+    """Daily close Series from yfinance (None on empty/failure)."""
+    try:
+        hist = ticker.history(period="2y")
+        if hist is not None and not hist.empty and "Close" in hist:
+            return hist["Close"]
+    except Exception:
+        pass
+    return None
+
+
+def _fallback_price_history(symbol: str):
+    """Daily close Series from NASDAQ when yfinance price history is unavailable.
+
+    NASDAQ prices are split-adjusted but not dividend-adjusted; for the 1-day
+    reaction this is immaterial for low-yield names.
+    """
+    rows = nasdaq.get_price_history(symbol)
+    if not rows:
+        return None
+    idx = pd.to_datetime([r["date"] for r in rows], format="%m/%d/%Y", errors="coerce")
+    closes = pd.Series([r["close"] for r in rows], index=idx).dropna()
+    return closes if len(closes) >= 3 else None
+
+
 def compute_earnings_move_stats(symbol: str, ticker=None, lookback_quarters: int = 8) -> dict:
     """Compute the distribution of historical 1-day post-earnings moves.
 
-    Joins past earnings dates with ~2y of daily price history. Earnings dates
-    come from yfinance, falling back to SEC EDGAR (8-K Item 2.02) when Yahoo is
-    empty/blocked. The price history below still requires yfinance, so a Yahoo
-    outage yields ``{"data_available": False}`` even with SEC dates in hand.
-    All network access is best-effort and never raises.
+    Joins past earnings dates with ~2y of daily price history. Both inputs fall
+    back off yfinance when Yahoo is empty/blocked: dates -> SEC EDGAR (8-K Item
+    2.02), prices -> NASDAQ historical. So the statistic can be produced with no
+    yfinance access at all. All network is best-effort and never raises.
     """
     result = {"symbol": symbol.upper(), "data_available": False}
     try:
@@ -186,11 +211,13 @@ def compute_earnings_move_stats(symbol: str, ticker=None, lookback_quarters: int
         if not earnings_idx:
             return result
 
-        hist = ticker.history(period="2y")
-        if hist is None or hist.empty or "Close" not in hist:
+        closes = _yf_price_history(ticker)
+        if closes is None:
+            closes = _fallback_price_history(symbol)
+        if closes is None or len(closes) < 3:
             return result
 
-        moves = reaction_moves(earnings_idx, hist["Close"])
+        moves = reaction_moves(earnings_idx, closes)
         stats = summarize_moves(moves)
         stats["symbol"] = symbol.upper()
         return stats

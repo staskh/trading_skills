@@ -2,12 +2,14 @@
 # ABOUTME: Pure-function tests (no network) plus gate integration with compute_recommendation.
 
 from datetime import date, datetime, timedelta
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from trading_skills.earnings_move import (
     adaptive_earnings_gate,
+    compute_earnings_move_stats,
     reaction_moves,
     summarize_moves,
 )
@@ -237,6 +239,38 @@ class TestAdaptiveEarningsGate:
         )
         assert g["magnitude_class"] == "unknown"
         assert g["cap_to"] == "HOLD"
+
+
+class TestComputeWithFallback:
+    """compute_earnings_move_stats runs fully off the fallback sources (no yfinance)."""
+
+    @patch("trading_skills.earnings_move._fallback_price_history")
+    @patch("trading_skills.earnings_move._fallback_past_earnings_dates")
+    def test_full_fallback_path(self, mock_dates, mock_price):
+        ticker = MagicMock()
+        ticker.earnings_dates = pd.DataFrame()  # yfinance dates empty
+        ticker.history.return_value = pd.DataFrame()  # yfinance prices empty
+        mock_dates.return_value = ["2025-03-14", "2024-12-13"]  # SEC fallback dates
+        idx = pd.to_datetime(
+            [
+                "2024-12-11",
+                "2024-12-12",
+                "2024-12-13",
+                "2024-12-16",
+                "2025-03-12",
+                "2025-03-13",
+                "2025-03-14",
+                "2025-03-17",
+            ]
+        )
+        # +8% reaction in Dec, -10% in Mar
+        mock_price.return_value = pd.Series([100, 100, 100, 108, 200, 200, 200, 180], index=idx)
+
+        out = compute_earnings_move_stats("NVDA", ticker=ticker)
+        assert out["data_available"] is True
+        assert out["n_events"] == 2
+        mock_dates.assert_called_once()
+        mock_price.assert_called_once()
 
 
 class TestComputeRecommendationGate:

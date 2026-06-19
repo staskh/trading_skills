@@ -2,7 +2,7 @@
 # ABOUTME: Undocumented endpoints; requires a browser User-Agent. Used as a secondary source.
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from trading_skills.data_sources._http import get_json
 
@@ -13,6 +13,10 @@ _UA = (
 _HEADERS = {"User-Agent": _UA, "Accept": "application/json", "Accept-Language": "en-US,en;q=0.9"}
 _SURPRISE_URL = "https://api.nasdaq.com/api/company/{symbol}/earnings-surprise"
 _EARNINGS_DATE_URL = "https://api.nasdaq.com/api/analyst/{symbol}/earnings-date"
+_HISTORICAL_URL = (
+    "https://api.nasdaq.com/api/quote/{symbol}/historical"
+    "?assetclass=stocks&fromdate={fromdate}&limit=9999&todate={todate}"
+)
 
 _DATE_RE = re.compile(r"([A-Z][a-z]{2,8} \d{1,2}, \d{4})")
 
@@ -83,3 +87,36 @@ def get_next_earnings_date(symbol: str) -> str | None:
     """Best-effort upcoming earnings date (YYYY-MM-DD), or None."""
     data = get_json(_EARNINGS_DATE_URL.format(symbol=symbol.upper()), headers=_HEADERS)
     return _parse_next_date(data)
+
+
+def _parse_history(data) -> list[dict]:
+    """Normalize the historical price table into {date, close} rows (newest first).
+
+    NASDAQ caps the response at ~500 daily bars (~2 years). Prices are
+    split-adjusted but not dividend-adjusted.
+    """
+    table = ((data or {}).get("data") or {}).get("tradesTable") or {}
+    rows = table.get("rows") or [] if isinstance(table, dict) else []
+    out = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        close = _to_float(r.get("close"))
+        d = r.get("date")
+        if close is not None and d:
+            out.append({"date": d, "close": close})
+    return out
+
+
+def get_price_history(symbol: str, days: int = 760) -> list[dict]:
+    """Daily {date (MM/DD/YYYY), close} bars from NASDAQ (newest first), or [].
+
+    Used as a yfinance-free fallback for the post-earnings move distribution.
+    """
+    today = datetime.now().date()
+    url = _HISTORICAL_URL.format(
+        symbol=symbol.upper(),
+        fromdate=(today - timedelta(days=days)).isoformat(),
+        todate=(today + timedelta(days=1)).isoformat(),
+    )
+    return _parse_history(get_json(url, headers=_HEADERS))

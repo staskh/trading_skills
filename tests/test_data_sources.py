@@ -110,6 +110,25 @@ class TestNasdaq:
         assert nasdaq._parse_surprise(None) == []
         assert nasdaq._parse_surprise({"data": {}}) == []
 
+    def test_parse_history(self):
+        hist = {
+            "data": {
+                "tradesTable": {
+                    "rows": [
+                        {"date": "06/17/2026", "close": "$204.65", "volume": "128,363,500"},
+                        {"date": "06/16/2026", "close": "$207.41", "volume": "1"},
+                    ]
+                }
+            }
+        }
+        rows = nasdaq._parse_history(hist)
+        assert len(rows) == 2
+        assert rows[0] == {"date": "06/17/2026", "close": 204.65}
+
+    def test_parse_history_empty(self):
+        assert nasdaq._parse_history(None) == []
+        assert nasdaq._parse_history({"data": {}}) == []
+
     def test_parse_next_date_vendor_gap(self):
         gap = {
             "data": {
