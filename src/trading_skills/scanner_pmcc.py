@@ -454,7 +454,7 @@ def compute_earnings_score(earnings_date_str: str | None, short_days: int) -> tu
         return 0.0, {"earnings": "0.0 (no earnings date)"}
 
     try:
-        today = datetime.now().date()
+        today = datetime.now(_NY).date()
         earnings_date = datetime.strptime(earnings_date_str, "%Y-%m-%d").date()
         days_to_earnings = (earnings_date - today).days
 

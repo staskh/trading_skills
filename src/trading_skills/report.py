@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 import yfinance as yf
 
+from trading_skills.earnings_move import adaptive_earnings_gate, compute_earnings_move_stats
 from trading_skills.fundamentals import get_fundamentals
 from trading_skills.insider_trading import get_insider_transactions
 from trading_skills.piotroski import calculate_piotroski_score
@@ -231,6 +232,9 @@ def fetch_data(symbol: str) -> dict:
     # Insider trading
     insider = get_insider_transactions(symbol, ticker=ticker)
 
+    # Historical post-earnings move distribution (for the adaptive earnings gate)
+    earnings_move = compute_earnings_move_stats(symbol, ticker=ticker)
+
     return {
         "symbol": symbol,
         "bullish": bullish_data,
@@ -239,6 +243,7 @@ def fetch_data(symbol: str) -> dict:
         "piotroski": piotroski,
         "spreads": spreads,
         "insider": insider,
+        "earnings_move": earnings_move,
     }
 
 
@@ -332,12 +337,27 @@ def compute_recommendation(data: dict) -> dict:
         recommendation = "AVOID / WAIT"
         recommendation_level = "negative"
 
+    # Adaptive earnings gate: cap an imminent-earnings BUY to HOLD, with severity
+    # scaled by the stock's historical post-earnings move (gap risk). This is a
+    # verdict cap, not a point adjustment (it never edits the score); for PMCC
+    # names it is an additional conservative safeguard over the PMCC earnings
+    # penalty and only ever lowers a rating. The note is descriptive, so it is
+    # safe to surface even when the cap is a no-op (already HOLD/AVOID).
+    gate = adaptive_earnings_gate(bullish.get("next_earnings"), data.get("earnings_move"))
+    if gate["active"]:
+        if gate["cap_to"] == "HOLD" and recommendation_level == "positive":
+            recommendation = "HOLD / MONITOR"
+            recommendation_level = "neutral"
+        if gate["note"]:
+            risks.append(gate["note"])
+
     return {
         "recommendation": recommendation,
         "recommendation_level": recommendation_level,
         "points": points,
         "strengths": strengths,
         "risks": risks,
+        "earnings_gate": gate,
     }
 
 
@@ -430,5 +450,11 @@ def generate_report_data(symbol: str) -> dict:
         "insider_trading": {
             "summary": data.get("insider", {}).get("summary", {}),
             "recent_transactions": data.get("insider", {}).get("transactions", [])[:10],
+        },
+        "earnings_risk": {
+            "next_earnings": data.get("bullish", {}).get("next_earnings"),
+            "earnings_timing": data.get("bullish", {}).get("earnings_timing"),
+            "historical_move": data.get("earnings_move", {}),
+            "gate": recommendation.get("earnings_gate", {}),
         },
     }
