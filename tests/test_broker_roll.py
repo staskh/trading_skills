@@ -7,6 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from trading_skills.broker.roll import (
+    _compute_half_band,
+    _estimate_iv,
+    _select_roll_strikes,
     calculate_roll_options,
     evaluate_short_candidates,
     get_current_position,
@@ -212,3 +215,108 @@ class TestGetLongOptionPositionFop:
         ib.positions = MagicMock(return_value=[_make_position("NQ", "FOP", -1, strike=20000.0)])
         result = await get_long_option_position(ib, "NQ", "C")
         assert result is None
+
+
+class TestEstimateIv:
+    """Tests for Brenner-Subrahmanyam IV approximation."""
+
+    def test_roundtrip(self):
+        # σ ≈ C / (0.4 × S × √T): if we synthesize a price from known IV we should recover it
+        spot, iv, dte = 100.0, 0.40, 30
+        import math
+
+        synthetic_mid = 0.4 * spot * iv * math.sqrt(dte / 365)
+        estimated = _estimate_iv(spot, synthetic_mid, dte)
+        assert estimated == pytest.approx(iv, rel=0.01)
+
+    def test_higher_price_gives_higher_iv(self):
+        iv_cheap = _estimate_iv(100.0, 2.0, 30)
+        iv_expensive = _estimate_iv(100.0, 4.0, 30)
+        assert iv_expensive > iv_cheap
+
+    def test_longer_dte_gives_lower_iv_for_same_price(self):
+        iv_short = _estimate_iv(100.0, 3.0, 15)
+        iv_long = _estimate_iv(100.0, 3.0, 60)
+        assert iv_short > iv_long
+
+    def test_zero_mid_falls_back_to_default(self):
+        iv = _estimate_iv(100.0, 0.0, 30)
+        assert iv == pytest.approx(0.30)
+
+    def test_zero_dte_falls_back_to_default(self):
+        iv = _estimate_iv(100.0, 2.0, 0)
+        assert iv == pytest.approx(0.30)
+
+
+class TestComputeHalfBand:
+    """Tests for IV-scaled expected move band calculation."""
+
+    def test_scales_with_iv(self):
+        band_low_iv = _compute_half_band(spot=100.0, atm_iv=0.20, iv_multiplier=2.0, dte=30)
+        band_high_iv = _compute_half_band(spot=100.0, atm_iv=0.80, iv_multiplier=2.0, dte=30)
+        assert band_high_iv == pytest.approx(4 * band_low_iv, rel=0.01)
+
+    def test_scales_with_multiplier(self):
+        band_2x = _compute_half_band(spot=100.0, atm_iv=0.40, iv_multiplier=2.0, dte=30)
+        band_4x = _compute_half_band(spot=100.0, atm_iv=0.40, iv_multiplier=4.0, dte=30)
+        assert band_4x == pytest.approx(2 * band_2x, rel=0.01)
+
+    def test_scales_with_spot(self):
+        band_100 = _compute_half_band(spot=100.0, atm_iv=0.40, iv_multiplier=2.0, dte=30)
+        band_200 = _compute_half_band(spot=200.0, atm_iv=0.40, iv_multiplier=2.0, dte=30)
+        assert band_200 == pytest.approx(2 * band_100, rel=0.01)
+
+    def test_scales_with_dte(self):
+        band_30 = _compute_half_band(spot=100.0, atm_iv=0.40, iv_multiplier=2.0, dte=30)
+        band_120 = _compute_half_band(spot=100.0, atm_iv=0.40, iv_multiplier=2.0, dte=120)
+        assert band_120 == pytest.approx(2 * band_30, rel=0.01)
+
+
+class TestSelectRollStrikes:
+    """Tests for IV-aware strike band selection."""
+
+    ALL_STRIKES = list(range(80, 165, 5))  # 80, 85, ..., 160
+
+    def test_call_band_centered_on_current_strike(self):
+        strikes = _select_roll_strikes(
+            self.ALL_STRIKES, current_strike=100.0, right="C", half_band=20.0
+        )
+        assert all(80 <= s <= 120 for s in strikes)
+        assert 100 in strikes
+        assert 120 in strikes
+
+    def test_put_band_centered_on_current_strike(self):
+        strikes = _select_roll_strikes(
+            self.ALL_STRIKES, current_strike=100.0, right="P", half_band=20.0
+        )
+        assert all(80 <= s <= 120 for s in strikes)
+        assert 100 in strikes
+        assert 80 in strikes
+
+    def test_high_iv_wider_than_low_iv(self):
+        band_low = _compute_half_band(100.0, 0.20, 2.0, 30)
+        band_high = _compute_half_band(100.0, 0.80, 2.0, 30)
+        strikes_low = _select_roll_strikes(self.ALL_STRIKES, 100.0, "C", band_low)
+        strikes_high = _select_roll_strikes(self.ALL_STRIKES, 100.0, "C", band_high)
+        assert len(strikes_high) > len(strikes_low)
+        assert max(strikes_high) > max(strikes_low)
+
+    def test_no_strike_cap_at_10(self):
+        # With a wide band, all strikes in range should appear (no [:10] truncation)
+        all_strikes = list(range(50, 200, 1))
+        strikes = _select_roll_strikes(all_strikes, 100.0, "C", half_band=50.0)
+        assert len(strikes) > 10
+
+    def test_call_allows_small_downside(self):
+        # With half_band=50, buffer=10 — strikes at 90 and 95 fall in the downside window.
+        strikes = _select_roll_strikes(
+            self.ALL_STRIKES, current_strike=100.0, right="C", half_band=50.0
+        )
+        assert any(s < 100.0 for s in strikes)
+
+    def test_put_allows_small_upside(self):
+        # With half_band=50, buffer=10 — strikes at 105 and 110 fall in the upside window.
+        strikes = _select_roll_strikes(
+            self.ALL_STRIKES, current_strike=100.0, right="P", half_band=50.0
+        )
+        assert any(s > 100.0 for s in strikes)

@@ -17,6 +17,40 @@ from trading_skills.broker.futures import (
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.utils import days_to_expiry
 
+_DEFAULT_IV = 0.30  # fallback when IV cannot be determined from quotes
+
+
+def _estimate_iv(spot: float, option_mid: float, dte: float) -> float:
+    """Estimate ATM IV from option price using Brenner-Subrahmanyam: σ ≈ mid / (0.4 × S × √T)."""
+    if dte <= 0 or option_mid <= 0:
+        return _DEFAULT_IV
+    denom = 0.4 * spot * math.sqrt(dte / 365)
+    if denom <= 0:
+        return _DEFAULT_IV
+    return option_mid / denom
+
+
+def _compute_half_band(spot: float, atm_iv: float, iv_multiplier: float, dte: float) -> float:
+    """Compute half strike band width using expected move: k × σ × S × √(T/365)."""
+    T = max(dte, 1) / 365
+    return iv_multiplier * atm_iv * spot * math.sqrt(T)
+
+
+def _select_roll_strikes(
+    all_strikes: list, current_strike: float, right: str, half_band: float
+) -> list:
+    """Select candidate strikes within an IV-scaled band around the current strike.
+
+    Allows a 20% downside buffer for calls (upside for puts) so same-strike rolls
+    are always included, while the primary window extends one expected move OTM.
+    """
+    buffer = half_band * 0.2
+    if right == "C":
+        lo, hi = current_strike - buffer, current_strike + half_band
+    else:
+        lo, hi = current_strike - half_band, current_strike + buffer
+    return sorted(s for s in all_strikes if lo <= s <= hi)
+
 
 async def get_current_position(ib: IB, symbol: str, account: str = None) -> dict | None:
     """Find current short option position for symbol."""
@@ -191,6 +225,10 @@ async def get_option_quotes(
         ask = t.ask if t.ask and t.ask > 0 else 0
         mid = (bid + ask) / 2 if bid and ask else 0
 
+        greeks = t.modelGreeks or t.bidGreeks or t.lastGreeks
+        iv = greeks.impliedVol if greeks and greeks.impliedVol and greeks.impliedVol > 0 else None
+        delta = greeks.delta if greeks and greeks.delta is not None else None
+
         results.append(
             {
                 "strike": t.contract.strike,
@@ -199,6 +237,8 @@ async def get_option_quotes(
                 "ask": ask,
                 "mid": mid,
                 "last": t.last if t.last and t.last > 0 else 0,
+                "iv": iv,
+                "delta": delta,
             }
         )
 
@@ -288,11 +328,11 @@ def calculate_roll_options(current: dict, target_quotes: list, buy_price: float)
     return rolls
 
 
-async def _find_roll(ib, symbol, current_position, chain_params, exchange):
+async def _find_roll(ib, symbol, current_position, chain_params, exchange, iv_multiplier=2.0):
     """Find roll candidates for an existing short position."""
     underlying_price = await get_underlying_price(ib, symbol, exchange)
 
-    # Get current option quote for buy-to-close cost
+    # Get current option quote for buy-to-close cost; also captures IV and delta.
     current_quotes = await get_option_quotes(
         ib,
         symbol,
@@ -305,7 +345,15 @@ async def _find_roll(ib, symbol, current_position, chain_params, exchange):
     if not current_quotes:
         return {"error": "Could not get quote for current position"}
 
-    buy_price = current_quotes[0]["ask"]
+    current_quote = current_quotes[0]
+    buy_price = current_quote["ask"]
+
+    # Extract IV and delta from the current position quote.
+    atm_iv = current_quote.get("iv")
+    atm_delta = current_quote.get("delta")
+    if atm_iv is None:
+        dte_current = days_to_expiry(current_position["expiry"])
+        atm_iv = _estimate_iv(underlying_price, current_quote["mid"], dte_current)
 
     # Get future expirations after current
     current_exp = current_position["expiry"]
@@ -314,20 +362,12 @@ async def _find_roll(ib, symbol, current_position, chain_params, exchange):
     if not future_exps:
         return {"error": "No future expirations available"}
 
-    # Determine strike range
-    current_strike = current_position["strike"]
-    all_strikes = chain_params["strikes"]
-
-    if current_position["right"] == "C":
-        target_strikes = [
-            s for s in all_strikes if current_strike - 10 <= s <= current_strike + 50 and s % 5 == 0
-        ]
-    else:
-        target_strikes = [
-            s for s in all_strikes if current_strike - 50 <= s <= current_strike + 10 and s % 5 == 0
-        ]
-
-    target_strikes = sorted(target_strikes)[:10]
+    # Determine IV-scaled strike band using nearest roll expiry as time horizon.
+    dte_roll = days_to_expiry(future_exps[0])
+    half_band = _compute_half_band(underlying_price, atm_iv, iv_multiplier, dte_roll)
+    target_strikes = _select_roll_strikes(
+        chain_params["strikes"], current_position["strike"], current_position["right"], half_band
+    )
 
     # Fetch quotes for each target expiration
     roll_data = {}
@@ -337,7 +377,7 @@ async def _find_roll(ib, symbol, current_position, chain_params, exchange):
         )
         # Exclude rolling into the exact same (expiry, strike) already held.
         if exp == current_exp:
-            quotes = [q for q in quotes if q["strike"] != current_strike]
+            quotes = [q for q in quotes if q["strike"] != current_position["strike"]]
         roll_data[exp] = calculate_roll_options(current_position, quotes, buy_price)
 
     earnings_date = get_next_earnings_date(symbol)
@@ -353,11 +393,14 @@ async def _find_roll(ib, symbol, current_position, chain_params, exchange):
             "expiry": current_position["expiry"],
             "right": current_position["right"],
             "quantity": current_position["quantity"],
+            "iv": atm_iv,
+            "delta": atm_delta,
         },
         "buy_to_close": buy_price,
         "roll_candidates": roll_data,
         "earnings_date": earnings_date,
         "expirations_analyzed": future_exps,
+        "iv_multiplier": iv_multiplier,
     }
 
 
@@ -420,7 +463,9 @@ async def _find_spread(ib, symbol, long_option, right, chain_params, exchange):
     }
 
 
-async def _find_new_short(ib, symbol, long_position, right, chain_params, exchange):
+async def _find_new_short(
+    ib, symbol, long_position, right, chain_params, exchange, iv_multiplier=2.0
+):
     """Find covered call/put candidates against a long stock position."""
     underlying_price = await get_underlying_price(ib, symbol, exchange)
 
@@ -431,18 +476,18 @@ async def _find_new_short(ib, symbol, long_position, right, chain_params, exchan
     if not future_exps:
         return {"error": "No future expirations available"}
 
-    # Determine OTM strike range
+    # Use IV-scaled band with default IV (no current option quote available here).
+    dte_ref = days_to_expiry(future_exps[0])
+    half_band = _compute_half_band(underlying_price, _DEFAULT_IV, iv_multiplier, dte_ref)
     all_strikes = chain_params["strikes"]
     if right == "C":
-        target_strikes = [
-            s for s in all_strikes if underlying_price <= s <= underlying_price * 1.20
-        ]
+        target_strikes = sorted(
+            s for s in all_strikes if underlying_price <= s <= underlying_price + half_band
+        )
     else:
-        target_strikes = [
-            s for s in all_strikes if underlying_price * 0.80 <= s <= underlying_price
-        ]
-
-    target_strikes = sorted(target_strikes)[:15]
+        target_strikes = sorted(
+            s for s in all_strikes if underlying_price - half_band <= s <= underlying_price
+        )
 
     # Fetch quotes and evaluate candidates
     candidates_by_expiry = {}
@@ -469,6 +514,7 @@ async def _find_new_short(ib, symbol, long_position, right, chain_params, exchan
         },
         "candidates_by_expiry": candidates_by_expiry,
         "expirations_analyzed": future_exps,
+        "iv_multiplier": iv_multiplier,
     }
 
 
@@ -479,6 +525,7 @@ async def find_roll_candidates(
     strike: float | None = None,
     expiry: str | None = None,
     right: str = "C",
+    iv_multiplier: float = 2.0,
 ) -> dict:
     """Find roll, spread, or covered call/put candidates.
 
@@ -516,10 +563,14 @@ async def find_roll_candidates(
                     "right": right,
                     "account": account or "N/A",
                 }
-                return await _find_roll(ib, symbol, explicit_position, chain_params, exchange)
+                return await _find_roll(
+                    ib, symbol, explicit_position, chain_params, exchange, iv_multiplier
+                )
 
             if current_position:
-                return await _find_roll(ib, symbol, current_position, chain_params, exchange)
+                return await _find_roll(
+                    ib, symbol, current_position, chain_params, exchange, iv_multiplier
+                )
 
             if long_option:
                 return await _find_spread(ib, symbol, long_option, right, chain_params, exchange)
@@ -527,7 +578,9 @@ async def find_roll_candidates(
             # No long option → try long stock for covered call/put
             long_stock = await get_long_stock_position(ib, symbol, account)
             if long_stock:
-                return await _find_new_short(ib, symbol, long_stock, right, chain_params, exchange)
+                return await _find_new_short(
+                    ib, symbol, long_stock, right, chain_params, exchange, iv_multiplier
+                )
 
             return {
                 "error": f"No positions found for {symbol}. "

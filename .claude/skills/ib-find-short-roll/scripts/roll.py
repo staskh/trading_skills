@@ -18,6 +18,12 @@ async def main():
     parser.add_argument("--right", type=str, default="C", choices=["C", "P"], help="Call or Put")
     parser.add_argument("--port", type=int, default=7497, help="IB port")
     parser.add_argument("--account", type=str, default=None, help="Account ID")
+    parser.add_argument(
+        "--iv-multiplier",
+        type=float,
+        default=2.0,
+        help="Expected-move multiplier for strike band width (default: 2.0)",
+    )
 
     args = parser.parse_args()
 
@@ -28,6 +34,7 @@ async def main():
         strike=args.strike,
         expiry=args.expiry,
         right=args.right,
+        iv_multiplier=args.iv_multiplier,
     )
 
     result["generated_at"] = generated_at_str()
