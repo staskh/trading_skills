@@ -220,6 +220,43 @@ async def get_option_chain_params(ib: IB, symbol: str, exchange: str | None = No
     }
 
 
+def _build_quote(t) -> dict:
+    """Build a quote dict from an IB ticker.
+
+    Falls back to last trade price as mid when bid/ask are zero (market closed).
+    """
+    bid = t.bid if t.bid and t.bid > 0 else 0
+    ask = t.ask if t.ask and t.ask > 0 else 0
+    last = t.last if t.last and t.last > 0 else 0
+
+    if bid > 0 or ask > 0:
+        mid = (bid + ask) / 2 if bid and ask else (bid or ask)
+        stale = False
+    elif last > 0:
+        # No live bid/ask — use last traded price (market closed).
+        mid = last
+        stale = True
+    else:
+        mid = 0
+        stale = False
+
+    greeks = t.modelGreeks or t.bidGreeks or t.lastGreeks
+    iv = greeks.impliedVol if greeks and greeks.impliedVol and greeks.impliedVol > 0 else None
+    delta = greeks.delta if greeks and greeks.delta is not None else None
+
+    return {
+        "strike": t.contract.strike,
+        "expiry": t.contract.lastTradeDateOrContractMonth,
+        "bid": bid,
+        "ask": ask,
+        "mid": mid,
+        "last": last,
+        "iv": iv,
+        "delta": delta,
+        "stale": stale,
+    }
+
+
 async def get_option_quotes(
     ib: IB, symbol: str, expiry: str, strikes: list, right: str, exchange: str | None = None
 ) -> list:
@@ -239,32 +276,7 @@ async def get_option_quotes(
             return []
 
     tickers = await asyncio.wait_for(ib.reqTickersAsync(*qualified), timeout=15)
-
-    results = []
-    for t in tickers:
-        if t.contract is None:
-            continue
-        bid = t.bid if t.bid and t.bid > 0 else 0
-        ask = t.ask if t.ask and t.ask > 0 else 0
-        mid = (bid + ask) / 2 if bid and ask else 0
-
-        greeks = t.modelGreeks or t.bidGreeks or t.lastGreeks
-        iv = greeks.impliedVol if greeks and greeks.impliedVol and greeks.impliedVol > 0 else None
-        delta = greeks.delta if greeks and greeks.delta is not None else None
-
-        results.append(
-            {
-                "strike": t.contract.strike,
-                "expiry": t.contract.lastTradeDateOrContractMonth,
-                "bid": bid,
-                "ask": ask,
-                "mid": mid,
-                "last": t.last if t.last and t.last > 0 else 0,
-                "iv": iv,
-                "delta": delta,
-            }
-        )
-
+    results = [_build_quote(t) for t in tickers if t.contract is not None]
     return sorted(results, key=lambda x: x["strike"])
 
 
@@ -277,11 +289,11 @@ def evaluate_short_candidates(
     """Evaluate and score potential short options to open."""
     candidates = []
     for quote in quotes:
-        if quote["bid"] <= 0:
+        premium = quote["bid"] if quote["bid"] > 0 else quote.get("mid", 0)
+        if premium <= 0:
             continue
 
         strike = quote["strike"]
-        premium = quote["bid"]  # We sell at bid
 
         # Calculate OTM %
         if right == "C":
@@ -331,10 +343,10 @@ def calculate_roll_options(current: dict, target_quotes: list, buy_price: float)
     """Calculate credit/debit for each roll option."""
     rolls = []
     for quote in target_quotes:
-        if quote["bid"] <= 0:
+        sell_price = quote["bid"] if quote["bid"] > 0 else quote.get("mid", 0)
+        if sell_price <= 0:
             continue
 
-        sell_price = quote["bid"]  # We sell at bid
         net = sell_price - buy_price  # Positive = credit
 
         rolls.append(
@@ -369,7 +381,8 @@ async def _find_roll(ib, symbol, current_position, chain_params, exchange, iv_mu
         return {"error": "Could not get quote for current position"}
 
     current_quote = current_quotes[0]
-    buy_price = current_quote["ask"]
+    buy_price = current_quote["ask"] if current_quote["ask"] > 0 else current_quote["mid"]
+    options_stale = current_quote.get("stale", False)
 
     # Extract IV and delta from the current position quote.
     atm_iv = current_quote.get("iv")
@@ -429,7 +442,9 @@ async def _find_roll(ib, symbol, current_position, chain_params, exchange, iv_mu
         "earnings_date": earnings_date,
         "expirations_analyzed": future_exps,
         "iv_multiplier": iv_multiplier,
-        "data_delay": "stalled - using last known price" if price_stale else "real-time",
+        "data_delay": (
+            "stalled - using last known price" if (price_stale or options_stale) else "real-time"
+        ),
     }
 
 

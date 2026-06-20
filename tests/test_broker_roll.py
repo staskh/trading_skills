@@ -42,12 +42,18 @@ class TestDaysToExpiry:
 class TestEvaluateShortCandidates:
     """Tests for short option candidate evaluation."""
 
-    def test_filters_zero_bid(self):
-        quotes = [
-            {"strike": 110, "expiry": "20250321", "bid": 0, "ask": 1.0, "mid": 0.5, "last": 0}
-        ]
+    def test_filters_zero_bid_and_zero_mid(self):
+        quotes = [{"strike": 110, "expiry": "20250321", "bid": 0, "ask": 0, "mid": 0, "last": 0}]
         result = evaluate_short_candidates(quotes, 100.0, "C", 30)
         assert len(result) == 0
+
+    def test_uses_mid_as_fallback_when_bid_zero(self):
+        quotes = [
+            {"strike": 110, "expiry": "20250321", "bid": 0, "ask": 0, "mid": 2.0, "last": 2.0}
+        ]
+        result = evaluate_short_candidates(quotes, 100.0, "C", 30)
+        assert len(result) == 1
+        assert result[0]["bid"] == pytest.approx(2.0)
 
     def test_filters_itm(self):
         quotes = [
@@ -128,13 +134,23 @@ class TestCalculateRollOptions:
         assert result[0]["net"] == -1.50  # 0.5 - 2.0
         assert result[0]["net_type"] == "debit"
 
-    def test_filters_zero_bid(self):
+    def test_filters_zero_bid_and_zero_mid(self):
         current = {"strike": 100, "expiry": "20250221"}
         target_quotes = [
-            {"strike": 105, "expiry": "20250321", "bid": 0, "ask": 0.5, "mid": 0.25, "last": 0}
+            {"strike": 105, "expiry": "20250321", "bid": 0, "ask": 0, "mid": 0, "last": 0}
         ]
         result = calculate_roll_options(current, target_quotes, 1.0)
         assert len(result) == 0
+
+    def test_uses_mid_as_fallback_when_bid_zero(self):
+        current = {"strike": 100, "expiry": "20250221"}
+        target_quotes = [
+            {"strike": 105, "expiry": "20250321", "bid": 0, "ask": 0, "mid": 3.0, "last": 3.0}
+        ]
+        result = calculate_roll_options(current, target_quotes, buy_price=1.0)
+        assert len(result) == 1
+        assert result[0]["net"] == pytest.approx(2.0)  # 3.0 - 1.0
+        assert result[0]["net_type"] == "credit"
 
     def test_far_otm_penalty_applied(self):
         # OTM > 15% should get safety_score penalty but still be included
@@ -394,3 +410,46 @@ class TestGetUnderlyingPriceStale:
             price, stalled = await get_underlying_price(ib, "AAPL")
         assert math.isnan(price)
         assert stalled is False
+
+
+class TestOptionQuoteStale:
+    """Option quotes use last traded price as fallback when bid/ask are zero."""
+
+    def _make_ib_ticker(self, strike, bid, ask, last):
+        contract = MagicMock()
+        contract.strike = strike
+        contract.lastTradeDateOrContractMonth = "20260717"
+        t = MagicMock()
+        t.contract = contract
+        t.bid = bid
+        t.ask = ask
+        t.last = last
+        t.modelGreeks = None
+        t.bidGreeks = None
+        t.lastGreeks = None
+        return t
+
+    def test_live_quote_not_stale(self):
+        from trading_skills.broker.roll import _build_quote
+
+        t = self._make_ib_ticker(110, bid=2.0, ask=2.5, last=2.2)
+        q = _build_quote(t)
+        assert q["bid"] == 2.0
+        assert q["mid"] == pytest.approx(2.25)
+        assert q["stale"] is False
+
+    def test_stale_quote_uses_last_as_mid(self):
+        from trading_skills.broker.roll import _build_quote
+
+        t = self._make_ib_ticker(110, bid=0, ask=0, last=2.2)
+        q = _build_quote(t)
+        assert q["mid"] == pytest.approx(2.2)
+        assert q["stale"] is True
+
+    def test_all_zero_returns_stale_false_mid_zero(self):
+        from trading_skills.broker.roll import _build_quote
+
+        t = self._make_ib_ticker(110, bid=0, ask=0, last=0)
+        q = _build_quote(t)
+        assert q["mid"] == 0
+        assert q["stale"] is False
