@@ -353,7 +353,10 @@ async def _find_roll(ib, symbol, current_position, chain_params, exchange, iv_mu
     atm_delta = current_quote.get("delta")
     if atm_iv is None:
         dte_current = days_to_expiry(current_position["expiry"])
-        atm_iv = _estimate_iv(underlying_price, current_quote["mid"], dte_current)
+        spot_for_iv = (
+            underlying_price if not math.isnan(underlying_price) else current_position["strike"]
+        )
+        atm_iv = _estimate_iv(spot_for_iv, current_quote["mid"], dte_current)
 
     # Get future expirations after current
     current_exp = current_position["expiry"]
@@ -363,8 +366,10 @@ async def _find_roll(ib, symbol, current_position, chain_params, exchange, iv_mu
         return {"error": "No future expirations available"}
 
     # Determine IV-scaled strike band using nearest roll expiry as time horizon.
+    # Fall back to current_strike when underlying price is unavailable.
+    spot = underlying_price if not math.isnan(underlying_price) else current_position["strike"]
     dte_roll = days_to_expiry(future_exps[0])
-    half_band = _compute_half_band(underlying_price, atm_iv, iv_multiplier, dte_roll)
+    half_band = _compute_half_band(spot, atm_iv, iv_multiplier, dte_roll)
     target_strikes = _select_roll_strikes(
         chain_params["strikes"], current_position["strike"], current_position["right"], half_band
     )

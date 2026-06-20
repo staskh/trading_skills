@@ -271,6 +271,12 @@ class TestComputeHalfBand:
         band_120 = _compute_half_band(spot=100.0, atm_iv=0.40, iv_multiplier=2.0, dte=120)
         assert band_120 == pytest.approx(2 * band_30, rel=0.01)
 
+    def test_nan_spot_returns_nan(self):
+        import math
+
+        band = _compute_half_band(spot=float("nan"), atm_iv=0.40, iv_multiplier=2.0, dte=30)
+        assert math.isnan(band)
+
 
 class TestSelectRollStrikes:
     """Tests for IV-aware strike band selection."""
