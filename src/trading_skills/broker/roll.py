@@ -6,6 +6,7 @@ import math
 import sys
 from datetime import datetime
 
+import yfinance as yf
 from ib_async import IB, Option, Stock
 
 from trading_skills.broker.connection import CLIENT_IDS, best_option_chain, ib_connection
@@ -162,17 +163,39 @@ async def get_long_option_position(
     return long_options[0]
 
 
-async def get_underlying_price(ib: IB, symbol: str, exchange: str | None = None) -> float:
-    """Get current underlying price (stock or continuous futures)."""
+def _get_stalled_price(symbol: str) -> float | None:
+    """Get last known price from yfinance when IB data is unavailable."""
+    try:
+        price = yf.Ticker(symbol).fast_info.last_price
+        if price and price > 0:
+            return float(price)
+    except Exception:
+        pass
+    return None
+
+
+async def get_underlying_price(
+    ib: IB, symbol: str, exchange: str | None = None
+) -> tuple[float, bool]:
+    """Get current underlying price. Returns (price, is_stalled).
+
+    Falls back to last known yfinance price when IB data is unavailable (e.g. off-hours).
+    """
     if exchange:
         contract = await front_future(ib, symbol, exchange)
         if contract is None:
-            return float("nan")
+            stalled = _get_stalled_price(symbol)
+            return (stalled or float("nan"), stalled is not None)
     else:
         contract = Stock(symbol, "SMART", "USD")
         await ib.qualifyContractsAsync(contract)
     [ticker] = await ib.reqTickersAsync(contract)
-    return ticker.marketPrice()
+    price = ticker.marketPrice()
+    if math.isnan(price):
+        stalled = _get_stalled_price(symbol)
+        if stalled:
+            return stalled, True
+    return price, False
 
 
 async def get_option_chain_params(ib: IB, symbol: str, exchange: str | None = None) -> dict:
@@ -330,7 +353,7 @@ def calculate_roll_options(current: dict, target_quotes: list, buy_price: float)
 
 async def _find_roll(ib, symbol, current_position, chain_params, exchange, iv_multiplier=2.0):
     """Find roll candidates for an existing short position."""
-    underlying_price = await get_underlying_price(ib, symbol, exchange)
+    underlying_price, price_stale = await get_underlying_price(ib, symbol, exchange)
 
     # Get current option quote for buy-to-close cost; also captures IV and delta.
     current_quotes = await get_option_quotes(
@@ -406,13 +429,15 @@ async def _find_roll(ib, symbol, current_position, chain_params, exchange, iv_mu
         "earnings_date": earnings_date,
         "expirations_analyzed": future_exps,
         "iv_multiplier": iv_multiplier,
+        "data_delay": "stalled - using last known price" if price_stale else "real-time",
     }
 
 
 async def _find_spread(ib, symbol, long_option, right, chain_params, exchange):
     """Find short candidates to create a vertical spread against a long option."""
-    underlying_price = await get_underlying_price(ib, symbol, exchange)
+    underlying_price, price_stale = await get_underlying_price(ib, symbol, exchange)
     if math.isnan(underlying_price):
+        # No live or stalled price — fall back to long strike as a last resort.
         underlying_price = long_option["strike"]
         print(
             f"{symbol} price unavailable, using long strike ${underlying_price:.2f}",
@@ -465,6 +490,7 @@ async def _find_spread(ib, symbol, long_option, right, chain_params, exchange):
         },
         "candidates_by_expiry": candidates_by_expiry,
         "expirations_analyzed": target_exps,
+        "data_delay": "stalled - using last known price" if price_stale else "real-time",
     }
 
 
@@ -472,7 +498,7 @@ async def _find_new_short(
     ib, symbol, long_position, right, chain_params, exchange, iv_multiplier=2.0
 ):
     """Find covered call/put candidates against a long stock position."""
-    underlying_price = await get_underlying_price(ib, symbol, exchange)
+    underlying_price, price_stale = await get_underlying_price(ib, symbol, exchange)
 
     # Future expirations from today
     today_str = datetime.now().strftime("%Y%m%d")
@@ -520,6 +546,7 @@ async def _find_new_short(
         "candidates_by_expiry": candidates_by_expiry,
         "expirations_analyzed": future_exps,
         "iv_multiplier": iv_multiplier,
+        "data_delay": "stalled - using last known price" if price_stale else "real-time",
     }
 
 

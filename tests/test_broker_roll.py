@@ -2,18 +2,20 @@
 # ABOUTME: Validates candidate evaluation and roll calculation logic.
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from trading_skills.broker.roll import (
     _compute_half_band,
     _estimate_iv,
+    _get_stalled_price,
     _select_roll_strikes,
     calculate_roll_options,
     evaluate_short_candidates,
     get_current_position,
     get_long_option_position,
+    get_underlying_price,
 )
 from trading_skills.utils import days_to_expiry
 
@@ -326,3 +328,69 @@ class TestSelectRollStrikes:
             self.ALL_STRIKES, current_strike=100.0, right="P", half_band=50.0
         )
         assert any(s > 100.0 for s in strikes)
+
+
+class TestGetStalledPrice:
+    """Tests for yfinance fallback price."""
+
+    def test_returns_price_when_available(self):
+        mock_fast_info = MagicMock()
+        mock_fast_info.last_price = 150.0
+        with patch("trading_skills.broker.roll.yf.Ticker") as mock_ticker:
+            mock_ticker.return_value.fast_info = mock_fast_info
+            price = _get_stalled_price("AAPL")
+        assert price == 150.0
+
+    def test_returns_none_when_zero(self):
+        mock_fast_info = MagicMock()
+        mock_fast_info.last_price = 0.0
+        with patch("trading_skills.broker.roll.yf.Ticker") as mock_ticker:
+            mock_ticker.return_value.fast_info = mock_fast_info
+            price = _get_stalled_price("AAPL")
+        assert price is None
+
+    def test_returns_none_on_exception(self):
+        with patch("trading_skills.broker.roll.yf.Ticker", side_effect=Exception("network error")):
+            price = _get_stalled_price("AAPL")
+        assert price is None
+
+
+class TestGetUnderlyingPriceStale:
+    """get_underlying_price must return (price, stalled=True) when IB data is unavailable."""
+
+    @pytest.mark.asyncio
+    async def test_returns_realtime_when_ib_has_price(self):
+        ib = MagicMock()
+        ticker = MagicMock()
+        ticker.marketPrice.return_value = 175.0
+        ib.qualifyContractsAsync = AsyncMock(return_value=[])
+        ib.reqTickersAsync = AsyncMock(return_value=[ticker])
+        price, stalled = await get_underlying_price(ib, "AAPL")
+        assert price == 175.0
+        assert stalled is False
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_yfinance_when_ib_returns_nan(self):
+        ib = MagicMock()
+        ticker = MagicMock()
+        ticker.marketPrice.return_value = float("nan")
+        ib.qualifyContractsAsync = AsyncMock(return_value=[])
+        ib.reqTickersAsync = AsyncMock(return_value=[ticker])
+        with patch("trading_skills.broker.roll._get_stalled_price", return_value=170.0):
+            price, stalled = await get_underlying_price(ib, "AAPL")
+        assert price == 170.0
+        assert stalled is True
+
+    @pytest.mark.asyncio
+    async def test_returns_nan_when_both_ib_and_yfinance_fail(self):
+        import math
+
+        ib = MagicMock()
+        ticker = MagicMock()
+        ticker.marketPrice.return_value = float("nan")
+        ib.qualifyContractsAsync = AsyncMock(return_value=[])
+        ib.reqTickersAsync = AsyncMock(return_value=[ticker])
+        with patch("trading_skills.broker.roll._get_stalled_price", return_value=None):
+            price, stalled = await get_underlying_price(ib, "AAPL")
+        assert math.isnan(price)
+        assert stalled is False

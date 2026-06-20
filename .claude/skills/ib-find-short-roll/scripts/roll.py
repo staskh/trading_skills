@@ -38,7 +38,7 @@ async def main():
     )
 
     result["generated_at"] = generated_at_str()
-    result["data_delay"] = "real-time"
+    result.setdefault("data_delay", "real-time")
     print(json.dumps(result, indent=2, default=str))
 
 
