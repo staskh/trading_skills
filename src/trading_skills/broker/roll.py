@@ -174,12 +174,23 @@ def _get_stalled_price(symbol: str) -> float | None:
     return None
 
 
+def _best_price(ticker) -> tuple[float, bool]:
+    """Extract the best available price from a ticker, with stale fallback to close price."""
+    price = ticker.marketPrice()
+    if not math.isnan(price):
+        return price, False
+    close = ticker.close
+    if close and not math.isnan(close) and close > 0:
+        return close, True
+    return float("nan"), False
+
+
 async def get_underlying_price(
     ib: IB, symbol: str, exchange: str | None = None
 ) -> tuple[float, bool]:
     """Get current underlying price. Returns (price, is_stalled).
 
-    Falls back to last known yfinance price when IB data is unavailable (e.g. off-hours).
+    Priority: live marketPrice() → IB close (previous session) → yfinance last price.
     """
     if exchange:
         contract = await front_future(ib, symbol, exchange)
@@ -190,12 +201,12 @@ async def get_underlying_price(
         contract = Stock(symbol, "SMART", "USD")
         await ib.qualifyContractsAsync(contract)
     [ticker] = await ib.reqTickersAsync(contract)
-    price = ticker.marketPrice()
+    price, stale = _best_price(ticker)
     if math.isnan(price):
         stalled = _get_stalled_price(symbol)
         if stalled:
             return stalled, True
-    return price, False
+    return price, stale
 
 
 async def get_option_chain_params(ib: IB, symbol: str, exchange: str | None = None) -> dict:
@@ -228,13 +239,17 @@ def _build_quote(t) -> dict:
     bid = t.bid if t.bid and t.bid > 0 else 0
     ask = t.ask if t.ask and t.ask > 0 else 0
     last = t.last if t.last and t.last > 0 else 0
+    close = t.close if t.close and not math.isnan(t.close) and t.close > 0 else 0
 
     if bid > 0 or ask > 0:
         mid = (bid + ask) / 2 if bid and ask else (bid or ask)
         stale = False
     elif last > 0:
-        # No live bid/ask — use last traded price (market closed).
         mid = last
+        stale = True
+    elif close > 0:
+        # No live bid/ask or last trade — use previous session close.
+        mid = close
         stale = True
     else:
         mid = 0

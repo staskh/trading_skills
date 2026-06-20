@@ -346,6 +346,40 @@ class TestSelectRollStrikes:
         assert any(s > 100.0 for s in strikes)
 
 
+class TestBestPrice:
+    """_best_price prefers live marketPrice, falls back to IB close."""
+
+    def _make_ticker(self, market_price, close=float("nan")):
+        t = MagicMock()
+        t.marketPrice.return_value = market_price
+        t.close = close
+        return t
+
+    def test_live_price_not_stale(self):
+        from trading_skills.broker.roll import _best_price
+
+        price, stale = _best_price(self._make_ticker(150.0))
+        assert price == pytest.approx(150.0)
+        assert stale is False
+
+    def test_falls_back_to_close_when_market_price_nan(self):
+
+        from trading_skills.broker.roll import _best_price
+
+        price, stale = _best_price(self._make_ticker(float("nan"), close=148.0))
+        assert price == pytest.approx(148.0)
+        assert stale is True
+
+    def test_returns_nan_when_both_unavailable(self):
+        import math
+
+        from trading_skills.broker.roll import _best_price
+
+        price, stale = _best_price(self._make_ticker(float("nan"), close=float("nan")))
+        assert math.isnan(price)
+        assert stale is False
+
+
 class TestGetStalledPrice:
     """Tests for yfinance fallback price."""
 
@@ -386,10 +420,23 @@ class TestGetUnderlyingPriceStale:
         assert stalled is False
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_yfinance_when_ib_returns_nan(self):
+    async def test_falls_back_to_ib_close_when_market_price_nan(self):
         ib = MagicMock()
         ticker = MagicMock()
         ticker.marketPrice.return_value = float("nan")
+        ticker.close = 148.0
+        ib.qualifyContractsAsync = AsyncMock(return_value=[])
+        ib.reqTickersAsync = AsyncMock(return_value=[ticker])
+        price, stalled = await get_underlying_price(ib, "AAPL")
+        assert price == pytest.approx(148.0)
+        assert stalled is True
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_yfinance_when_ib_and_close_unavailable(self):
+        ib = MagicMock()
+        ticker = MagicMock()
+        ticker.marketPrice.return_value = float("nan")
+        ticker.close = float("nan")
         ib.qualifyContractsAsync = AsyncMock(return_value=[])
         ib.reqTickersAsync = AsyncMock(return_value=[ticker])
         with patch("trading_skills.broker.roll._get_stalled_price", return_value=170.0):
@@ -398,12 +445,13 @@ class TestGetUnderlyingPriceStale:
         assert stalled is True
 
     @pytest.mark.asyncio
-    async def test_returns_nan_when_both_ib_and_yfinance_fail(self):
+    async def test_returns_nan_when_all_sources_fail(self):
         import math
 
         ib = MagicMock()
         ticker = MagicMock()
         ticker.marketPrice.return_value = float("nan")
+        ticker.close = float("nan")
         ib.qualifyContractsAsync = AsyncMock(return_value=[])
         ib.reqTickersAsync = AsyncMock(return_value=[ticker])
         with patch("trading_skills.broker.roll._get_stalled_price", return_value=None):
@@ -415,7 +463,7 @@ class TestGetUnderlyingPriceStale:
 class TestOptionQuoteStale:
     """Option quotes use last traded price as fallback when bid/ask are zero."""
 
-    def _make_ib_ticker(self, strike, bid, ask, last):
+    def _make_ib_ticker(self, strike, bid, ask, last, close=float("nan")):
         contract = MagicMock()
         contract.strike = strike
         contract.lastTradeDateOrContractMonth = "20260717"
@@ -424,6 +472,7 @@ class TestOptionQuoteStale:
         t.bid = bid
         t.ask = ask
         t.last = last
+        t.close = close
         t.modelGreeks = None
         t.bidGreeks = None
         t.lastGreeks = None
@@ -446,10 +495,18 @@ class TestOptionQuoteStale:
         assert q["mid"] == pytest.approx(2.2)
         assert q["stale"] is True
 
+    def test_stale_quote_uses_close_when_last_is_zero(self):
+        from trading_skills.broker.roll import _build_quote
+
+        t = self._make_ib_ticker(110, bid=0, ask=0, last=0, close=2.5)
+        q = _build_quote(t)
+        assert q["mid"] == pytest.approx(2.5)
+        assert q["stale"] is True
+
     def test_all_zero_returns_stale_false_mid_zero(self):
         from trading_skills.broker.roll import _build_quote
 
-        t = self._make_ib_ticker(110, bid=0, ask=0, last=0)
+        t = self._make_ib_ticker(110, bid=0, ask=0, last=0, close=float("nan"))
         q = _build_quote(t)
         assert q["mid"] == 0
         assert q["stale"] is False
