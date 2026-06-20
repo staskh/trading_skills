@@ -7,9 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from trading_skills.broker.roll import (
+    _bs_delta,
+    _bs_iv,
     _compute_half_band,
+    _enrich_with_greeks,
     _estimate_iv,
     _get_stalled_price,
+    _norm_cdf,
     _select_roll_strikes,
     calculate_roll_options,
     evaluate_short_candidates,
@@ -510,3 +514,120 @@ class TestOptionQuoteStale:
         q = _build_quote(t)
         assert q["mid"] == 0
         assert q["stale"] is False
+
+
+class TestBlackScholes:
+    """Black-Scholes delta, IV, and norm_cdf."""
+
+    def test_norm_cdf_at_zero(self):
+        assert _norm_cdf(0.0) == pytest.approx(0.5, abs=1e-6)
+
+    def test_norm_cdf_large_positive(self):
+        assert _norm_cdf(10.0) == pytest.approx(1.0, abs=1e-6)
+
+    def test_norm_cdf_large_negative(self):
+        assert _norm_cdf(-10.0) == pytest.approx(0.0, abs=1e-6)
+
+    def test_atm_call_delta_approx_half(self):
+        # ATM call delta should be ~0.5
+        delta = _bs_delta(spot=100.0, strike=100.0, dte=30, iv=0.40, right="C")
+        assert 0.45 < delta < 0.60
+
+    def test_atm_put_delta_approx_minus_half(self):
+        delta = _bs_delta(spot=100.0, strike=100.0, dte=30, iv=0.40, right="P")
+        assert -0.60 < delta < -0.40
+
+    def test_put_call_delta_parity(self):
+        # call_delta - put_delta = 1 (put-call parity for delta)
+        call_d = _bs_delta(100.0, 110.0, 30, 0.40, "C")
+        put_d = _bs_delta(100.0, 110.0, 30, 0.40, "P")
+        assert call_d - put_d == pytest.approx(1.0, abs=1e-6)
+
+    def test_deep_itm_call_delta_near_one(self):
+        delta = _bs_delta(spot=150.0, strike=100.0, dte=30, iv=0.30, right="C")
+        assert delta > 0.90
+
+    def test_deep_otm_call_delta_near_zero(self):
+        delta = _bs_delta(spot=100.0, strike=200.0, dte=30, iv=0.30, right="C")
+        assert delta < 0.05
+
+    def test_bs_iv_roundtrip(self):
+        # Synthesise a price from known IV and recover it
+        from trading_skills.broker.roll import _bs_price
+
+        spot, strike, dte, iv = 100.0, 105.0, 30, 0.45
+        price = _bs_price(spot, strike, dte, iv, "C")
+        recovered = _bs_iv(spot, strike, dte, price, "C")
+        assert recovered == pytest.approx(iv, rel=0.01)
+
+    def test_bs_iv_returns_nan_for_zero_price(self):
+        import math
+
+        iv = _bs_iv(100.0, 110.0, 30, 0.0, "C")
+        assert math.isnan(iv)
+
+
+class TestEnrichWithGreeks:
+    """_enrich_with_greeks fills in missing iv/delta from Black-Scholes."""
+
+    def test_fills_missing_iv_and_delta(self):
+        candidates = [
+            {"strike": 105.0, "expiry": "20260720", "sell_price": 3.0, "iv": None, "delta": None}
+        ]
+        _enrich_with_greeks(candidates, spot=100.0, right="C")
+        assert candidates[0]["iv"] is not None
+        assert candidates[0]["iv"] > 0
+        assert candidates[0]["delta"] is not None
+
+    def test_does_not_overwrite_existing_iv(self):
+        candidates = [
+            {"strike": 105.0, "expiry": "20260720", "sell_price": 3.0, "iv": 0.42, "delta": 0.35}
+        ]
+        _enrich_with_greeks(candidates, spot=100.0, right="C")
+        assert candidates[0]["iv"] == pytest.approx(0.42)
+        assert candidates[0]["delta"] == pytest.approx(0.35)
+
+    def test_skips_zero_price_candidates(self):
+        candidates = [
+            {"strike": 200.0, "expiry": "20260720", "sell_price": 0.0, "iv": None, "delta": None}
+        ]
+        _enrich_with_greeks(candidates, spot=100.0, right="C")
+        # IV can't be computed without price — should stay None or get delta from default IV
+        assert candidates[0]["iv"] is None
+
+    def test_calculate_roll_options_passes_through_greeks(self):
+        current = {"strike": 100, "expiry": "20250221"}
+        target_quotes = [
+            {
+                "strike": 105,
+                "expiry": "20250321",
+                "bid": 3.0,
+                "ask": 3.5,
+                "mid": 3.25,
+                "last": 3,
+                "iv": 0.45,
+                "delta": 0.38,
+            }
+        ]
+        result = calculate_roll_options(current, target_quotes, buy_price=1.0)
+        assert len(result) == 1
+        assert result[0]["iv"] == pytest.approx(0.45)
+        assert result[0]["delta"] == pytest.approx(0.38)
+
+    def test_evaluate_short_candidates_passes_through_greeks(self):
+        quotes = [
+            {
+                "strike": 110,
+                "expiry": "20250321",
+                "bid": 2.0,
+                "ask": 2.5,
+                "mid": 2.25,
+                "last": 2,
+                "iv": 0.50,
+                "delta": 0.30,
+            }
+        ]
+        result = evaluate_short_candidates(quotes, 100.0, "C", 30)
+        assert len(result) == 1
+        assert result[0]["iv"] == pytest.approx(0.50)
+        assert result[0]["delta"] == pytest.approx(0.30)

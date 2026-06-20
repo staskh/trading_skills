@@ -5,6 +5,7 @@ import asyncio
 import math
 import sys
 from datetime import datetime
+from math import erf, log, sqrt
 
 import yfinance as yf
 from ib_async import IB, Option, Stock
@@ -35,6 +36,65 @@ def _compute_half_band(spot: float, atm_iv: float, iv_multiplier: float, dte: fl
     """Compute half strike band width using expected move: k × σ × S × √(T/365)."""
     T = max(dte, 1) / 365
     return iv_multiplier * atm_iv * spot * math.sqrt(T)
+
+
+def _norm_cdf(x: float) -> float:
+    """Standard normal CDF via math.erf."""
+    return 0.5 * (1.0 + erf(x / sqrt(2.0)))
+
+
+def _bs_price(spot: float, strike: float, dte: float, iv: float, right: str = "C") -> float:
+    """Black-Scholes option price (r=0)."""
+    T = max(dte, 0.5) / 365
+    if iv <= 0 or spot <= 0 or strike <= 0:
+        return float("nan")
+    d1 = (log(spot / strike) + 0.5 * iv**2 * T) / (iv * sqrt(T))
+    d2 = d1 - iv * sqrt(T)
+    if right == "C":
+        return spot * _norm_cdf(d1) - strike * _norm_cdf(d2)
+    return strike * _norm_cdf(-d2) - spot * _norm_cdf(-d1)
+
+
+def _bs_iv(spot: float, strike: float, dte: float, price: float, right: str = "C") -> float:
+    """Black-Scholes implied volatility via bisection (50 iterations)."""
+    if price <= 0 or spot <= 0 or strike <= 0:
+        return float("nan")
+    lo, hi = 1e-4, 10.0
+    for _ in range(50):
+        mid = (lo + hi) / 2
+        if _bs_price(spot, strike, dte, mid, right) > price:
+            hi = mid
+        else:
+            lo = mid
+    return (lo + hi) / 2
+
+
+def _bs_delta(spot: float, strike: float, dte: float, iv: float, right: str = "C") -> float:
+    """Black-Scholes delta (r=0)."""
+    T = max(dte, 0.5) / 365
+    if iv <= 0 or spot <= 0 or strike <= 0:
+        return float("nan")
+    d1 = (log(spot / strike) + 0.5 * iv**2 * T) / (iv * sqrt(T))
+    if right == "C":
+        return _norm_cdf(d1)
+    return _norm_cdf(d1) - 1.0
+
+
+def _enrich_with_greeks(candidates: list, spot: float, right: str) -> None:
+    """Fill missing iv/delta in-place using Black-Scholes when IB greeks are unavailable."""
+    if math.isnan(spot) or spot <= 0:
+        return
+    for c in candidates:
+        dte = days_to_expiry(c.get("expiry", ""))
+        price = c.get("sell_price") or c.get("bid") or c.get("mid", 0)
+        if c.get("iv") is None:
+            if price > 0:
+                iv = _bs_iv(spot, c["strike"], dte, price, right)
+                c["iv"] = iv if not math.isnan(iv) else None
+        if c.get("delta") is None:
+            iv = c.get("iv") or _DEFAULT_IV
+            if iv and not math.isnan(iv):
+                c["delta"] = _bs_delta(spot, c["strike"], dte, iv, right)
 
 
 def _select_roll_strikes(
@@ -348,6 +408,8 @@ def evaluate_short_candidates(
                 "annual_return": annual_return,
                 "days": days_to_exp,
                 "score": total_score,
+                "iv": quote.get("iv"),
+                "delta": quote.get("delta"),
             }
         )
 
@@ -372,6 +434,8 @@ def calculate_roll_options(current: dict, target_quotes: list, buy_price: float)
                 "buy_price": buy_price,
                 "net": net,
                 "net_type": "credit" if net > 0 else "debit",
+                "iv": quote.get("iv"),
+                "delta": quote.get("delta"),
             }
         )
 
@@ -427,14 +491,15 @@ async def _find_roll(ib, symbol, current_position, chain_params, exchange, iv_mu
 
     # Fetch quotes for each target expiration
     roll_data = {}
+    right = current_position["right"]
     for exp in future_exps:
-        quotes = await get_option_quotes(
-            ib, symbol, exp, target_strikes, current_position["right"], exchange
-        )
+        quotes = await get_option_quotes(ib, symbol, exp, target_strikes, right, exchange)
         # Exclude rolling into the exact same (expiry, strike) already held.
         if exp == current_exp:
             quotes = [q for q in quotes if q["strike"] != current_position["strike"]]
-        roll_data[exp] = calculate_roll_options(current_position, quotes, buy_price)
+        candidates = calculate_roll_options(current_position, quotes, buy_price)
+        _enrich_with_greeks(candidates, spot, right)
+        roll_data[exp] = candidates
 
     earnings_date = get_next_earnings_date(symbol)
 
@@ -499,6 +564,7 @@ async def _find_spread(ib, symbol, long_option, right, chain_params, exchange):
         dte = days_to_expiry(exp)
         candidates = evaluate_short_candidates(quotes, underlying_price, right, dte)
         if candidates:
+            _enrich_with_greeks(candidates, underlying_price, right)
             candidates_by_expiry[exp] = candidates
 
     earnings_date = get_next_earnings_date(symbol)
@@ -557,6 +623,7 @@ async def _find_new_short(
         dte = days_to_expiry(exp)
         candidates = evaluate_short_candidates(quotes, underlying_price, right, dte)
         if candidates:
+            _enrich_with_greeks(candidates, underlying_price, right)
             candidates_by_expiry[exp] = candidates
 
     earnings_date = get_next_earnings_date(symbol)
