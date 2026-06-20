@@ -23,6 +23,7 @@ def compute_bullish_score(symbol: str, period: str = "3mo", ticker=None) -> dict
     try:
         ticker = ticker or yf.Ticker(symbol)
         df = ticker.history(period=period)
+        df = df.dropna(subset=["Close"])
 
         if df.empty or len(df) < 50:
             return None

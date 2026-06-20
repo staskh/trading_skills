@@ -16,6 +16,10 @@ def get_history(symbol: str, period: str = "1mo", interval: str = "1d") -> dict:
     if df.empty:
         return {"error": f"No history data for {symbol}"}
 
+    df = df.dropna(subset=["Close"])
+    if df.empty:
+        return {"error": f"No history data for {symbol}"}
+
     data = []
     for date, row in df.iterrows():
         data.append(
