@@ -9,11 +9,13 @@ import yfinance as yf
 
 from trading_skills.broker.connection import (
     CLIENT_IDS,
+    fetch_futures_spot_prices,
     fetch_positions,
     fetch_spot_prices,
     ib_connection,
     normalize_positions,
 )
+from trading_skills.broker.futures import futures_yahoo_ticker
 from trading_skills.earnings import get_earnings_info
 from trading_skills.technicals import compute_raw_indicators
 from trading_skills.utils import _NY, days_to_expiry, generated_at_str
@@ -293,7 +295,7 @@ async def get_portfolio_data(port: int, account: str = None) -> dict:
                 pos["avg_cost"] = round(pos["avg_cost"], 2)
                 positions_by_account[acc].append(pos)
 
-            # Collect symbols, excluding futures
+            # Collect symbols, separating futures from equities
             symbols = set()
             futures_symbols = set()
             for positions in positions_by_account.values():
@@ -305,6 +307,8 @@ async def get_portfolio_data(port: int, account: str = None) -> dict:
 
             symbols = symbols - futures_symbols
             prices = await fetch_spot_prices(ib, list(symbols))
+            # Futures underlyings are priced via IB continuous futures (yfinance can't).
+            prices.update(await fetch_futures_spot_prices(ib, list(futures_symbols)))
             # Round prices for display
             prices = {k: round(v, 2) for k, v in prices.items()}
 
@@ -329,24 +333,33 @@ def analyze_portfolio(data: dict) -> dict:
     positions_by_account = data.get("positions", {})
     prices = data.get("prices", {})
 
-    # Fetch earnings dates
+    # Collect symbols, separating futures from equities
     all_symbols = set()
+    futures_symbols = set()
     for positions in positions_by_account.values():
         for pos in positions:
             all_symbols.add(pos["symbol"])
+            if pos["sec_type"] in ("FUT", "FOP"):
+                futures_symbols.add(pos["symbol"])
 
     print("Fetching earnings dates...", file=sys.stderr)
     earnings = {}
     earnings_timing = {}
     for sym in all_symbols:
-        result = fetch_earnings_date(sym)
-        earnings[sym] = result.get("earnings_date")
-        earnings_timing[sym] = result.get("earnings_timing")
+        if sym in futures_symbols:
+            # Futures have no earnings; skip the failing yfinance lookup.
+            earnings[sym] = None
+            earnings_timing[sym] = None
+        else:
+            result = fetch_earnings_date(sym)
+            earnings[sym] = result.get("earnings_date")
+            earnings_timing[sym] = result.get("earnings_timing")
 
     print("Fetching technical indicators...", file=sys.stderr)
     technicals = {}
     for sym in all_symbols:
-        technicals[sym] = fetch_technicals(sym)
+        yf_ticker = futures_yahoo_ticker(sym) if sym in futures_symbols else sym
+        technicals[sym] = fetch_technicals(yf_ticker)
 
     # Add days_to_exp and underlying_price to all positions
     for acc, positions in positions_by_account.items():

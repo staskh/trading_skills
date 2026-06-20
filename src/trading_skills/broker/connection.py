@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from ib_async import IB, Stock
 
+from trading_skills.broker.futures import detect_future_exchange, front_future
 from trading_skills.utils import fetch_with_timeout
 
 # Documented clientId allocation — one source of truth for all broker modules.
@@ -129,3 +130,46 @@ async def fetch_spot_prices(ib: IB, symbols: list[str], timeout: float = 15.0) -
         if price and price > 0:
             prices[ticker.contract.symbol] = price
     return prices
+
+
+async def fetch_futures_spot_prices(
+    ib: IB, symbols: list[str], timeout: float = 15.0
+) -> dict[str, float]:
+    """Fetch spot prices for futures underlyings via IB continuous futures.
+
+    yfinance cannot price futures by bare symbol (e.g. "NQ"), so this uses IB
+    ContFuture contracts. Exchange is resolved dynamically from IB contract details.
+    Symbols whose exchange cannot be determined are silently skipped.
+    """
+    if not symbols:
+        return {}
+
+    pairs = await asyncio.gather(
+        *[_resolve_front_future(ib, sym) for sym in symbols], return_exceptions=True
+    )
+    contracts = [c for p in pairs if isinstance(p, tuple) and p[1] for _, c in [p]]
+    if not contracts:
+        return {}
+
+    tickers = [ib.reqMktData(c, "", False, False) for c in contracts]
+    await asyncio.sleep(3)
+    for c in contracts:
+        ib.cancelMktData(c)
+
+    prices = {}
+    for ticker in tickers:
+        if not ticker.contract:
+            continue
+        price = ticker.marketPrice()
+        if price and price > 0:
+            prices[ticker.contract.symbol] = price
+    return prices
+
+
+async def _resolve_front_future(ib: IB, symbol: str):
+    """Return (symbol, contract) for the front-month continuous future, or (symbol, None)."""
+    exchange = await detect_future_exchange(ib, symbol)
+    if not exchange:
+        return symbol, None
+    contract = await front_future(ib, symbol, exchange)
+    return symbol, contract
