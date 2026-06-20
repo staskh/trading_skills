@@ -25,7 +25,7 @@ If both ports fail, ask the user to verify that TWS or IB Gateway is running wit
 > **Note:** If `uv` is not installed or `pyproject.toml` is not found, replace `uv run python` with `python` in all commands below.
 
 ```bash
-uv run python scripts/roll.py SYMBOL [--strike STRIKE] [--expiry YYYYMMDD] [--right C|P] [--port PORT] [--account ACCOUNT]
+uv run python scripts/roll.py SYMBOL [--strike STRIKE] [--expiry YYYYMMDD] [--right C|P] [--port PORT] [--account ACCOUNT] [--iv-multiplier N]
 ```
 
 The script returns JSON to stdout with all position and candidate data.
@@ -53,6 +53,7 @@ Present key findings to the user: recommended position, credit/debit, and the sa
 - `--right` - Option type: C for call, P for put (default: C)
 - `--port` - IB port (default: 7497 for paper trading)
 - `--account` - Specific account ID (optional)
+- `--iv-multiplier` - Expected-move multiplier for strike band width (default: 2.0); increase for high-IV names to surface wider roll candidates
 
 ## JSON Output
 
@@ -68,9 +69,12 @@ The script outputs JSON with `mode` field indicating the analysis type:
 - `expirations_analyzed` - List of expiry dates checked
 
 ### Mode-specific Fields
-- **roll**: `current_position`, `buy_to_close`, `roll_candidates` (dict of expiry -> candidates)
+- **roll**: `current_position` (includes `iv` and `delta` from IB greeks), `buy_to_close`, `roll_candidates` (dict of expiry -> candidates), `iv_multiplier`
 - **spread**: `long_option`, `right`, `candidates_by_expiry`
-- **new_short**: `long_position`, `right`, `candidates_by_expiry`
+- **new_short**: `long_position`, `right`, `candidates_by_expiry`, `iv_multiplier`
+
+### Strike Band Logic (roll and new_short modes)
+The strike search window is IV-aware: `half_band = iv_multiplier × ATM_IV × spot × √(T/365)` where T is the DTE of the nearest roll expiry. For roll mode, ATM IV comes from IB model greeks on the current position's quote; if unavailable, it is estimated from the option mid-price using the Brenner-Subrahmanyam approximation. For new_short mode, a conservative default IV of 30% is used. This makes the band automatically wider for high-IV underlyings without requiring a manual override.
 
 ## Example Usage
 
