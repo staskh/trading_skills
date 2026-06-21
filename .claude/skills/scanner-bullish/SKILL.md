@@ -22,7 +22,7 @@ uv run python scripts/scan.py SYMBOLS [--top N] [--period PERIOD]
 - `--top` - Number of top results to return (default: 30)
 - `--period` - Historical period for analysis: 1mo, 3mo, 6mo (default: 3mo)
 
-## Scoring System (max ~8 points)
+## Scoring System (max ~8.5 points)
 
 | Indicator | Condition | Points |
 |-----------|-----------|--------|
@@ -33,9 +33,11 @@ uv run python scripts/scan.py SYMBOLS [--top N] [--period PERIOD]
 | | <30 (oversold) | +0.25 |
 | MACD | MACD > Signal | +1.0 |
 | | Histogram rising | +0.5 |
+| EMA9/21 | EMA9 > EMA21 (golden cross) | +0.5 |
+| | EMA9 < EMA21 (death cross) | -0.25 |
 | ADX | >25 with +DI > -DI | +1.5 |
 | | +DI > -DI only | +0.5 |
-| Momentum | 3mo return / 20 | -1 to +2 |
+| Momentum | period return / 20 | -1 to +2 |
 
 ## Output
 
@@ -47,10 +49,21 @@ Returns JSON with:
   - `next_earnings`, `earnings_timing` (BMO/AMC)
   - `period_return_pct`, `pct_from_sma20`, `pct_from_sma50`
   - `rsi`, `macd`, `macd_signal`, `macd_hist`, `adx`, `dmp`, `dmn`
+  - `ema9`, `ema21` — current EMA9 and EMA21 values
+  - `ema_crossover` - Most recent EMA9/EMA21 crossover (or `null` if none found):
+    - `direction` - `"up"` (EMA9 crossed above EMA21 = bullish) or `"down"` (crossed below = bearish)
+    - `days_ago` - Trading days since the crossover bar (0 = happened in the most recent bar)
   - `macd_crossover` - Most recent MACD crossover (or `null` if none found):
     - `direction` - `"up"` (MACD crossed above signal = bullish) or `"down"` (crossed below = bearish)
     - `days_ago` - Trading days since the crossover bar (0 = happened in the most recent bar)
   - `signals` - List of triggered conditions
+
+## EMA Crossover Interpretation
+
+- EMA9 > EMA21 with small `days_ago` (0-5): fresh golden cross — short-term momentum confirmed
+- EMA9 just crossed below EMA21: death cross — short-term momentum turning negative
+- EMA9 crossover lagging MACD crossover by days: normal — MACD leads, EMA confirms
+- `null`: EMA9/21 relationship unchanged throughout the period
 
 ## MACD Crossover Interpretation
 

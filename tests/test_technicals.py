@@ -9,6 +9,7 @@ from trading_skills.technicals import (
     compute_indicators,
     compute_multi_symbol,
     compute_raw_indicators,
+    detect_ema_crossover,
     detect_macd_crossover,
     get_earnings_data,
 )
@@ -188,6 +189,78 @@ class TestDetectMacdCrossover:
         assert result is None
 
 
+class TestDetectEmaCrossover:
+    """Tests for EMA9/EMA21 crossover detection using synthetic Series."""
+
+    def _make_series(self, values):
+        return pd.Series(values, dtype=float)
+
+    def test_detects_up_crossover(self):
+        # ema9 crosses above ema21: diff goes negative to positive
+        ema9  = self._make_series([8.0, 9.0, 11.0, 12.0])
+        ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
+        result = detect_ema_crossover(ema9, ema21)
+        assert result is not None
+        assert result["direction"] == "up"
+        assert result["days_ago"] == 1
+
+    def test_detects_down_crossover(self):
+        # ema9 crosses below ema21
+        ema9  = self._make_series([12.0, 11.0, 9.0, 8.0])
+        ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
+        result = detect_ema_crossover(ema9, ema21)
+        assert result is not None
+        assert result["direction"] == "down"
+        assert result["days_ago"] == 1
+
+    def test_crossover_at_current_bar(self):
+        ema9  = self._make_series([9.0, 11.0])
+        ema21 = self._make_series([10.0, 10.0])
+        result = detect_ema_crossover(ema9, ema21)
+        assert result is not None
+        assert result["direction"] == "up"
+        assert result["days_ago"] == 0
+
+    def test_returns_most_recent_crossover(self):
+        # Two crossovers: down at index 2, up at index 3
+        ema9  = self._make_series([9.0, 11.0, 9.0, 11.0])
+        ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
+        result = detect_ema_crossover(ema9, ema21)
+        assert result is not None
+        assert result["direction"] == "up"
+        assert result["days_ago"] == 0
+
+    def test_no_crossover_ema9_always_above(self):
+        ema9  = self._make_series([11.0, 12.0, 13.0, 14.0])
+        ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
+        result = detect_ema_crossover(ema9, ema21)
+        assert result is None
+
+    def test_no_crossover_ema9_always_below(self):
+        ema9  = self._make_series([9.0, 8.0, 7.0, 6.0])
+        ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
+        result = detect_ema_crossover(ema9, ema21)
+        assert result is None
+
+    def test_handles_leading_nans(self):
+        ema9  = self._make_series([float("nan"), float("nan"), 9.0, 11.0])
+        ema21 = self._make_series([float("nan"), float("nan"), 10.0, 10.0])
+        result = detect_ema_crossover(ema9, ema21)
+        assert result is not None
+        assert result["direction"] == "up"
+        assert result["days_ago"] == 0
+
+    def test_too_short_returns_none(self):
+        ema9  = self._make_series([11.0])
+        ema21 = self._make_series([10.0])
+        result = detect_ema_crossover(ema9, ema21)
+        assert result is None
+
+    def test_empty_returns_none(self):
+        result = detect_ema_crossover(self._make_series([]), self._make_series([]))
+        assert result is None
+
+
 class TestComputeRawIndicators:
     """Tests for raw indicator extraction from DataFrame."""
 
@@ -219,11 +292,31 @@ class TestComputeRawIndicators:
             "macd_hist",
             "prev_macd_hist",
             "macd_crossover",
+            "ema9",
+            "ema21",
+            "ema_crossover",
             "adx",
             "dmp",
             "dmn",
         }
         assert expected_keys.issubset(raw.keys())
+
+    def test_ema_values(self):
+        df = self._make_df()
+        raw = compute_raw_indicators(df)
+        assert raw["ema9"] is not None
+        assert raw["ema21"] is not None
+        assert isinstance(raw["ema9"], float)
+        assert isinstance(raw["ema21"], float)
+
+    def test_ema_crossover_structure(self):
+        df = self._make_df()
+        raw = compute_raw_indicators(df)
+        xover = raw["ema_crossover"]
+        if xover is not None:
+            assert xover["direction"] in ("up", "down")
+            assert isinstance(xover["days_ago"], int)
+            assert xover["days_ago"] >= 0
 
     def test_macd_crossover_structure(self):
         df = self._make_df()

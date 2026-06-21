@@ -88,6 +88,18 @@ def compute_bullish_score(symbol: str, period: str = "3mo", ticker=None) -> dict
                 score += 0.5
                 signals.append("MACD momentum rising")
 
+        # EMA9/EMA21 analysis
+        ema9_val = raw["ema9"]
+        ema21_val = raw["ema21"]
+
+        if ema9_val is not None and ema21_val is not None:
+            if ema9_val > ema21_val:
+                score += 0.5
+                signals.append("EMA9 > EMA21 (golden cross)")
+            else:
+                score -= 0.25
+                signals.append("EMA9 < EMA21 (death cross)")
+
         # ADX analysis
         adx_val = raw["adx"]
         dmp = raw["dmp"]
@@ -119,6 +131,9 @@ def compute_bullish_score(symbol: str, period: str = "3mo", ticker=None) -> dict
             "macd_signal": round(macd_signal, 4) if macd_signal else None,
             "macd_hist": round(macd_hist, 4) if macd_hist else None,
             "macd_crossover": raw["macd_crossover"],
+            "ema9": round(ema9_val, 4) if ema9_val else None,
+            "ema21": round(ema21_val, 4) if ema21_val else None,
+            "ema_crossover": raw["ema_crossover"],
             "adx": round(adx_val, 2) if adx_val else None,
             "dmp": round(dmp, 2) if dmp else None,
             "dmn": round(dmn, 2) if dmn else None,

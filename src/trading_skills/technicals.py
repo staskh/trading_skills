@@ -71,6 +71,28 @@ def detect_macd_crossover(macd_df: pd.DataFrame) -> dict | None:
     return None
 
 
+def detect_ema_crossover(ema_fast: pd.Series, ema_slow: pd.Series) -> dict | None:
+    """Find the most recent crossover between two EMA series (e.g. EMA9 vs EMA21).
+
+    Returns {"direction": "up"|"down", "days_ago": int} or None if no crossover
+    is found. "up" means ema_fast crossed above ema_slow (bullish).
+    "days_ago" is trading bars since the crossover bar.
+    """
+    diff = (ema_fast - ema_slow).dropna()
+    if len(diff) < 2:
+        return None
+
+    values = diff.to_numpy()
+    for i in range(len(values) - 1, 0, -1):
+        curr, prev = values[i], values[i - 1]
+        if curr > 0 and prev <= 0:
+            return {"direction": "up", "days_ago": len(values) - 1 - i}
+        if curr < 0 and prev >= 0:
+            return {"direction": "down", "days_ago": len(values) - 1 - i}
+
+    return None
+
+
 def compute_raw_indicators(df: pd.DataFrame) -> dict:
     """Extract raw technical indicator values from an OHLCV DataFrame.
 
@@ -87,6 +109,9 @@ def compute_raw_indicators(df: pd.DataFrame) -> dict:
         "macd_hist": None,
         "prev_macd_hist": None,
         "macd_crossover": None,
+        "ema9": None,
+        "ema21": None,
+        "ema_crossover": None,
         "adx": None,
         "dmp": None,
         "dmn": None,
@@ -116,6 +141,20 @@ def compute_raw_indicators(df: pd.DataFrame) -> dict:
         val = sma50.iloc[-1]
         if pd.notna(val):
             result["sma50"] = float(val)
+
+    # EMA9 / EMA21
+    ema9_series = ta.ema(close, length=9)
+    ema21_series = ta.ema(close, length=21)
+    if ema9_series is not None and len(ema9_series) > 0:
+        val = ema9_series.iloc[-1]
+        if pd.notna(val):
+            result["ema9"] = float(val)
+    if ema21_series is not None and len(ema21_series) > 0:
+        val = ema21_series.iloc[-1]
+        if pd.notna(val):
+            result["ema21"] = float(val)
+    if ema9_series is not None and ema21_series is not None:
+        result["ema_crossover"] = detect_ema_crossover(ema9_series, ema21_series)
 
     # MACD
     macd = ta.macd(close)

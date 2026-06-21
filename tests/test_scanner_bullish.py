@@ -44,6 +44,22 @@ class TestComputeBullishScore:
         assert result is not None
         assert isinstance(result["signals"], list)
 
+    def test_has_ema_fields(self):
+        result = compute_bullish_score("AAPL")
+        assert result is not None
+        assert "ema9" in result
+        assert "ema21" in result
+        assert "ema_crossover" in result
+
+    def test_ema_crossover_structure(self):
+        result = compute_bullish_score("AAPL")
+        assert result is not None
+        xover = result["ema_crossover"]
+        if xover is not None:
+            assert xover["direction"] in ("up", "down")
+            assert isinstance(xover["days_ago"], int)
+            assert xover["days_ago"] >= 0
+
     def test_has_macd_crossover_field(self):
         result = compute_bullish_score("AAPL")
         assert result is not None
