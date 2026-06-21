@@ -22,7 +22,7 @@ uv run python scripts/scan.py SYMBOLS [--top N] [--period PERIOD]
 - `--top` - Number of top results to return (default: 30)
 - `--period` - Historical period for analysis: 1mo, 3mo, 6mo (default: 3mo)
 
-## Scoring System (max ~8.5 points)
+## Scoring System (max ~9.5 points)
 
 | Indicator | Condition | Points |
 |-----------|-----------|--------|
@@ -35,6 +35,11 @@ uv run python scripts/scan.py SYMBOLS [--top N] [--period PERIOD]
 | | Histogram rising | +0.5 |
 | EMA9/21 | EMA9 > EMA21 (golden cross) | +0.5 |
 | | EMA9 < EMA21 (death cross) | -0.25 |
+| Dual crossover | Both up, both ≤10 days | +1.0 |
+| | Both up, any age | +0.5 |
+| | Both down, both ≤10 days | -1.0 |
+| | Both down, any age | -0.5 |
+| | Directions conflict | -0.5 |
 | ADX | >25 with +DI > -DI | +1.5 |
 | | +DI > -DI only | +0.5 |
 | Momentum | period return / 20 | -1 to +2 |

@@ -9,6 +9,59 @@ import yfinance as yf
 from trading_skills.earnings import get_earnings_info
 from trading_skills.technicals import compute_raw_indicators
 
+_FRESH_DAYS = 10
+
+
+def _score_dual_crossover(
+    ema_xover: dict | None, macd_xover: dict | None
+) -> tuple[float, str | None]:
+    """Score dual EMA9/21 + MACD crossover confirmation.
+
+    Returns (score_delta, signal_str). signal_str is None when no adjustment applies.
+    Both crossovers must be present; missing either returns (0.0, None).
+    """
+    if ema_xover is None or macd_xover is None:
+        return 0.0, None
+
+    ema_dir = ema_xover["direction"]
+    macd_dir = macd_xover["direction"]
+    ema_days = ema_xover["days_ago"]
+    macd_days = macd_xover["days_ago"]
+
+    if ema_dir != macd_dir:
+        signal = (
+            f"Crossover conflict: EMA {ema_dir} ({ema_days}d)"
+            f" vs MACD {macd_dir} ({macd_days}d) (-0.5)"
+        )
+        return -0.5, signal
+
+    both_fresh = ema_days <= _FRESH_DAYS and macd_days <= _FRESH_DAYS
+
+    if ema_dir == "up":
+        if both_fresh:
+            signal = (
+                f"Dual bullish confirmation: EMA ({ema_days}d)"
+                f" + MACD ({macd_days}d) both up, fresh (+1.0)"
+            )
+            return 1.0, signal
+        signal = (
+            f"Dual bullish confirmation: EMA ({ema_days}d)"
+            f" + MACD ({macd_days}d) both up (+0.5)"
+        )
+        return 0.5, signal
+    else:
+        if both_fresh:
+            signal = (
+                f"Dual bearish confirmation: EMA ({ema_days}d)"
+                f" + MACD ({macd_days}d) both down, fresh (-1.0)"
+            )
+            return -1.0, signal
+        signal = (
+            f"Dual bearish confirmation: EMA ({ema_days}d)"
+            f" + MACD ({macd_days}d) both down (-0.5)"
+        )
+        return -0.5, signal
+
 
 def compute_bullish_score(symbol: str, period: str = "3mo", ticker=None) -> dict | None:
     """Compute bullish trend score for a symbol.
@@ -99,6 +152,14 @@ def compute_bullish_score(symbol: str, period: str = "3mo", ticker=None) -> dict
             else:
                 score -= 0.25
                 signals.append("EMA9 < EMA21 (death cross)")
+
+        # Dual crossover confirmation
+        dual_score, dual_signal = _score_dual_crossover(
+            raw["ema_crossover"], raw["macd_crossover"]
+        )
+        score += dual_score
+        if dual_signal:
+            signals.append(dual_signal)
 
         # ADX analysis
         adx_val = raw["adx"]

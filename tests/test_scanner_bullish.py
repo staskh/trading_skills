@@ -2,7 +2,78 @@
 # ABOUTME: Validates scoring, signal generation, and multi-symbol scanning.
 
 
-from trading_skills.scanner_bullish import compute_bullish_score, scan_symbols
+from trading_skills.scanner_bullish import (
+    _score_dual_crossover,
+    compute_bullish_score,
+    scan_symbols,
+)
+
+
+class TestScoreDualCrossover:
+    """Tests for dual crossover confirmation scoring — pure logic, no live data."""
+
+    def _xover(self, direction, days_ago):
+        return {"direction": direction, "days_ago": days_ago}
+
+    # --- both up ---
+    def test_both_up_fresh_gives_plus_one(self):
+        score, signal = _score_dual_crossover(self._xover("up", 5), self._xover("up", 3))
+        assert score == 1.0
+        assert "bullish" in signal.lower()
+        assert "fresh" in signal.lower()
+
+    def test_both_up_stale_gives_plus_half(self):
+        score, signal = _score_dual_crossover(self._xover("up", 20), self._xover("up", 15))
+        assert score == 0.5
+        assert "bullish" in signal.lower()
+        assert "fresh" not in signal.lower()
+
+    def test_both_up_boundary_10_days_is_fresh(self):
+        score, _ = _score_dual_crossover(self._xover("up", 10), self._xover("up", 10))
+        assert score == 1.0
+
+    def test_both_up_boundary_11_days_is_stale(self):
+        score, _ = _score_dual_crossover(self._xover("up", 11), self._xover("up", 10))
+        assert score == 0.5
+
+    # --- both down ---
+    def test_both_down_fresh_gives_minus_one(self):
+        score, signal = _score_dual_crossover(self._xover("down", 5), self._xover("down", 3))
+        assert score == -1.0
+        assert "bearish" in signal.lower()
+        assert "fresh" in signal.lower()
+
+    def test_both_down_stale_gives_minus_half(self):
+        score, signal = _score_dual_crossover(self._xover("down", 20), self._xover("down", 15))
+        assert score == -0.5
+        assert "bearish" in signal.lower()
+
+    # --- conflict ---
+    def test_conflict_ema_up_macd_down(self):
+        score, signal = _score_dual_crossover(self._xover("up", 3), self._xover("down", 5))
+        assert score == -0.5
+        assert "conflict" in signal.lower()
+
+    def test_conflict_ema_down_macd_up(self):
+        score, signal = _score_dual_crossover(self._xover("down", 3), self._xover("up", 5))
+        assert score == -0.5
+        assert "conflict" in signal.lower()
+
+    # --- missing crossover ---
+    def test_ema_none_returns_zero(self):
+        score, signal = _score_dual_crossover(None, self._xover("up", 3))
+        assert score == 0.0
+        assert signal is None
+
+    def test_macd_none_returns_zero(self):
+        score, signal = _score_dual_crossover(self._xover("up", 3), None)
+        assert score == 0.0
+        assert signal is None
+
+    def test_both_none_returns_zero(self):
+        score, signal = _score_dual_crossover(None, None)
+        assert score == 0.0
+        assert signal is None
 
 
 class TestComputeBullishScore:
