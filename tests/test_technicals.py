@@ -9,6 +9,7 @@ from trading_skills.technicals import (
     compute_indicators,
     compute_multi_symbol,
     compute_raw_indicators,
+    detect_macd_crossover,
     get_earnings_data,
 )
 
@@ -116,6 +117,77 @@ class TestGetEarningsData:
         assert result["symbol"] == "INVALIDXYZ123"
 
 
+class TestDetectMacdCrossover:
+    """Tests for MACD crossover detection — uses synthetic histogram data."""
+
+    def _make_macd_df(self, hist_values):
+        """Minimal 3-column DataFrame matching pandas-ta macd() output layout."""
+        n = len(hist_values)
+        return pd.DataFrame(
+            {
+                "MACD_12_26_9": [1.0] * n,
+                "MACDs_12_26_9": [0.5] * n,
+                "MACDh_12_26_9": hist_values,
+            }
+        )
+
+    def test_detects_up_crossover(self):
+        df = self._make_macd_df([-2.0, -1.0, 1.0, 2.0])
+        result = detect_macd_crossover(df)
+        assert result is not None
+        assert result["direction"] == "up"
+        assert result["days_ago"] == 1
+
+    def test_detects_down_crossover(self):
+        df = self._make_macd_df([2.0, 1.0, -1.0, -2.0])
+        result = detect_macd_crossover(df)
+        assert result is not None
+        assert result["direction"] == "down"
+        assert result["days_ago"] == 1
+
+    def test_crossover_at_current_bar(self):
+        df = self._make_macd_df([-1.0, 1.0])
+        result = detect_macd_crossover(df)
+        assert result is not None
+        assert result["direction"] == "up"
+        assert result["days_ago"] == 0
+
+    def test_returns_most_recent_crossover(self):
+        # Two crossovers: down at index 2, up at index 3 (most recent)
+        df = self._make_macd_df([-2.0, 1.0, -1.0, 2.0])
+        result = detect_macd_crossover(df)
+        assert result is not None
+        assert result["direction"] == "up"
+        assert result["days_ago"] == 0
+
+    def test_no_crossover_all_positive(self):
+        df = self._make_macd_df([1.0, 2.0, 3.0, 4.0])
+        result = detect_macd_crossover(df)
+        assert result is None
+
+    def test_no_crossover_all_negative(self):
+        df = self._make_macd_df([-4.0, -3.0, -2.0, -1.0])
+        result = detect_macd_crossover(df)
+        assert result is None
+
+    def test_handles_leading_nans(self):
+        df = self._make_macd_df([float("nan"), float("nan"), -1.0, 1.0])
+        result = detect_macd_crossover(df)
+        assert result is not None
+        assert result["direction"] == "up"
+        assert result["days_ago"] == 0
+
+    def test_too_short_returns_none(self):
+        df = self._make_macd_df([1.0])
+        result = detect_macd_crossover(df)
+        assert result is None
+
+    def test_empty_returns_none(self):
+        df = self._make_macd_df([])
+        result = detect_macd_crossover(df)
+        assert result is None
+
+
 class TestComputeRawIndicators:
     """Tests for raw indicator extraction from DataFrame."""
 
@@ -146,11 +218,21 @@ class TestComputeRawIndicators:
             "macd_signal",
             "macd_hist",
             "prev_macd_hist",
+            "macd_crossover",
             "adx",
             "dmp",
             "dmn",
         }
         assert expected_keys.issubset(raw.keys())
+
+    def test_macd_crossover_structure(self):
+        df = self._make_df()
+        raw = compute_raw_indicators(df)
+        xover = raw["macd_crossover"]
+        if xover is not None:
+            assert xover["direction"] in ("up", "down")
+            assert isinstance(xover["days_ago"], int)
+            assert xover["days_ago"] >= 0
 
     def test_rsi_in_range(self):
         df = self._make_df()

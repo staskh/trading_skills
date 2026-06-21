@@ -118,6 +118,7 @@ def compute_bullish_score(symbol: str, period: str = "3mo", ticker=None) -> dict
             "macd": round(macd_val, 4) if macd_val else None,
             "macd_signal": round(macd_signal, 4) if macd_signal else None,
             "macd_hist": round(macd_hist, 4) if macd_hist else None,
+            "macd_crossover": raw["macd_crossover"],
             "adx": round(adx_val, 2) if adx_val else None,
             "dmp": round(dmp, 2) if dmp else None,
             "dmn": round(dmn, 2) if dmn else None,

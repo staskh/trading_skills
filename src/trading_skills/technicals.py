@@ -46,6 +46,31 @@ def get_earnings_data(symbol: str) -> dict:
     return result
 
 
+def detect_macd_crossover(macd_df: pd.DataFrame) -> dict | None:
+    """Find the most recent MACD crossover in a pandas-ta macd() DataFrame.
+
+    Scans the histogram column (column index 2) for sign changes.
+    Returns {"direction": "up"|"down", "days_ago": int} or None if no
+    crossover is found. "days_ago" is trading bars since the crossover bar.
+    """
+    if macd_df is None or macd_df.empty:
+        return None
+
+    hist = macd_df.iloc[:, 2].dropna()
+    if len(hist) < 2:
+        return None
+
+    values = hist.to_numpy()
+    for i in range(len(values) - 1, 0, -1):
+        curr, prev = values[i], values[i - 1]
+        if curr > 0 and prev <= 0:
+            return {"direction": "up", "days_ago": len(values) - 1 - i}
+        if curr < 0 and prev >= 0:
+            return {"direction": "down", "days_ago": len(values) - 1 - i}
+
+    return None
+
+
 def compute_raw_indicators(df: pd.DataFrame) -> dict:
     """Extract raw technical indicator values from an OHLCV DataFrame.
 
@@ -61,6 +86,7 @@ def compute_raw_indicators(df: pd.DataFrame) -> dict:
         "macd_signal": None,
         "macd_hist": None,
         "prev_macd_hist": None,
+        "macd_crossover": None,
         "adx": None,
         "dmp": None,
         "dmn": None,
@@ -107,6 +133,7 @@ def compute_raw_indicators(df: pd.DataFrame) -> dict:
             prev = macd.iloc[-2, 2]
             if pd.notna(prev):
                 result["prev_macd_hist"] = float(prev)
+        result["macd_crossover"] = detect_macd_crossover(macd)
 
     # ADX
     if "High" in df.columns and "Low" in df.columns:

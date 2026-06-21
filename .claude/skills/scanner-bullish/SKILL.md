@@ -46,8 +46,18 @@ Returns JSON with:
   - `symbol`, `score`, `price`
   - `next_earnings`, `earnings_timing` (BMO/AMC)
   - `period_return_pct`, `pct_from_sma20`, `pct_from_sma50`
-  - `rsi`, `macd`, `adx`, `dmp`, `dmn`
+  - `rsi`, `macd`, `macd_signal`, `macd_hist`, `adx`, `dmp`, `dmn`
+  - `macd_crossover` - Most recent MACD crossover (or `null` if none found):
+    - `direction` - `"up"` (MACD crossed above signal = bullish) or `"down"` (crossed below = bearish)
+    - `days_ago` - Trading days since the crossover bar (0 = happened in the most recent bar)
   - `signals` - List of triggered conditions
+
+## MACD Crossover Interpretation
+
+- `direction: "up"` with small `days_ago` (0-5): fresh bullish crossover — early entry signal
+- `direction: "up"` from a deeply negative signal: recovery from correction
+- `direction: "down"`: momentum has turned bearish regardless of score
+- `null`: no sign change found in the period — trend has been consistently one-directional
 
 ## Examples
 

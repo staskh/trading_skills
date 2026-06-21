@@ -44,6 +44,20 @@ class TestComputeBullishScore:
         assert result is not None
         assert isinstance(result["signals"], list)
 
+    def test_has_macd_crossover_field(self):
+        result = compute_bullish_score("AAPL")
+        assert result is not None
+        assert "macd_crossover" in result
+
+    def test_macd_crossover_structure(self):
+        result = compute_bullish_score("AAPL")
+        assert result is not None
+        xover = result["macd_crossover"]
+        if xover is not None:
+            assert xover["direction"] in ("up", "down")
+            assert isinstance(xover["days_ago"], int)
+            assert xover["days_ago"] >= 0
+
     def test_invalid_symbol_returns_none(self):
         result = compute_bullish_score("INVALIDXYZ123")
         assert result is None
