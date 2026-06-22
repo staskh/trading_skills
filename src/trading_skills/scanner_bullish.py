@@ -45,8 +45,7 @@ def _score_dual_crossover(
             )
             return 1.0, signal
         signal = (
-            f"Dual bullish confirmation: EMA ({ema_days}d)"
-            f" + MACD ({macd_days}d) both up (+0.5)"
+            f"Dual bullish confirmation: EMA ({ema_days}d) + MACD ({macd_days}d) both up (+0.5)"
         )
         return 0.5, signal
     else:
@@ -57,8 +56,7 @@ def _score_dual_crossover(
             )
             return -1.0, signal
         signal = (
-            f"Dual bearish confirmation: EMA ({ema_days}d)"
-            f" + MACD ({macd_days}d) both down (-0.5)"
+            f"Dual bearish confirmation: EMA ({ema_days}d) + MACD ({macd_days}d) both down (-0.5)"
         )
         return -0.5, signal
 
@@ -154,9 +152,7 @@ def compute_bullish_score(symbol: str, period: str = "3mo", ticker=None) -> dict
                 signals.append("EMA9 < EMA21 (death cross)")
 
         # Dual crossover confirmation
-        dual_score, dual_signal = _score_dual_crossover(
-            raw["ema_crossover"], raw["macd_crossover"]
-        )
+        dual_score, dual_signal = _score_dual_crossover(raw["ema_crossover"], raw["macd_crossover"])
         score += dual_score
         if dual_signal:
             signals.append(dual_signal)
