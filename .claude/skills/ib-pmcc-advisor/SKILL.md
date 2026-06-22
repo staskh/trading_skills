@@ -47,12 +47,14 @@ Save to `sandbox/pmcc_advisor_{ACCOUNT}_{YYYY-MM-DD}_{HHmm}.md`. Use first accou
 
 The report must include all sections per spread:
 1. **Red flags summary** — assignment > 40%, DTE < 7, no rolls, earnings warnings
-2. **Spread structure table** — both legs: strike, expiry, DTE, cost, current price, IV
-3. **Short leg risk** — delta (BS + IB), assignment probability with risk label
-4. **Daily P&L projections** — all rows: date, days to expiry, best exit spot, max P&L (mark peak row)
-5. **Roll candidates table** — strike, expiry, DTE, delta, assign%, IV, net credit, $/day, P&L if assigned, bid/ask
-6. **Comparison table** — current vs roll_1/2/3 side by side
-7. **Recommendation** — hold/roll/close with reasoning
+2. **Company description** — one sentence from your own knowledge (always)
+3. **Technical profile** — RSI, MACD, EMA crossover, ADX, SMA distance, 3mo return, bullish score (only if technical data is present in conversation context; omit otherwise)
+4. **Spread structure table** — both legs: strike, expiry, DTE, cost, current price, IV
+5. **Short leg risk** — delta (BS + IB), assignment probability with risk label
+6. **Daily P&L projections** — all rows: date, days to expiry, best exit spot, max P&L (mark peak row)
+7. **Roll candidates table** — strike, expiry, DTE, delta, assign%, IV, net credit, $/day, P&L if assigned, bid/ask
+8. **Comparison table** — current vs roll_1/2/3 side by side
+9. **Recommendation** — hold/roll/close with reasoning
 
 **JSON output** — triggered by: "save JSON", "export JSON", "save the data", "output file".
 

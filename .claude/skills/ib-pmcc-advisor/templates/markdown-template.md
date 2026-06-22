@@ -57,7 +57,45 @@ For each entry in `spreads[]`, render a full section. Order: by assignment proba
 ## {SYMBOL} — {qty} contract(s) | Spot: ${underlying_price} | LEAPS: {long.expiry formatted as "Mon DD YYYY"}
 ```
 
-#### 3a. Earnings Alert (only if `earnings.date` is not null)
+#### 3a. Company Description
+
+Always include a one-sentence description of what the company does, drawn from your own knowledge.
+
+```markdown
+> {Company name} — {one sentence: sector, primary business, why it's relevant to a trader}
+```
+
+Example: `> JPMorgan Chase (JPM) — largest U.S. bank by assets, operating across investment banking, consumer finance, and asset management.`
+
+#### 3b. Technical Profile (include only if technical data is present in conversation context)
+
+If the conversation context contains bullish scan results, technical analysis, or any RSI / MACD / EMA / ADX data for this symbol, render this section. If no technical data is available, omit the section entirely — do not invent values.
+
+```markdown
+### Technical Profile
+
+| Indicator | Value | Signal |
+|-----------|-------|--------|
+| Price vs SMA20 | {pct_from_sma20:+.1f}% | Above / Below |
+| Price vs SMA50 | {pct_from_sma50:+.1f}% | Above / Below |
+| RSI (14) | {rsi:.1f} | Bullish (>50) / Neutral / Oversold (<30) |
+| MACD | {macd:.3f} vs signal {macd_signal:.3f} | Bullish / Bearish crossover |
+| EMA9 / EMA21 | {ema9:.2f} / {ema21:.2f} | Golden cross {N}d ago / Death cross / Flat |
+| ADX | {adx:.1f} | Strong trend (>25) / Weak |
+| 3mo Return | {period_return_pct:+.1f}% | — |
+| Bullish Score | {score:.2f} / 9.5 | — |
+```
+
+Only include rows for which data is available. Omit rows where the value is unknown.
+
+Crossover interpretation:
+- EMA golden cross ≤5d ago: "Fresh golden cross {N}d ago"
+- EMA golden cross 6–10d ago: "Golden cross {N}d ago"
+- EMA golden cross >10d ago: "Golden cross {N}d ago (aging)"
+- MACD crossover ≤3d ago: "Fresh bullish crossover {N}d ago"
+- No crossover in period: omit the crossover detail
+
+#### 3c. Earnings Alert (only if `earnings.date` is not null)
 
 ```markdown
 > **Earnings:** {earnings.date} {earnings.timing or ""}
@@ -66,7 +104,7 @@ For each entry in `spreads[]`, render a full section. Order: by assignment proba
 If `warning_short` is true, append: ` — ⚠️ within current short window`
 If `warning_roll_indices` is non-empty, append: ` — ⚠️ overlaps roll(s) {warning_roll_indices}`
 
-#### 3b. Spread Structure
+#### 3d. Spread Structure
 
 Two-row table showing both legs side by side:
 
@@ -81,7 +119,7 @@ Two-row table showing both legs side by side:
 
 Show IB delta and IB IV columns only if `ib_delta` or `ib_iv_pct` are non-null for any row; otherwise omit them.
 
-#### 3c. Short Leg Risk
+#### 3e. Short Leg Risk
 
 ```markdown
 ### Short Leg Risk
@@ -99,7 +137,7 @@ Color cue for assignment probability (text label only, no emojis unless instruct
 
 Append the color cue in parentheses after the probability value in the table cell.
 
-#### 3d. Daily P&L Projections
+#### 3f. Daily P&L Projections
 
 Show all rows from `daily_pnl[]`. This is the **exit P&L** if you close the spread on that day with the underlying at the optimal spot.
 
@@ -115,7 +153,7 @@ Show all rows from `daily_pnl[]`. This is the **exit P&L** if you close the spre
 - `pnl` is already scaled by qty × 100 (total dollars).
 - Negative P&L values: show in parentheses, e.g., `($1,234.56)`.
 
-#### 3e. Roll Candidates
+#### 3g. Roll Candidates
 
 If `roll_candidates` is empty:
 ```markdown
@@ -137,7 +175,7 @@ Otherwise:
 - P&L if assigned negative: parentheses, e.g., `($358.00)`.
 - All rolls capped at LEAPS expiry (`leaps_expiry`) — no roll will exceed it.
 
-#### 3f. Comparison Table
+#### 3h. Comparison Table
 
 ```markdown
 ### Comparison
@@ -154,7 +192,7 @@ Only include Roll 2 / Roll 3 rows if they exist in `comparison`.
 
 Bold the row with the best (lowest) assignment probability.
 
-#### 3g. Recommendation
+#### 3i. Recommendation
 
 ```markdown
 ### Recommendation
