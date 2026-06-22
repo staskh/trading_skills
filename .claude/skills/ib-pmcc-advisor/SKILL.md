@@ -20,36 +20,43 @@ If both ports fail, ask the user to verify that TWS or IB Gateway is running wit
 
 ## Instructions
 
-### Step 1: Run the report script
+### Step 1: Run the script
 
 ```bash
 uv run python .claude/skills/ib-pmcc-advisor/scripts/pmcc_advisor.py [--port PORT] [--account ACCOUNT] [--min-roll-dte N] [--price-mode mid|last]
 ```
 
-The script returns JSON to stdout. Capture it and format the report.
+The script returns JSON to stdout. Parse it and use it for the response below.
 
-### Step 2: Report to user
+### Step 2: Default response — brief inline summary
 
-From the JSON, present inline in the conversation:
-- Lead with any red flags (assignment > 40%, DTE < 7, earnings warnings).
-- For each spread with a red flag, show the comparison table inline.
-- State the top recommendation for each flagged spread.
-- For clean positions, a one-line summary is enough.
+Unless the user explicitly asks for a report or JSON output, respond with a **concise inline summary only**. No files saved.
 
-**Do NOT save a file** unless the user explicitly asks for a report (e.g. "save a report", "generate a PDF", "write a report").
+Format:
+- One line per spread: `SYMBOL — short $STRIKE exp DATE (δ=X, assign=Y%) — [HOLD / ROLL to $STRIKE]`
+- Lead with any red flags (assignment > 40%, DTE < 7, earnings within short window).
+- For flagged spreads, add one extra line with the top roll candidate and net credit.
+- Clean positions: the one-line summary is enough.
 
-If a report is requested, read `.claude/skills/ib-pmcc-advisor/templates/markdown-template.md` for full formatting instructions and save to `sandbox/`:
-- Filename: `pmcc_advisor_{ACCOUNT}_{YYYY-MM-DD}_{HHmm}.md`
-- Use first account ID. Derive date/time from `generated_at`.
+### Step 3: Generate files only when explicitly requested
+
+**MD report** — triggered by: "save a report", "generate a report", "write a report", "markdown", "PDF".
+
+Read `.claude/skills/ib-pmcc-advisor/templates/markdown-template.md` for full formatting instructions.
+Save to `sandbox/pmcc_advisor_{ACCOUNT}_{YYYY-MM-DD}_{HHmm}.md`. Use first account ID; derive timestamp from `generated_at`.
 
 The report must include all sections per spread:
 1. **Red flags summary** — assignment > 40%, DTE < 7, no rolls, earnings warnings
 2. **Spread structure table** — both legs: strike, expiry, DTE, cost, current price, IV
 3. **Short leg risk** — delta (BS + IB), assignment probability with risk label
-4. **Daily P&L projections** — all rows: date, days to expiry, best exit spot, max P&L (mark the peak row)
+4. **Daily P&L projections** — all rows: date, days to expiry, best exit spot, max P&L (mark peak row)
 5. **Roll candidates table** — strike, expiry, DTE, delta, assign%, IV, net credit, $/day, P&L if assigned, bid/ask
 6. **Comparison table** — current vs roll_1/2/3 side by side
 7. **Recommendation** — hold/roll/close with reasoning
+
+**JSON output** — triggered by: "save JSON", "export JSON", "save the data", "output file".
+
+Save raw script output to `sandbox/pmcc_advisor_{ACCOUNT}_{YYYY-MM-DD}_{HHmm}.json`.
 
 ## Arguments
 
@@ -137,8 +144,10 @@ The report must include all sections per spread:
 ## Roll Selection Criteria
 
 Candidates must satisfy both:
-1. **Lower delta** than current short (less assignment risk)
+1. **Delta ≤ 0.40** (absolute cap — allows same-strike forward rolls when current short is near expiry)
 2. **Net credit ≥ -$0.10/share** (not a large debit)
+
+Scans the next 5 available chain expirations after the current short expiry, bounded by the LEAPS expiry.
 
 Ranked by: delta improvement (highest weight) → net credit → DTE extension.
 
