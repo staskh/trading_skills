@@ -35,6 +35,7 @@ from trading_skills.utils import (
 
 RISK_FREE_RATE = 0.045
 NET_CREDIT_MIN = -0.10  # max debit allowed when rolling
+MAX_SHORT_DELTA = 0.40  # absolute delta cap for any roll candidate
 
 
 # ===========================================================================
@@ -320,7 +321,7 @@ def find_best_rolls(
             delta = abs(calc_delta(spot, strike, dte, iv, "C"))
             prob = calc_assignment_prob(spot, strike, dte, iv, "C")
 
-            if delta >= current_delta:
+            if delta > MAX_SHORT_DELTA:
                 continue
 
             net_credit = price - current_short_price
@@ -399,28 +400,14 @@ def build_comparison_table(
     return result
 
 
-def find_roll_expiration_targets(
+def _next_roll_expirations(
     current_expiry: str,
     available_expirations: list[str],
     max_expiry: str,
+    n: int = 5,
 ) -> list[str]:
-    """Return up to 2 expirations: nearest to 7d and 14d after current_expiry."""
-    current_date = datetime.strptime(current_expiry, "%Y%m%d").date()
-    candidates = sorted(
-        [e for e in available_expirations if e > current_expiry and e <= max_expiry]
-    )
-    targets = [current_date + timedelta(days=7), current_date + timedelta(days=14)]
-    result = []
-    for target in targets:
-        if not candidates:
-            break
-        best = min(
-            candidates,
-            key=lambda e: abs((datetime.strptime(e, "%Y%m%d").date() - target).days),
-        )
-        if best not in result:
-            result.append(best)
-    return result
+    """Return up to n future expirations after current_expiry, bounded by max_expiry."""
+    return sorted(e for e in available_expirations if current_expiry < e <= max_expiry)[:n]
 
 
 # ===========================================================================
@@ -847,7 +834,7 @@ async def get_pmcc_data(
             earnings_by_symbol: dict[str, dict] = phase1[2 * n + 1 + len(unique_symbols)]
 
             # ----------------------------------------------------------------
-            # Determine roll expiration targets (7d / 14d windows)
+            # Determine roll expiration targets: next 5 chain expirations
             # ----------------------------------------------------------------
             roll_exps_by_spread: list[list[str]] = []
             for spread in spreads:
@@ -855,7 +842,7 @@ async def get_pmcc_data(
                 cd = chain_data_by_symbol.get(sym)
                 expirations = cd.get("expirations", []) if isinstance(cd, dict) else (cd or [])
                 roll_exps_by_spread.append(
-                    find_roll_expiration_targets(
+                    _next_roll_expirations(
                         current_expiry=spread["short"]["expiry"],
                         available_expirations=sorted(expirations),
                         max_expiry=spread["long"]["expiry"],
