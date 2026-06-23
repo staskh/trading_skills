@@ -644,3 +644,58 @@ class TestAnalyzePortfolio:
         cal_entry = next((e for e in result["earnings_calendar"] if e["symbol"] == "NVDA"), None)
         assert cal_entry is not None
         assert cal_entry.get("status") == "pending"
+
+
+# ---------------------------------------------------------------------------
+# data_delay reflects market session (issue #68)
+# ---------------------------------------------------------------------------
+
+
+def _minimal_data():
+    future_expiry = (datetime.now() + timedelta(days=60)).strftime("%Y%m%d")
+    return {
+        "accounts": ["U123"],
+        "positions": {
+            "U123": [
+                {
+                    "symbol": "AAPL",
+                    "sec_type": "OPT",
+                    "quantity": 1,
+                    "strike": 150.0,
+                    "expiry": future_expiry,
+                    "right": "C",
+                    "avg_cost": 5.0,
+                },
+                {
+                    "symbol": "AAPL",
+                    "sec_type": "OPT",
+                    "quantity": -1,
+                    "strike": 160.0,
+                    "expiry": future_expiry,
+                    "right": "C",
+                    "avg_cost": 2.0,
+                },
+            ]
+        },
+        "prices": {"AAPL": 155.0},
+    }
+
+
+@patch(f"{MODULE}.fetch_technicals")
+@patch(f"{MODULE}.fetch_earnings_date")
+@patch(f"{MODULE}.is_trading_now", return_value=True)
+def test_data_delay_real_time_during_market_hours(mock_live, mock_earnings, mock_tech):
+    mock_earnings.return_value = {"symbol": "AAPL", "earnings_date": None}
+    mock_tech.return_value = {"symbol": "AAPL", "trend": "neutral"}
+    result = analyze_portfolio(_minimal_data())
+    assert result["data_delay"] == "real-time"
+
+
+@patch(f"{MODULE}.fetch_technicals")
+@patch(f"{MODULE}.fetch_earnings_date")
+@patch(f"{MODULE}.is_trading_now", return_value=False)
+def test_data_delay_extended_hours_outside_market(mock_live, mock_earnings, mock_tech):
+    mock_earnings.return_value = {"symbol": "AAPL", "earnings_date": None}
+    mock_tech.return_value = {"symbol": "AAPL", "trend": "neutral"}
+    result = analyze_portfolio(_minimal_data())
+    assert result["data_delay"] == "extended-hours"

@@ -18,7 +18,7 @@ from trading_skills.broker.connection import (
 from trading_skills.broker.futures import futures_yahoo_ticker
 from trading_skills.earnings import get_earnings_info
 from trading_skills.technicals import compute_raw_indicators
-from trading_skills.utils import _NY, days_to_expiry, generated_at_str
+from trading_skills.utils import _NY, days_to_expiry, generated_at_str, is_trading_now
 
 
 def fetch_earnings_date(symbol: str) -> dict:
@@ -273,6 +273,7 @@ async def get_portfolio_data(port: int, account: str = None) -> dict:
     """Fetch portfolio positions and prices from IB."""
     try:
         async with ib_connection(port, CLIENT_IDS["portfolio_action"]) as ib:
+            ib.reqMarketDataType(1)  # live mode — streams extended-hours last price off-hours
             if account:
                 managed = ib.managedAccounts()
                 if account not in managed:
@@ -519,7 +520,7 @@ def analyze_portfolio(data: dict) -> dict:
 
     return {
         "generated_at": generated_at_str(),
-        "data_delay": "real-time",
+        "data_delay": "real-time" if is_trading_now() else "extended-hours",
         "accounts": data.get("accounts", []),
         "summary": {
             "red_count": red_count,

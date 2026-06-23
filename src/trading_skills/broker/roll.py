@@ -17,9 +17,16 @@ from trading_skills.broker.futures import (
     resolve_fop_contracts,
 )
 from trading_skills.earnings import get_next_earnings_date
-from trading_skills.utils import days_to_expiry
+from trading_skills.utils import days_to_expiry, is_trading_now
 
 _DEFAULT_IV = 0.30  # fallback when IV cannot be determined from quotes
+
+
+def _data_delay_label(price_stale: bool, options_stale: bool, live: bool) -> str:
+    """Compute the data_delay string based on price source and market session."""
+    if price_stale or options_stale:
+        return "stalled - using last known price"
+    return "real-time" if live else "extended-hours"
 
 
 def _estimate_iv(spot: float, option_mid: float, dte: float) -> float:
@@ -522,9 +529,7 @@ async def _find_roll(ib, symbol, current_position, chain_params, exchange, iv_mu
         "earnings_date": earnings_date,
         "expirations_analyzed": future_exps,
         "iv_multiplier": iv_multiplier,
-        "data_delay": (
-            "stalled - using last known price" if (price_stale or options_stale) else "real-time"
-        ),
+        "data_delay": _data_delay_label(price_stale, options_stale, is_trading_now()),
     }
 
 
@@ -586,7 +591,7 @@ async def _find_spread(ib, symbol, long_option, right, chain_params, exchange):
         },
         "candidates_by_expiry": candidates_by_expiry,
         "expirations_analyzed": target_exps,
-        "data_delay": "stalled - using last known price" if price_stale else "real-time",
+        "data_delay": _data_delay_label(price_stale, False, is_trading_now()),
     }
 
 
@@ -643,7 +648,7 @@ async def _find_new_short(
         "candidates_by_expiry": candidates_by_expiry,
         "expirations_analyzed": future_exps,
         "iv_multiplier": iv_multiplier,
-        "data_delay": "stalled - using last known price" if price_stale else "real-time",
+        "data_delay": _data_delay_label(price_stale, False, is_trading_now()),
     }
 
 

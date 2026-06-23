@@ -631,3 +631,75 @@ class TestEnrichWithGreeks:
         assert len(result) == 1
         assert result[0]["iv"] == pytest.approx(0.50)
         assert result[0]["delta"] == pytest.approx(0.30)
+
+
+# ---------------------------------------------------------------------------
+# get_underlying_price data_delay (issue #68)
+# ---------------------------------------------------------------------------
+
+
+class TestGetUnderlyingPriceSource:
+    """Verify price_source returned by get_underlying_price for data_delay labeling."""
+
+    def _make_ticker(self, market_price=float("nan"), close=float("nan"), last=float("nan")):
+        ticker = MagicMock()
+        ticker.marketPrice.return_value = market_price
+        ticker.close = close
+        ticker.last = last
+        return ticker
+
+    def test_live_price_not_stale(self):
+        """When marketPrice() returns a valid price, stale flag is False."""
+        import asyncio
+
+        ticker = self._make_ticker(market_price=150.0)
+        contract = MagicMock()
+        ib = MagicMock()
+        ib.qualifyContractsAsync = AsyncMock(return_value=[contract])
+        ib.reqTickersAsync = AsyncMock(return_value=[ticker])
+
+        with patch("trading_skills.broker.roll.asyncio.sleep", new=AsyncMock()):
+            price, stale = asyncio.run(get_underlying_price(ib, "AAPL"))
+
+        assert price == pytest.approx(150.0)
+        assert stale is False
+
+    def test_stale_when_marketprice_nan_uses_close(self):
+        """When marketPrice() is NaN, falls back to close and sets stale=True."""
+        import asyncio
+
+        ticker = self._make_ticker(market_price=float("nan"), close=148.0)
+        contract = MagicMock()
+        ib = MagicMock()
+        ib.qualifyContractsAsync = AsyncMock(return_value=[contract])
+        ib.reqTickersAsync = AsyncMock(return_value=[ticker])
+
+        with patch("trading_skills.broker.roll.asyncio.sleep", new=AsyncMock()):
+            price, stale = asyncio.run(get_underlying_price(ib, "AAPL"))
+
+        assert price == pytest.approx(148.0)
+        assert stale is True
+
+
+class TestDataDelayLabel:
+    """data_delay field uses 'extended-hours' when off market hours but price is fresh."""
+
+    def _make_roll_result(self, price_stale: bool, is_live: bool) -> str:
+        """Compute the expected data_delay string for given conditions."""
+        from trading_skills.broker.roll import _data_delay_label
+
+        return _data_delay_label(price_stale=price_stale, options_stale=False, live=is_live)
+
+    def test_real_time_during_market_hours(self):
+        assert self._make_roll_result(price_stale=False, is_live=True) == "real-time"
+
+    def test_extended_hours_outside_market(self):
+        assert self._make_roll_result(price_stale=False, is_live=False) == "extended-hours"
+
+    def test_stalled_when_price_stale(self):
+        result = self._make_roll_result(price_stale=True, is_live=False)
+        assert result == "stalled - using last known price"
+
+    def test_stalled_when_price_stale_even_during_live(self):
+        result = self._make_roll_result(price_stale=True, is_live=True)
+        assert result == "stalled - using last known price"
