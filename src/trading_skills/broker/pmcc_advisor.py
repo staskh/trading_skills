@@ -37,6 +37,29 @@ RISK_FREE_RATE = 0.045
 NET_CREDIT_MIN = -0.10  # max debit allowed when rolling
 MAX_SHORT_DELTA = 0.40  # absolute delta cap for any roll candidate
 
+# IBKR drops market-data quotes silently once too many subscriptions stream at once.
+# Quote batches are chunked and throttled so that at most
+# MAX_QUOTE_BATCH_LINES * MAX_CONCURRENT_QUOTE_BATCHES lines are ever open together.
+# 30 x 2 = 60 lines is empirically reliable even for dense chains (e.g. QQQ); 90 is not.
+MAX_QUOTE_BATCH_LINES = 30
+MAX_CONCURRENT_QUOTE_BATCHES = 2
+
+
+def _data_delay_label(live: bool, extended_prices: dict, quote_stale: bool) -> str:
+    """Determine the data_delay string based on price source.
+
+    - live + no stale quotes  → "real-time"
+    - off-hours + IBKR extended prices available → "extended-hours"
+    - off-hours + no IBKR prices, or stale quotes → "stalled - using last price"
+    """
+    if quote_stale:
+        return "stalled - using last price"
+    if live:
+        return "real-time"
+    if extended_prices:
+        return "extended-hours"
+    return "stalled - using last price"
+
 
 # ===========================================================================
 # ANALYTICS (no IBKR dependency — fully testable in isolation)
@@ -410,6 +433,22 @@ def _next_roll_expirations(
     return sorted(e for e in available_expirations if current_expiry < e <= max_expiry)[:n]
 
 
+def _roll_strike_range(short_strike: float, spot: float, all_strikes: list[float]) -> list[float]:
+    """Strikes relevant to roll candidates: near/above the short, up to ~15% above spot.
+
+    Excludes deeply ITM strikes (all delta > 0.40, filtered out anyway) so each chain
+    batch stays small. This keeps concurrent IBKR market-data subscriptions under the
+    ~100-line limit; beyond it IBKR silently drops quotes, yielding zero roll candidates.
+    The upper bound always covers the current short strike so a same-strike forward roll
+    is fetched even when the short sits more than 15% out of the money.
+    """
+    if not spot:
+        return []
+    low = short_strike * 0.97
+    high = max(spot * 1.15, short_strike * 1.05)
+    return [s for s in all_strikes if low <= s <= high]
+
+
 # ===========================================================================
 # YAHOO FINANCE DATA (outside trading hours — separated from IBKR below)
 # ===========================================================================
@@ -602,37 +641,11 @@ async def _fetch_single_option_quote(
     }
 
 
-async def _fetch_option_quotes_batch(
-    ib, symbol: str, expiry: str, strikes: list[float], right: str
-) -> list[dict]:
-    """Fetch option quotes for multiple strikes at one expiry.
-
-    Uses streaming market data (not snapshot) to avoid hanging outside trading hours.
-    """
-    import logging
-
-    from ib_async import Option
-
-    contracts = [Option(symbol, expiry, s, right, "SMART") for s in strikes]
-
-    ib_logger = logging.getLogger("ib_async")
-    prev_level = ib_logger.level
-    ib_logger.setLevel(logging.CRITICAL)
-
-    try:
-        qualified = await fetch_with_timeout(
-            ib.qualifyContractsAsync(*contracts), timeout=15, default=[]
-        )
-    finally:
-        ib_logger.setLevel(prev_level)
-
-    qualified = [c for c in (qualified or []) if c is not None and getattr(c, "conId", None)]
-    if not qualified:
-        return []
-
-    tickers = [ib.reqMktData(qc, "", False, False) for qc in qualified]
+async def _read_option_quotes(ib, contracts: list, expiry: str) -> list[dict]:
+    """Open streaming quotes for already-qualified contracts, read once, then cancel."""
+    tickers = [ib.reqMktData(qc, "", False, False) for qc in contracts]
     await asyncio.sleep(3)
-    for qc in qualified:
+    for qc in contracts:
         ib.cancelMktData(qc)
 
     results = []
@@ -656,6 +669,47 @@ async def _fetch_option_quotes_batch(
                 "stale": bid is None and ask is None and last is not None,
             }
         )
+    return results
+
+
+async def _fetch_option_quotes_batch(
+    ib, symbol: str, expiry: str, strikes: list[float], right: str, sem=None
+) -> list[dict]:
+    """Fetch option quotes for multiple strikes at one expiry.
+
+    Uses streaming market data (not snapshot) to avoid hanging outside trading hours.
+    Subscriptions are opened in chunks of at most MAX_QUOTE_BATCH_LINES; an optional
+    semaphore caps how many chunks stream concurrently so the IBKR line limit holds.
+    """
+    import logging
+
+    from ib_async import Option
+
+    contracts = [Option(symbol, expiry, s, right, "SMART") for s in strikes]
+
+    ib_logger = logging.getLogger("ib_async")
+    prev_level = ib_logger.level
+    ib_logger.setLevel(logging.CRITICAL)
+
+    try:
+        qualified = await fetch_with_timeout(
+            ib.qualifyContractsAsync(*contracts), timeout=15, default=[]
+        )
+    finally:
+        ib_logger.setLevel(prev_level)
+
+    qualified = [c for c in (qualified or []) if c is not None and getattr(c, "conId", None)]
+    if not qualified:
+        return []
+
+    results = []
+    for i in range(0, len(qualified), MAX_QUOTE_BATCH_LINES):
+        chunk = qualified[i : i + MAX_QUOTE_BATCH_LINES]
+        if sem is not None:
+            async with sem:
+                results.extend(await _read_option_quotes(ib, chunk, expiry))
+        else:
+            results.extend(await _read_option_quotes(ib, chunk, expiry))
     return sorted(results, key=lambda x: x["strike"])
 
 
@@ -786,6 +840,17 @@ async def get_pmcc_data(
             live = is_trading_now()
 
             # ----------------------------------------------------------------
+            # Extended-hours spot prices (off regular hours only)
+            # Use reqMarketDataType(1) so IBKR streams the latest pre/post-market
+            # last trade price instead of the frozen prior-session close.
+            # ----------------------------------------------------------------
+            ext_spot_prices: dict[str, float] = {}
+            if not live:
+                ib.reqMarketDataType(1)
+                ext_spot_prices = await fetch_spot_prices(ib, unique_symbols)
+                ib.reqMarketDataType(4)  # restore for option quote fetches below
+
+            # ----------------------------------------------------------------
             # PARALLEL PHASE 1: spot prices + both option leg quotes + chain data
             # ----------------------------------------------------------------
             if live:
@@ -826,6 +891,8 @@ async def get_pmcc_data(
                 )
 
             spot_prices: dict[str, float] = phase1[0]
+            # Extended-hours IBKR prices take priority over Yahoo Finance stale close
+            spot_prices.update(ext_spot_prices)
             short_quotes: list = list(phase1[1 : n + 1])
             long_quotes: list = list(phase1[n + 1 : 2 * n + 1])
             chain_data_by_symbol: dict = {
@@ -850,40 +917,43 @@ async def get_pmcc_data(
                 )
 
             # ----------------------------------------------------------------
-            # PARALLEL PHASE 2: roll chains for all spreads
+            # PHASE 2: roll chains, one spread at a time
+            #
+            # Each spread's expirations are fetched in parallel, but spreads run
+            # sequentially. Gathering every spread's chains at once would open
+            # thousands of concurrent IBKR market-data subscriptions; beyond the
+            # ~100-line limit IBKR silently drops quotes and no roll candidates
+            # come back. Per-spread batches stay well under that limit.
             # ----------------------------------------------------------------
-            roll_chain_tasks: list = []
-            roll_chain_keys: list[tuple[int, str]] = []
+            quote_sem = asyncio.Semaphore(MAX_CONCURRENT_QUOTE_BATCHES)
+            roll_chains_by_spread: list[dict[str, list]] = [{} for _ in spreads]
             for i, (spread, roll_exps) in enumerate(zip(spreads, roll_exps_by_spread)):
                 sym = spread["symbol"]
                 spot = spot_prices.get(sym, 0)
                 if live:
                     cd = chain_data_by_symbol.get(sym, {})
                     all_strikes = cd.get("strikes", []) if isinstance(cd, dict) else []
-                    roll_strikes = (
-                        [s for s in all_strikes if spot * 0.95 <= s <= spot * 1.25] if spot else []
+                    roll_strikes = _roll_strike_range(spread["short"]["strike"], spot, all_strikes)
+                    chain_results = await asyncio.gather(
+                        *[
+                            _fetch_option_quotes_batch(ib, sym, exp, roll_strikes, "C", quote_sem)
+                            for exp in roll_exps
+                        ]
                     )
-                    for exp in roll_exps:
-                        roll_chain_tasks.append(
-                            _fetch_option_quotes_batch(ib, sym, exp, roll_strikes, "C")
-                        )
-                        roll_chain_keys.append((i, exp))
                 else:
-                    for exp in roll_exps:
-                        roll_chain_tasks.append(_fetch_yf_option_chain_batch(sym, exp, spot))
-                        roll_chain_keys.append((i, exp))
-
-            roll_chain_results = await asyncio.gather(*roll_chain_tasks) if roll_chain_tasks else []
-
-            roll_chains_by_spread: list[dict[str, list]] = [{} for _ in spreads]
-            for (spread_idx, exp), quotes in zip(roll_chain_keys, roll_chain_results):
-                if quotes:
-                    roll_chains_by_spread[spread_idx][exp] = quotes
+                    chain_results = await asyncio.gather(
+                        *[_fetch_yf_option_chain_batch(sym, exp, spot) for exp in roll_exps]
+                    )
+                for exp, quotes in zip(roll_exps, chain_results):
+                    if quotes:
+                        roll_chains_by_spread[i][exp] = quotes
 
             # ----------------------------------------------------------------
             # ANALYTICS
             # ----------------------------------------------------------------
-            data_delay = "real-time" if live else "stalled - using last price"
+            data_delay = _data_delay_label(
+                live=live, extended_prices=ext_spot_prices, quote_stale=False
+            )
             results = []
 
             for i, spread in enumerate(spreads):
@@ -905,10 +975,14 @@ async def get_pmcc_data(
                 short_price = get_option_price(short_quote or {}, price_mode)
                 long_price = get_option_price(long_quote or {}, price_mode)
 
-                if (short_quote and short_quote.get("stale")) or (
-                    long_quote and long_quote.get("stale")
-                ):
-                    data_delay = "stalled - using last price"
+                quote_stale = bool(
+                    (short_quote and short_quote.get("stale"))
+                    or (long_quote and long_quote.get("stale"))
+                )
+                if quote_stale:
+                    data_delay = _data_delay_label(
+                        live=live, extended_prices=ext_spot_prices, quote_stale=True
+                    )
 
                 # Short leg analytics
                 short_iv = None

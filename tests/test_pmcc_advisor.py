@@ -13,6 +13,7 @@ from trading_skills.broker.pmcc_advisor import (
     _fetch_option_quotes_batch,
     _fetch_single_option_quote,
     _next_roll_expirations,
+    _roll_strike_range,
     build_comparison_table,
     calc_assignment_prob,
     calc_bs_price,
@@ -316,6 +317,52 @@ def test_next_roll_expirations_sorted():
     max_exp = (today + timedelta(days=90)).strftime("%Y%m%d")
     result = _next_roll_expirations(current, expirations, max_exp)
     assert result == sorted(result)
+
+
+# ---------------------------------------------------------------------------
+# _roll_strike_range
+# ---------------------------------------------------------------------------
+
+
+def test_roll_strike_range_includes_short_and_above():
+    """Range spans from just below the short strike up to ~15% above spot."""
+    strikes = [180, 190, 200, 205, 210, 215, 220, 225, 240, 260]
+    result = _roll_strike_range(short_strike=210.0, spot=200.0, all_strikes=strikes)
+    assert 210 in result  # current short strike (same-strike forward roll)
+    assert 215 in result
+    assert 225 in result  # within spot * 1.15 = 230
+    assert 240 not in result
+
+
+def test_roll_strike_range_excludes_deep_itm():
+    """Deeply ITM strikes (well below the short) are excluded to limit subscriptions."""
+    strikes = [150, 160, 180, 203, 210, 220]
+    result = _roll_strike_range(short_strike=210.0, spot=200.0, all_strikes=strikes)
+    assert 150 not in result
+    assert 160 not in result
+    assert 180 not in result  # below short * 0.97 = 203.7
+    assert 203 not in result
+
+
+def test_roll_strike_range_excludes_far_otm():
+    """Strikes far above the upper bound are excluded."""
+    strikes = [210, 220, 230, 240, 260, 300]
+    result = _roll_strike_range(short_strike=210.0, spot=200.0, all_strikes=strikes)
+    assert 260 not in result
+    assert 300 not in result
+
+
+def test_roll_strike_range_empty_when_no_spot():
+    """No spot price -> empty range (cannot compute upper bound)."""
+    assert _roll_strike_range(short_strike=210.0, spot=0, all_strikes=[200, 210, 220]) == []
+
+
+def test_roll_strike_range_covers_short_when_deep_otm():
+    """When the short is >15% OTM, the short strike is still covered for a forward roll."""
+    # QCOM-like: short 260, spot 205 -> spot * 1.15 = 235.75 < 260
+    strikes = [250, 255, 260, 265, 270]
+    result = _roll_strike_range(short_strike=260.0, spot=205.0, all_strikes=strikes)
+    assert 260 in result
 
 
 def test_calc_daily_pnl_table_scales_with_qty():
@@ -1075,3 +1122,41 @@ def test_fetch_option_quotes_batch_falls_back_to_close_when_last_is_nan():
     assert len(results) == 1
     assert results[0]["last"] == pytest.approx(3.75)
     assert results[0]["stale"] is True
+
+
+# ---------------------------------------------------------------------------
+# data_delay label (issue #68)
+# ---------------------------------------------------------------------------
+
+
+def test_data_delay_real_time_when_live():
+    from trading_skills.broker.pmcc_advisor import _data_delay_label
+
+    assert _data_delay_label(live=True, extended_prices={}, quote_stale=False) == "real-time"
+
+
+def test_data_delay_extended_hours_when_ibkr_prices_returned():
+    from trading_skills.broker.pmcc_advisor import _data_delay_label
+
+    assert (
+        _data_delay_label(live=False, extended_prices={"NVDA": 210.0}, quote_stale=False)
+        == "extended-hours"
+    )
+
+
+def test_data_delay_stalled_when_no_extended_prices():
+    from trading_skills.broker.pmcc_advisor import _data_delay_label
+
+    assert (
+        _data_delay_label(live=False, extended_prices={}, quote_stale=False)
+        == "stalled - using last price"
+    )
+
+
+def test_data_delay_stalled_overrides_extended_when_quote_stale():
+    from trading_skills.broker.pmcc_advisor import _data_delay_label
+
+    assert (
+        _data_delay_label(live=False, extended_prices={"NVDA": 210.0}, quote_stale=True)
+        == "stalled - using last price"
+    )
