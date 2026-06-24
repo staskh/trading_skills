@@ -105,9 +105,13 @@ async def fetch_spot_prices(ib: IB, symbols: list[str], timeout: float = 15.0) -
 
     Uses streaming market data (not snapshot) to avoid hanging outside trading hours
     when IB's snapshot mode never completes for illiquid or after-hours markets.
+    Uses type 4 (delayed-frozen): live if subscription available, delayed otherwise.
     """
     if not symbols:
         return {}
+
+    # Type 4 = delayed-frozen: live if subscription present, delayed (15-20 min) otherwise
+    ib.reqMarketDataType(4)
 
     stock_contracts = [Stock(sym, "SMART", "USD") for sym in symbols]
     qualified = await fetch_with_timeout(

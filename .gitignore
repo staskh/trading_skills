@@ -41,4 +41,5 @@ sandbox/*
 *.csv
 uv.lock
 .claude/settings.local.json
+.claude/skills/check/
 trading_skills.code-workspace
