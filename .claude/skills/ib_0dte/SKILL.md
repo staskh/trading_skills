@@ -65,12 +65,12 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--verify-stops` — check that every open 0DTE spread has a resting protective stop, then exit (no symbol required). Add `--repair` to place a strike-level stop on any unprotected position.
 - `--repair` — with `--verify-stops`, auto-place a strike-level stop on unprotected positions.
 
-Stop and exit defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero_dte_stop.py`) — each maps `mult`, `buffer`, `delta`, `target` (profit-take), and `time_exit`. E.g. NDX uses `mult 3.0` + `0.30` delta backstop, `50%` target, `15:30` exit; SPX `mult 2.5`; unlisted symbols `mult 2.0`. Any explicit flag overrides the preset. Entry short-delta caps are separate (`ENTRY_MAX_DELTA`: 0.20 index / 0.20 stock). These are starting points; tune them with live data.
+Stop and exit defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero_dte_stop.py`) — each maps `mult`, `buffer`, `delta`, `target` (profit-take), and `time_exit`. E.g. NDX uses `mult 3.0` + `0.30` delta backstop, `50%` target, `15:30` exit; SPX `mult 2.5`; unlisted symbols `mult 2.0`. Any explicit flag overrides the preset. Entry short-delta caps are separate (`ENTRY_MAX_DELTA`: 0.12 index / 0.20 stock). These are starting points; tune them with live data.
 - `--expiry YYYYMMDD` — override the expiry (default: today ET, i.e. true 0DTE)
 - `--top` — number of candidates to return (default: 5)
 - `--min-pop` — minimum probability of profit, 0–1 (default: 0, no filter)
 - `--max-width` — cap the strike width in dollars (optional)
-- `--delta` — cap the `|delta|` of the short leg(s) at entry. Applies to both verticals and (both short legs of) iron condors. **Defaults by class: 0.20 for indexes and stocks** (`ENTRY_MAX_DELTA` in `zero_dte.py`); pass a value here to override. The effective cap is echoed as `max_short_delta` in the output.
+- `--delta` — cap the `|delta|` of the short leg(s) at entry. Applies to both verticals and (both short legs of) iron condors. **Defaults by class: 0.12 for indexes, 0.20 for stocks** (`ENTRY_MAX_DELTA` in `zero_dte.py`); pass a value here to override. The effective cap is echoed as `max_short_delta` in the output.
 - `--allow-stale` — if IBKR streams no live quotes/greeks (off-hours), price legs from yesterday's settlement close and derive greeks via Black-Scholes. **Off by default:** greeks come only from IBKR, so a closed market returns no candidates (with a hint) rather than stale, model-computed ones.
 - `--no-events` — skip the live economic-calendar lookup (falls back to static event guidance). The calendar is fetched by default and needs no API key.
 - `--expiries` — list available expiries and whether today has a 0DTE

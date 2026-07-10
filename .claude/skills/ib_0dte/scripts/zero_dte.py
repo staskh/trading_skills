@@ -91,7 +91,7 @@ def main():
         type=float,
         default=None,
         help="Cap the |delta| of the short leg(s) at ENTRY. "
-        "Default: 0.20 for indexes and stocks (override here).",
+        "Default: 0.12 for indexes, 0.20 for stocks (override here).",
     )
     parser.add_argument(
         "--target-delta",

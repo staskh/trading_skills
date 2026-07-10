@@ -49,7 +49,7 @@ SPREAD_TYPES = ("bear_call", "bull_put", "iron_condor")
 # are the class fallbacks; per-symbol keys may be added for tuning. Explicit --delta
 # always wins.
 ENTRY_MAX_DELTA = {
-    "_index": 0.20,
+    "_index": 0.12,
     "_stock": 0.20,
 }
 
@@ -65,7 +65,7 @@ def resolve_underlying(symbol: str):
 def resolve_entry_delta(symbol: str, asset_type: str, explicit: float | None) -> float | None:
     """Effective short-leg delta cap for entry: explicit --delta wins, else the preset.
 
-    Indexes default to 0.10, stocks/ETFs to 0.20 (per-symbol keys override the class
+    Indexes default to 0.12, stocks/ETFs to 0.20 (per-symbol keys override the class
     fallback in ENTRY_MAX_DELTA).
     """
     if explicit is not None:
