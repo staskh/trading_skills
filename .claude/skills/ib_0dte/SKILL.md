@@ -184,6 +184,25 @@ Lead with the `best` pick and state the direction and the price level it needs t
 underlying to respect (the short strike / breakeven) — the distance-to-short is the
 cushion before the trade starts losing.
 
+## Paper-test report
+
+Aggregate your saved runs into a summary:
+```bash
+uv run python scripts/report.py            # text summary
+uv run python scripts/report.py --json     # machine-readable
+```
+
+- **Entries** (from `sandbox/*_exec_*.json`, automatic): trades placed by symbol/type,
+  entry short-delta range, avg POP, capital at risk, and the **stop level placed**
+  (binding) distribution.
+- **Outcomes** (from the latest `ib_0dte_paper_test_log_*.md` you fill in): win rate,
+  avg win/loss, **expectancy per trade**, **max drawdown**, and the **actual closed-by**
+  leg distribution. Realized P&L only exists once a trade resolves, so it comes from the
+  daily log's `P&L` / `Closed by` columns — the entry JSON only captures placement.
+
+Watch **expectancy**, not win rate: a high win rate with one fat loss can still be
+negative (the report makes that obvious).
+
 ## Timing & event guidance
 
 Every run includes a `timing` block, computed from the current ET clock:
