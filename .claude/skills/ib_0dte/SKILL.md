@@ -54,8 +54,8 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--account` — IBKR account the trade is committed to. Validated against the connection's managed accounts; echoed in the output. Defaults to the sole managed account when the login has exactly one. **Required with `--execute` when the login manages more than one account.**
 - `--execute` — place the chosen spread as a live combo order. Without it (the default), the tool is a **dry run**: it proposes but places nothing.
 - `--pick N` — 1-based rank of the candidate to execute (default: 1 = best).
-- `--limit` — absolute net-credit limit override (default: the candidate's mid credit).
-- `--limit-frac` — marketable limit as a fraction of the mid credit, e.g. `0.85` = accept 85% of mid. Computed at execution time, so it stays marketable even though a fresh pull re-selects strikes with a different mid. Ignored if `--limit` is set. (Note: IB **paper** often won't fill multi-leg 0DTE index combos at any marketable price — a paper-sim limitation, not a pricing issue.)
+- `--limit` — absolute net-credit limit override. **Default: the candidate's `combo_ask_credit`** (the marketable BUY-side of the combo NBBO — `sum(short-leg bids) − sum(long-leg asks)`), which fills at market. Passing a higher credit here (e.g. mid) is likely to sit at the combo bid and not fill.
+- `--limit-frac` — walk between the combo NBBO's marketable side and its mid: `combo_ask + frac × (net_credit − combo_ask)`. `0` = fully marketable (same as default), `0.5` = midpoint of combo NBBO, `1.0` = mid credit (rarely fills on multi-leg BAG combos). Computed at execution time, so it stays anchored to the fresh pull's combo quote. Ignored if `--limit` is set. (Note: IB **paper** often won't fill multi-leg 0DTE index combos at any marketable price — a paper-sim limitation, not a pricing issue.)
 - `--replace` — if a live order for this symbol/expiry/type already rests, cancel and re-place it (default: refuse as a duplicate).
 - `--stop-mult` — premium-cap stop: close when the spread reaches this multiple of the credit (default: `2.0` = lose ~1× credit). `0` disables the premium cap.
 - `--stop-buffer` — points before the short strike to trigger the level stop (default: `0` = at the strike).
@@ -172,7 +172,10 @@ JSON with:
 - `timing` — built-in intraday guidance (see **Timing & event guidance** below)
 - `best` — the top-ranked spread
 - `candidates` — top-N spreads, each with `legs` (action, right, strike, bid, ask,
-  mid, delta, iv), `net_credit`, `width`, `pop`, `contracts`, per-contract and total
+  mid, delta, iv), `net_credit` (mid credit, used for max_profit/EV/breakevens),
+  `combo_ask_credit` (marketable BUY-side of the combo NBBO — the default execution
+  limit; what fills at market), `combo_bid_credit` (resting BUY bid — best possible
+  credit, rarely fillable), `width`, `pop`, `contracts`, per-contract and total
   `max_profit` / `max_loss`, `capital_at_risk`, `ev_total`, `breakeven`(s), `risk_reward`,
   `short_delta`, and `distance_to_short` / `distance_to_short_pct` (spot-to-short-strike
   cushion). Iron condors report `short_call_delta` / `short_put_delta` and

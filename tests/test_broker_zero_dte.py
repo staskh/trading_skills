@@ -336,6 +336,14 @@ class TestBuildVerticalsBearCall:
         expected_loss = round((width - c["net_credit"]) * 100, 2)
         assert c["max_loss_per_contract"] == pytest.approx(expected_loss, abs=0.02)
 
+    def test_combo_nbbo_reflects_leg_bid_ask(self):
+        # Each leg's bid=mid-0.05, ask=mid+0.05, so the vertical's combo NBBO is
+        # net_credit ± 0.10 (marketable BUY is 10c worse than mid; resting bid 10c better).
+        out = build_verticals(self._calls(), "C", spot=100, budget=1000, T=0.01, r=0.045)
+        for c in out:
+            assert c["combo_ask_credit"] == pytest.approx(c["net_credit"] - 0.10, abs=0.01)
+            assert c["combo_bid_credit"] == pytest.approx(c["net_credit"] + 0.10, abs=0.01)
+
     def test_budget_caps_position_size(self):
         # tiny budget -> at most one contract, and only if a spread fits
         out = build_verticals(self._calls(), "C", spot=100, budget=200, T=0.01, r=0.045)
@@ -499,6 +507,13 @@ class TestBuildIronCondors:
             short_put = c["legs"][0]["strike"]
             short_call = c["legs"][2]["strike"]
             assert short_put < short_call
+
+    def test_combo_nbbo_sums_both_verticals(self):
+        # 4-leg BAG's combo NBBO is the sum of each side's NBBO. With ±0.05 per leg,
+        # each vertical is net ± 0.10, so the condor is net ± 0.20.
+        for c in self._condors():
+            assert c["combo_ask_credit"] == pytest.approx(c["net_credit"] - 0.20, abs=0.01)
+            assert c["combo_bid_credit"] == pytest.approx(c["net_credit"] + 0.20, abs=0.01)
 
 
 # --------------------------------------------------------------------------- #

@@ -137,14 +137,16 @@ def main():
         "--limit",
         type=float,
         default=None,
-        help="Absolute net-credit limit override (default: candidate's mid credit)",
+        help="Absolute net-credit limit override (default: candidate's combo_ask_credit, "
+        "the marketable BUY-side of the combo NBBO — guaranteed fill at market)",
     )
     parser.add_argument(
         "--limit-frac",
         type=float,
         default=None,
-        help="Marketable limit as a fraction of the mid credit, e.g. 0.85 = accept 85%% "
-        "of mid (robust to fresh-pull strike changes; ignored if --limit is set).",
+        help="Walk from combo_ask_credit (frac=0, marketable) toward mid credit (frac=1, "
+        "best price but usually non-fillable) — e.g. 0.5 = midpoint of combo NBBO. "
+        "Ignored if --limit is set.",
     )
     parser.add_argument(
         "--replace",

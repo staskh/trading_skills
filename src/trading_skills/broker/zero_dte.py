@@ -448,6 +448,13 @@ def build_verticals(
             if net_credit <= 0 or net_credit >= width:
                 continue  # no edge, or bad/crossed quotes
 
+            # Combo NBBO: the marketable BUY-side (combo_ask_credit) is the credit a
+            # market-taker BUY combo actually receives — this is what fills. The mid
+            # (`net_credit`) is the theoretical fair-value fill and is typically NOT
+            # marketable on a multi-leg BAG order.
+            combo_ask_credit = short["bid"] - long_leg["ask"]  # market-taker BUY, worst credit
+            combo_bid_credit = short["ask"] - long_leg["bid"]  # resting BUY bid, best credit
+
             max_profit_pc = net_credit * 100
             max_loss_pc = (width - net_credit) * 100
             if max_loss_pc <= 0:
@@ -490,6 +497,8 @@ def build_verticals(
                     ],
                     "width": round(width, 2),
                     "net_credit": round(net_credit, 2),
+                    "combo_ask_credit": round(combo_ask_credit, 2),
+                    "combo_bid_credit": round(combo_bid_credit, 2),
                     "pop": round(pop, 4),
                     "short_delta": round(short_delta, 4) if short_delta is not None else None,
                     "distance_to_short": round(distance, 2),
@@ -567,6 +576,9 @@ def build_iron_condors(
 
             put_credit = put["net_credit"]
             combined_credit = call_credit + put_credit
+            # A 4-leg BAG order's combo NBBO is the sum of each vertical's combo NBBO.
+            combined_combo_ask = call["combo_ask_credit"] + put["combo_ask_credit"]
+            combined_combo_bid = call["combo_bid_credit"] + put["combo_bid_credit"]
             width = max(call["width"], put["width"])
             max_loss = width - combined_credit
             if max_loss <= 0:
@@ -594,6 +606,8 @@ def build_iron_condors(
                     "put_width": put["width"],
                     "call_width": call["width"],
                     "net_credit": round(combined_credit, 2),
+                    "combo_ask_credit": round(combined_combo_ask, 2),
+                    "combo_bid_credit": round(combined_combo_bid, 2),
                     "pop": round(pop, 4),
                     "ev_model": call.get("ev_model", "binary"),
                     "short_call_delta": call["short_delta"],
@@ -1254,14 +1268,19 @@ async def _maybe_execute(
         ib.cancelOrder(existing.order)
         await asyncio.sleep(2)  # let the cancel register before re-placing
 
-    # Absolute --limit wins; else --limit-frac shaves the mid to stay marketable
-    # (robust to the fresh pull re-selecting different strikes each run).
+    # Absolute --limit wins; else --limit-frac walks between the combo NBBO's
+    # marketable side (frac=0, combo_ask_credit, guaranteed fill at market) and
+    # the mid (frac=1, net_credit, best price but rarely fills on multi-leg BAG
+    # combos). Default (no frac) is the marketable side — mid limits on 0DTE
+    # index ICs sit at the combo bid and don't cross.
+    combo_ask = candidate.get("combo_ask_credit", candidate["net_credit"])
+    mid = candidate["net_credit"]
     if limit is not None:
         limit_credit = limit
     elif limit_frac is not None:
-        limit_credit = round(limit_frac * candidate["net_credit"], 2)
+        limit_credit = round(combo_ask + limit_frac * (mid - combo_ask), 2)
     else:
-        limit_credit = candidate["net_credit"]
+        limit_credit = combo_ask
     result = await _place_spread_order(
         ib,
         candidate,
