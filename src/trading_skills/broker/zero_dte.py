@@ -12,6 +12,12 @@ from scipy.stats import norm
 
 from trading_skills.black_scholes import black_scholes_delta, implied_volatility
 from trading_skills.broker.connection import CLIENT_IDS, ib_connection
+from trading_skills.broker.zero_dte_stop import (
+    DEFAULT_STOP_MULT,
+    emergency_close,
+    place_spread_stops,
+    stop_plan,
+)
 from trading_skills.economic_calendar import fetch_us_economic_events
 from trading_skills.utils import fetch_with_timeout
 
@@ -827,6 +833,10 @@ async def find_0dte_spreads(
     max_short_delta: float | None = None,
     allow_stale: bool = False,
     fetch_events: bool = True,
+    stop_mult: float = DEFAULT_STOP_MULT,
+    stop_buffer: float = 0.0,
+    stop_delta: float | None = None,
+    fill_timeout: float = 20.0,
     rate: float = DEFAULT_RATE,
     strike_band: float = 0.15,
 ) -> dict:
@@ -1016,6 +1026,17 @@ async def find_0dte_spreads(
                     trading_class,
                     spread_type,
                     replace=replace,
+                    spot=spot,
+                    T=T,
+                    rate=rate,
+                    underlying_conid=contract.conId,
+                    underlying_exch=INDEX_SPECS.get(symbol_u, "SMART"),
+                    stop_cfg={
+                        "mult": stop_mult,
+                        "buffer": stop_buffer,
+                        "delta": stop_delta,
+                        "fill_timeout": fill_timeout,
+                    },
                 )
 
             return {
@@ -1055,6 +1076,21 @@ async def find_0dte_spreads(
         return {"success": False, "error": str(e)}
 
 
+async def _await_fill(ib, order_id: int, timeout: float) -> str:
+    """Poll the order's status until Filled/terminal or timeout. Returns the status."""
+    deadline = timeout
+    status = "PendingSubmit"
+    while deadline > 0:
+        trade = next((t for t in ib.trades() if t.order.orderId == order_id), None)
+        if trade is not None:
+            status = trade.orderStatus.status
+            if status in ("Filled", "Cancelled", "ApiCancelled", "Inactive"):
+                return status
+        await asyncio.sleep(1)
+        deadline -= 1
+    return status
+
+
 async def _maybe_execute(
     ib,
     ranked,
@@ -1067,9 +1103,21 @@ async def _maybe_execute(
     exchange,
     trading_class,
     spread_type,
+    *,
     replace=False,
+    spot,
+    T,
+    rate,
+    underlying_conid,
+    underlying_exch,
+    stop_cfg,
 ):
-    """Guard, then place the chosen ranked candidate. Returns an order-result dict."""
+    """Guard, place the entry, then atomically attach its stop.
+
+    Flow: place entry → wait for fill → on fill place the protective stop; if the
+    entry does not fill in time, cancel it (never hold an unprotected position); if
+    the stop fails after a fill, emergency-market-close the spread.
+    """
     if not ranked:
         return {"ok": False, "error": "No candidates to execute"}
     if pick < 1 or pick > len(ranked):
@@ -1105,16 +1153,46 @@ async def _maybe_execute(
 
     limit_credit = limit if limit is not None else candidate["net_credit"]
     result = await _place_spread_order(
-        ib,
-        candidate,
-        symbol_u,
-        target,
-        exchange,
-        trading_class,
-        trade_account,
-        limit_credit,
-        order_ref,
+        ib, candidate, symbol_u, target, exchange, trading_class,
+        trade_account, limit_credit, order_ref,
     )
     if existing and result.get("ok"):
         result["replaced_order_id"] = existing.order.orderId
+    if not result.get("ok"):
+        return result
+
+    # --- Atomic stop: never hold an unprotected position ---
+    status = await _await_fill(ib, result["order_id"], stop_cfg["fill_timeout"])
+    result["entry_status"] = status
+    if status != "Filled":
+        # No confirmed position — cancel the working entry so it can't fill unprotected.
+        entry = next((t for t in ib.trades() if t.order.orderId == result["order_id"]), None)
+        if entry is not None and status not in ("Cancelled", "ApiCancelled"):
+            ib.cancelOrder(entry.order)
+        result["ok"] = False
+        result["stop"] = {
+            "ok": False,
+            "error": f"Entry not filled ({status}) within {stop_cfg['fill_timeout']}s; "
+            "cancelled to avoid an unprotected position. Use a marketable --limit or "
+            "retry during liquid hours.",
+        }
+        return result
+
+    plans = stop_plan(
+        candidate, spot, T, rate,
+        mult=stop_cfg["mult"], buffer_pts=stop_cfg["buffer"], target_delta=stop_cfg["delta"],
+    )
+    stop_ref = f"ZDTE_STOP_{spread_type}_{symbol_u}_{target}"
+    stop_res = await place_spread_stops(
+        ib, candidate, symbol_u, target, exchange, trading_class,
+        underlying_conid, underlying_exch, trade_account, stop_ref, plans,
+    )
+    result["stop"] = stop_res
+    if not stop_res.get("ok"):
+        # Protection failed on a live position — flatten immediately.
+        result["emergency_close"] = await emergency_close(
+            ib, candidate, symbol_u, target, exchange, trading_class,
+            trade_account, f"ZDTE_EMERG_{symbol_u}_{target}",
+        )
+        result["ok"] = False
     return result

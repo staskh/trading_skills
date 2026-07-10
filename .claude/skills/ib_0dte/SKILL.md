@@ -56,6 +56,10 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--pick N` — 1-based rank of the candidate to execute (default: 1 = best).
 - `--limit` — net credit limit price override (default: the candidate's net credit).
 - `--replace` — if a live order for this symbol/expiry/type already rests, cancel and re-place it (default: refuse as a duplicate).
+- `--stop-mult` — premium-cap stop: close when the spread reaches this multiple of the credit (default: `2.0` = lose ~1× credit). `0` disables the premium cap.
+- `--stop-buffer` — points before the short strike to trigger the level stop (default: `0` = at the strike).
+- `--stop-delta` — also stop when the short-leg delta reaches this level (optional, e.g. `0.30`).
+- `--fill-timeout` — seconds to wait for the entry to fill before cancelling it (default: `20`). A stop needs a fill; if the entry doesn't fill it's cancelled so you're never unprotected.
 - `--expiry YYYYMMDD` — override the expiry (default: today ET, i.e. true 0DTE)
 - `--top` — number of candidates to return (default: 5)
 - `--min-pop` — minimum probability of profit, 0–1 (default: 0, no filter)
@@ -86,6 +90,31 @@ Guardrails before an order is sent:
 The connection is **read-only unless `--execute` is passed**, so a plain analysis run
 can never place an order. Confirm the proposal with the user before executing.
 
+## Stop-loss (automatic, non-negotiable on `--execute`)
+
+Every `--execute` **atomically attaches a protective stop** — you can never end up
+holding an unprotected 0DTE position:
+
+1. The entry combo is placed and the tool **waits for it to fill** (`--fill-timeout`).
+2. If it doesn't fill, the entry is **cancelled** (no position, no risk) and the result
+   reports why — retry with a marketable `--limit` or during liquid hours.
+3. On fill, a **conditional close order** is placed that buys the spread back when the
+   **underlying** breaches the stop level. If that placement fails, the position is
+   **emergency market-closed** immediately.
+
+The stop trigger is **level-anchored on the underlying** (robust to option-price noise),
+taking whichever of these fires first:
+- **Short strike** (± `--stop-buffer`) — the "thesis broken" level.
+- **Premium cap** (`--stop-mult`) — the underlying level where the loss reaches
+  `mult × credit`, computed via Black-Scholes at entry.
+- **Short delta** (`--stop-delta`, optional).
+
+Bear call → stops if the index rises; bull put → if it falls; **iron condor → two
+OCA-linked stops** (either breach closes the whole condor). The close is a **marketable
+limit capped at the spread width** — fills at market but never worse than the defined
+max loss. A stop reduces the *average* loss; it does **not** guarantee the price in a
+gap, so the budget-capped max loss remains the true floor.
+
 ## How ranking works
 
 - **Probability of profit (POP)** — probability the spread finishes a winner: the
@@ -111,8 +140,10 @@ JSON with:
   `call_distance_to_short` / `put_distance_to_short`.
 - `picked` — the 1-based rank executed (only when `--execute`)
 - `order` — the placement result when `--execute`: `order_id`, `status`, `filled`,
-  `remaining`, `quantity`, `limit_price` (negative = net credit), `account`, `order_ref`;
-  or `{"ok": false, "error": ...}` if a guardrail blocked it
+  `remaining`, `quantity`, `limit_price` (negative = net credit), `account`, `order_ref`,
+  `entry_status`, and `stop` (the attached stop: `stops` with each side's `trigger` /
+  `binding` level / `order_id`, or `{"ok": false, ...}` with an `emergency_close` if the
+  stop failed); or `{"ok": false, "error": ...}` if a guardrail blocked it
 
 Present the top candidates as a table with columns: strikes, credit, POP,
 short delta, distance-to-short (points and %), max profit, max loss, contracts, EV.

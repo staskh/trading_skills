@@ -88,6 +88,31 @@ def main():
         help="If a live order for this symbol/expiry/type already rests, cancel and re-place it "
         "(default: refuse as a duplicate)",
     )
+    parser.add_argument(
+        "--stop-mult",
+        type=float,
+        default=2.0,
+        help="Premium-cap stop: close when the spread reaches this multiple of the credit "
+        "(default: 2.0 = lose ~1x credit). 0 disables the premium cap.",
+    )
+    parser.add_argument(
+        "--stop-buffer",
+        type=float,
+        default=0.0,
+        help="Points before the short strike to trigger the level stop (default: 0 = at the strike)",
+    )
+    parser.add_argument(
+        "--stop-delta",
+        type=float,
+        default=None,
+        help="Also stop when the short-leg delta reaches this level (optional; e.g. 0.30)",
+    )
+    parser.add_argument(
+        "--fill-timeout",
+        type=float,
+        default=20.0,
+        help="Seconds to wait for the entry to fill before cancelling it (stops need a fill)",
+    )
     parser.add_argument("--expiries", action="store_true", help="List available expiries and exit")
     parser.add_argument("--port", type=int, default=7497, help="IB port (7497=paper, 7496=live)")
 
@@ -116,6 +141,10 @@ def main():
                 max_short_delta=args.delta,
                 allow_stale=args.allow_stale,
                 fetch_events=not args.no_events,
+                stop_mult=args.stop_mult,
+                stop_buffer=args.stop_buffer,
+                stop_delta=args.stop_delta,
+                fill_timeout=args.fill_timeout,
             )
         )
 

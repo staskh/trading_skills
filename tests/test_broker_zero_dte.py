@@ -501,6 +501,12 @@ class TestExecuteGuards:
                 "SMART",
                 "SPXW",
                 "bear_call",
+                spot=100,
+                T=0.01,
+                rate=0.045,
+                underlying_conid=1,
+                underlying_exch="SMART",
+                stop_cfg={"mult": 2.0, "buffer": 0, "delta": None, "fill_timeout": 1},
             )
         )
 
@@ -590,6 +596,12 @@ class TestDuplicateGuard:
                 "SPXW",
                 "bear_call",
                 replace=replace,
+                spot=100,
+                T=0.01,
+                rate=0.045,
+                underlying_conid=1,
+                underlying_exch="SMART",
+                stop_cfg={"mult": 2.0, "buffer": 0, "delta": None, "fill_timeout": 1},
             )
         )
 
