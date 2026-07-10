@@ -180,10 +180,12 @@ JSON with:
 - `picked` — the 1-based rank executed (only when `--execute`)
 - `order` — the placement result when `--execute`: `order_id`, `status`, `filled`,
   `remaining`, `quantity`, `limit_price` (negative = net credit), `account`, `order_ref`,
-  `entry_status`, and `bracket` (the attached OCA exit bracket: `profit_target`
-  (`limit_debit`), `stops` (each side's `trigger` / `binding` level / `order_id`), and
-  `time_exit` (`cutoff`); or `{"ok": false, ...}` with an `emergency_close` if bracket
-  placement failed); or `{"ok": false, "error": ...}` if a guardrail blocked it
+  `entry_status`, `log` (IB's status/error messages for this order — surfaces the reject
+  reason when an entry goes terminal-Cancelled without filling), and `bracket` (the
+  attached OCA exit bracket: `profit_target` (`limit_debit`), `stops` (each side's
+  `trigger` / `binding` level / `order_id`), and `time_exit` (`cutoff`); or
+  `{"ok": false, ...}` with an `emergency_close` if bracket placement failed); or
+  `{"ok": false, "error": ...}` if a guardrail blocked it
 
 Present the top candidates as a table with columns: strikes, credit, POP,
 short delta, distance-to-short (points and %), max profit, max loss, contracts, EV.

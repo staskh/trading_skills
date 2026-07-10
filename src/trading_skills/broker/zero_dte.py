@@ -890,7 +890,23 @@ async def _place_spread_order(
         "quantity": order.totalQuantity,
         "limit_price": order.lmtPrice,
         "limit_is_net_credit": round(abs(limit_credit), 2),
+        "log": _trade_log(trade),
     }
+
+
+def _trade_log(trade) -> list[dict]:
+    # Surfaces IB's reject/error messages so a terminal-Cancelled entry can be diagnosed
+    # (which margin/pricing/combo rule fired) instead of vanishing into a bare "Cancelled".
+    return [
+        {
+            "time": e.time.isoformat() if e.time else None,
+            "status": e.status,
+            "message": e.message,
+            "error_code": e.errorCode,
+        }
+        for e in trade.log
+        if e.message or e.errorCode
+    ]
 
 
 async def find_0dte_spreads(
@@ -1268,8 +1284,11 @@ async def _maybe_execute(
     if status != "Filled":
         # No confirmed position — cancel the working entry so it can't fill unprotected.
         entry = next((t for t in ib.trades() if t.order.orderId == result["order_id"]), None)
-        if entry is not None and status not in ("Cancelled", "ApiCancelled"):
-            ib.cancelOrder(entry.order)
+        if entry is not None:
+            # Refresh the log so any reject/error emitted during the fill wait is captured.
+            result["log"] = _trade_log(entry)
+            if status not in ("Cancelled", "ApiCancelled"):
+                ib.cancelOrder(entry.order)
         result["ok"] = False
         result["bracket"] = {
             "ok": False,
