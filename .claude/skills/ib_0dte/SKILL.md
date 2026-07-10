@@ -59,13 +59,13 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--stop-mult` — premium-cap stop: close when the spread reaches this multiple of the credit (default: `2.0` = lose ~1× credit). `0` disables the premium cap.
 - `--stop-buffer` — points before the short strike to trigger the level stop (default: `0` = at the strike).
 - `--stop-delta` — also stop when the short-leg delta reaches this level (optional, e.g. `0.30`).
-- `--profit-target` — buy back after capturing this fraction of the credit, e.g. `0.75` = 75% (`0` disables). Default: per-symbol preset, else `0.75`.
+- `--profit-target` — buy back after capturing this fraction of the credit, e.g. `0.5` = 50% (`0` disables). Default: per-symbol preset, else `0.50`.
 - `--time-exit` — flatten remaining spreads at this ET time, e.g. `15:30` (`none` disables). Default: per-symbol preset, else `15:30`.
 - `--fill-timeout` — seconds to wait for the entry to fill before cancelling it (default: `20`). The bracket needs a fill; if the entry doesn't fill it's cancelled so you're never unprotected.
 - `--verify-stops` — check that every open 0DTE spread has a resting protective stop, then exit (no symbol required). Add `--repair` to place a strike-level stop on any unprotected position.
 - `--repair` — with `--verify-stops`, auto-place a strike-level stop on unprotected positions.
 
-Stop and exit defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero_dte_stop.py`) — each maps `mult`, `buffer`, `delta`, `target` (profit-take), and `time_exit`. E.g. NDX uses `mult 3.0` + `0.30` delta backstop, `75%` target, `15:30` exit; SPX `mult 2.5`; unlisted symbols `mult 2.0`. Any explicit flag overrides the preset. Entry short-delta caps are separate (`ENTRY_MAX_DELTA`: 0.20 index / 0.20 stock). These are starting points; tune them with live data.
+Stop and exit defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero_dte_stop.py`) — each maps `mult`, `buffer`, `delta`, `target` (profit-take), and `time_exit`. E.g. NDX uses `mult 3.0` + `0.30` delta backstop, `50%` target, `15:30` exit; SPX `mult 2.5`; unlisted symbols `mult 2.0`. Any explicit flag overrides the preset. Entry short-delta caps are separate (`ENTRY_MAX_DELTA`: 0.20 index / 0.20 stock). These are starting points; tune them with live data.
 - `--expiry YYYYMMDD` — override the expiry (default: today ET, i.e. true 0DTE)
 - `--top` — number of candidates to return (default: 5)
 - `--min-pop` — minimum probability of profit, 0–1 (default: 0, no filter)
