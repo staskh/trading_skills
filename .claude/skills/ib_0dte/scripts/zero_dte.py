@@ -125,8 +125,8 @@ def main():
         "--profit-target",
         type=float,
         default=None,
-        help="Buy back after capturing this fraction of the credit, e.g. 0.5 = 50%% "
-        "(0 disables). Default: per-symbol preset, else 0.50.",
+        help="Buy back after capturing this fraction of the credit, e.g. 0.75 = 75%% "
+        "(0 disables). Default: per-symbol preset, else 0.75.",
     )
     parser.add_argument(
         "--time-exit",

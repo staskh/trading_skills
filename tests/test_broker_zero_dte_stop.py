@@ -170,6 +170,8 @@ class TestResolveStopCfg:
         cfg = resolve_stop_cfg("NDX", None, None, None, 20.0)
         assert cfg["mult"] == 3.0  # NDX preset
         assert cfg["delta"] == 0.35
+        assert cfg["target"] == 0.75  # capture 75% of credit by default
+        assert cfg["time_exit"] == "15:30"
         assert cfg["preset_symbol"] == "NDX"
 
     def test_explicit_args_override_preset(self):
