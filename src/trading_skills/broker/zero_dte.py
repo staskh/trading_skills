@@ -13,9 +13,9 @@ from scipy.stats import norm
 from trading_skills.black_scholes import black_scholes_delta, implied_volatility
 from trading_skills.broker.connection import CLIENT_IDS, ib_connection
 from trading_skills.broker.zero_dte_stop import (
-    DEFAULT_STOP_MULT,
     emergency_close,
     place_spread_stops,
+    resolve_stop_cfg,
     stop_plan,
 )
 from trading_skills.economic_calendar import fetch_us_economic_events
@@ -833,8 +833,8 @@ async def find_0dte_spreads(
     max_short_delta: float | None = None,
     allow_stale: bool = False,
     fetch_events: bool = True,
-    stop_mult: float = DEFAULT_STOP_MULT,
-    stop_buffer: float = 0.0,
+    stop_mult: float | None = None,
+    stop_buffer: float | None = None,
     stop_delta: float | None = None,
     fill_timeout: float = 20.0,
     rate: float = DEFAULT_RATE,
@@ -1031,12 +1031,9 @@ async def find_0dte_spreads(
                     rate=rate,
                     underlying_conid=contract.conId,
                     underlying_exch=INDEX_SPECS.get(symbol_u, "SMART"),
-                    stop_cfg={
-                        "mult": stop_mult,
-                        "buffer": stop_buffer,
-                        "delta": stop_delta,
-                        "fill_timeout": fill_timeout,
-                    },
+                    stop_cfg=resolve_stop_cfg(
+                        symbol_u, stop_mult, stop_buffer, stop_delta, fill_timeout
+                    ),
                 )
 
             return {

@@ -12,6 +12,7 @@ from trading_skills.broker.zero_dte import (
     find_0dte_spreads,
     get_0dte_expiries,
 )
+from trading_skills.broker.zero_dte_stop import verify_zdte_stops
 from trading_skills.utils import generated_at_str
 
 
@@ -19,7 +20,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Find best 0DTE credit spreads from Interactive Brokers"
     )
-    parser.add_argument("symbol", help="Underlying symbol (e.g. SPX, NDX, RUT, VIX, AAPL, SPY)")
+    parser.add_argument(
+        "symbol",
+        nargs="?",
+        help="Underlying symbol (e.g. SPX, NDX, RUT, VIX, AAPL, SPY). Optional for --verify-stops.",
+    )
     parser.add_argument(
         "--type",
         dest="spread_type",
@@ -91,21 +96,23 @@ def main():
     parser.add_argument(
         "--stop-mult",
         type=float,
-        default=2.0,
+        default=None,
         help="Premium-cap stop: close when the spread reaches this multiple of the credit "
-        "(default: 2.0 = lose ~1x credit). 0 disables the premium cap.",
+        "(0 disables it). Default: per-symbol preset (see STOP_PRESETS), else 2.0.",
     )
     parser.add_argument(
         "--stop-buffer",
         type=float,
-        default=0.0,
-        help="Points before the short strike to trigger the level stop (default: 0 = at the strike)",
+        default=None,
+        help="Points before the short strike to trigger the level stop "
+        "(default: per-symbol preset, else 0 = at the strike)",
     )
     parser.add_argument(
         "--stop-delta",
         type=float,
         default=None,
-        help="Also stop when the short-leg delta reaches this level (optional; e.g. 0.30)",
+        help="Also stop when the short-leg delta reaches this level, e.g. 0.30 "
+        "(default: per-symbol preset)",
     )
     parser.add_argument(
         "--fill-timeout",
@@ -114,11 +121,33 @@ def main():
         help="Seconds to wait for the entry to fill before cancelling it (stops need a fill)",
     )
     parser.add_argument("--expiries", action="store_true", help="List available expiries and exit")
+    parser.add_argument(
+        "--verify-stops",
+        action="store_true",
+        help="Check that every open 0DTE spread has a resting protective stop, then exit",
+    )
+    parser.add_argument(
+        "--repair",
+        action="store_true",
+        help="With --verify-stops: place a strike-level stop on any unprotected position",
+    )
     parser.add_argument("--port", type=int, default=7497, help="IB port (7497=paper, 7496=live)")
 
     args = parser.parse_args()
-    symbol = args.symbol.upper()
     ga = generated_at_str()
+
+    if args.verify_stops:
+        result = asyncio.run(
+            verify_zdte_stops(port=args.port, account=args.account, repair=args.repair)
+        )
+        result["generated_at"] = ga
+        result.setdefault("data_delay", "real-time")
+        print(json.dumps(result, indent=2))
+        sys.exit(0 if result.get("success") else 1)
+
+    if not args.symbol:
+        parser.error("symbol is required (except with --verify-stops)")
+    symbol = args.symbol.upper()
 
     if args.expiries:
         result = asyncio.run(get_0dte_expiries(symbol, port=args.port))

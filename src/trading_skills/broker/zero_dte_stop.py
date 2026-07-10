@@ -2,14 +2,50 @@
 # ABOUTME: Triggers on the underlying (short strike / premium cap / delta) and buys back the combo.
 
 import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from ib_async import ComboLeg, Contract, Option, Order, PriceCondition
 
 from trading_skills.black_scholes import black_scholes_delta, black_scholes_price
+from trading_skills.broker.connection import CLIENT_IDS, fetch_positions, ib_connection
 from trading_skills.utils import fetch_with_timeout
+
+_NY = ZoneInfo("America/New_York")
+
+_ACTIVE_STOP_STATUSES = {"PendingSubmit", "ApiPending", "PreSubmitted", "Submitted"}
 
 # Close at 2x the credit received (loss = 1x credit) unless overridden.
 DEFAULT_STOP_MULT = 2.0
+
+# Per-symbol stop presets — starting points, tune with live data. Keys are symbols;
+# "_default" applies to anything unlisted. Any CLI flag the user passes overrides these.
+# mult = premium-cap multiple, buffer = points before the short strike, delta = short-delta stop.
+STOP_PRESETS = {
+    # Wide, high-beta index → lean looser on the premium cap and add a delta backstop
+    # so a cheap far-OTM spread doesn't stop out on noise.
+    "NDX": {"mult": 3.0, "buffer": 0.0, "delta": 0.35},
+    "SPX": {"mult": 2.5, "buffer": 0.0, "delta": 0.35},
+    "RUT": {"mult": 2.0, "buffer": 0.0, "delta": 0.35},
+    "XSP": {"mult": 2.0, "buffer": 0.0, "delta": 0.35},
+    "_default": {"mult": DEFAULT_STOP_MULT, "buffer": 0.0, "delta": None},
+}
+
+
+def resolve_stop_cfg(symbol, mult, buffer, delta, fill_timeout):
+    """Merge explicit args over the per-symbol preset over the global default.
+
+    Any of mult/buffer/delta that is None falls back to the preset for `symbol`
+    (then to `_default`). fill_timeout is passed through unchanged.
+    """
+    preset = STOP_PRESETS.get(symbol.upper(), STOP_PRESETS["_default"])
+    return {
+        "mult": preset["mult"] if mult is None else mult,
+        "buffer": preset["buffer"] if buffer is None else buffer,
+        "delta": preset["delta"] if delta is None else delta,
+        "fill_timeout": fill_timeout,
+        "preset_symbol": symbol.upper() if symbol.upper() in STOP_PRESETS else "_default",
+    }
 
 
 def _vertical_value(right: str, spot: float, short_k: float, long_k: float, T, r, sigma) -> float:
@@ -195,6 +231,72 @@ async def _closing_combo(ib, legs_spec, symbol, expiry, exchange, trading_class)
     return combo
 
 
+def _closing_combo_from_conids(symbol, exchange, leg_conids):
+    """Build a closing BAG from already-known leg conIds and their close actions.
+
+    leg_conids: list of (conId, close_action) where close_action is 'BUY'/'SELL'.
+    Used by the verify/repair path, which reads legs straight from IB positions.
+    """
+    combo_legs = []
+    for con_id, action in leg_conids:
+        cl = ComboLeg()
+        cl.conId = con_id
+        cl.ratio = 1
+        cl.action = action
+        cl.exchange = exchange
+        combo_legs.append(cl)
+    combo = Contract()
+    combo.symbol = symbol
+    combo.secType = "BAG"
+    combo.currency = "USD"
+    combo.exchange = exchange
+    combo.comboLegs = combo_legs
+    return combo
+
+
+async def _place_conditional_closes(
+    ib, combo, width, qty, plans, underlying_conid, underlying_exch, account, order_ref
+):
+    """Place one conditional buy-to-close order per plan (OCA-linked when >1)."""
+    oca = order_ref if len(plans) > 1 else ""
+    placed = []
+    for plan in plans:
+        cond = PriceCondition()
+        cond.conId = underlying_conid
+        cond.exch = underlying_exch
+        cond.isMore = plan["is_more"]
+        cond.price = plan["trigger"]
+
+        order = Order()
+        order.action = "BUY"  # buy-to-close the reversed combo
+        order.orderType = "LMT"
+        order.totalQuantity = qty
+        order.lmtPrice = round(width, 2)
+        order.tif = "DAY"
+        order.orderRef = order_ref
+        order.account = account
+        order.conditions = [cond]
+        order.conditionsIgnoreRth = True
+        if oca:
+            order.ocaGroup = oca
+            order.ocaType = 1  # cancel remaining orders on fill
+
+        trade = ib.placeOrder(combo, order)
+        placed.append(
+            {
+                "side": plan["side"],
+                "order_id": trade.order.orderId,
+                "trigger": plan["trigger"],
+                "is_more": plan["is_more"],
+                "binding": plan["binding"],
+                "levels": plan["levels"],
+            }
+        )
+
+    await asyncio.sleep(2)
+    return {"ok": True, "order_ref": order_ref, "limit_price": round(width, 2), "stops": placed}
+
+
 async def place_spread_stops(
     ib,
     candidate,
@@ -224,43 +326,17 @@ async def place_spread_stops(
     else:
         width = candidate["width"]
 
-    oca = order_ref if len(plans) > 1 else ""
-    placed = []
-    for plan in plans:
-        cond = PriceCondition()
-        cond.conId = underlying_conid
-        cond.exch = underlying_exch
-        cond.isMore = plan["is_more"]
-        cond.price = plan["trigger"]
-
-        order = Order()
-        order.action = "BUY"  # buy-to-close the reversed combo
-        order.orderType = "LMT"
-        order.totalQuantity = candidate["contracts"]
-        order.lmtPrice = round(width, 2)
-        order.tif = "DAY"
-        order.orderRef = order_ref
-        order.account = account
-        order.conditions = [cond]
-        order.conditionsIgnoreRth = True
-        if oca:
-            order.ocaGroup = oca
-            order.ocaType = 1  # cancel remaining orders on fill
-
-        trade = ib.placeOrder(combo, order)
-        placed.append(
-            {
-                "side": plan["side"],
-                "order_id": trade.order.orderId,
-                "trigger": plan["trigger"],
-                "is_more": plan["is_more"],
-                "binding": plan["binding"],
-                "levels": plan["levels"],
-            }
-        )
-
-    await asyncio.sleep(2)
-    return {"ok": True, "order_ref": order_ref, "limit_price": round(width, 2), "stops": placed}
+    return await _place_conditional_closes(
+        ib,
+        combo,
+        width,
+        candidate["contracts"],
+        plans,
+        underlying_conid,
+        underlying_exch,
+        account,
+        order_ref,
+    )
 
 
 async def emergency_close(
@@ -280,3 +356,177 @@ async def emergency_close(
     trade = ib.placeOrder(combo, order)
     await asyncio.sleep(2)
     return {"ok": True, "order_id": trade.order.orderId, "status": trade.orderStatus.status}
+
+
+# --------------------------------------------------------------------------- #
+# Verify / repair stops on open 0DTE positions
+# --------------------------------------------------------------------------- #
+def _today_ny() -> str:
+    return datetime.now(_NY).strftime("%Y%m%d")
+
+
+def reconstruct_spread(legs: list[dict]):
+    """Rebuild a spread candidate from IB position legs (right/strike/qty/conId).
+
+    Recognizes a 2-leg vertical (bear call / bull put) or a 4-leg iron condor.
+    Returns a candidate dict (with _close_conids and _width_cap for placement) or
+    None when the legs don't form a recognized 0DTE credit spread.
+    """
+    calls = sorted((leg for leg in legs if leg["right"] == "C"), key=lambda x: x["strike"])
+    puts = sorted((leg for leg in legs if leg["right"] == "P"), key=lambda x: x["strike"])
+
+    def view(leg):
+        return {
+            "action": "sell" if leg["qty"] < 0 else "buy",
+            "right": leg["right"],
+            "strike": leg["strike"],
+        }
+
+    def closers(ls):
+        # Close = reverse: short leg (qty<0) → BUY back, long leg (qty>0) → SELL.
+        return [(leg["conId"], "BUY" if leg["qty"] < 0 else "SELL") for leg in ls]
+
+    if len(calls) == 2 and not puts:
+        short, long = calls[0], calls[1]  # bear call: short is the lower strike
+        if short["qty"] >= 0 or long["qty"] <= 0:
+            return None
+        width = abs(long["strike"] - short["strike"])
+        return {
+            "strategy": "bear_call",
+            "legs": [view(short), view(long)],
+            "width": width,
+            "contracts": abs(short["qty"]),
+            "net_credit": 0.0,
+            "_close_conids": closers([short, long]),
+            "_width_cap": width,
+        }
+    if len(puts) == 2 and not calls:
+        long, short = puts[0], puts[1]  # bull put: short is the higher strike
+        if short["qty"] >= 0 or long["qty"] <= 0:
+            return None
+        width = abs(short["strike"] - long["strike"])
+        return {
+            "strategy": "bull_put",
+            "legs": [view(short), view(long)],
+            "width": width,
+            "contracts": abs(short["qty"]),
+            "net_credit": 0.0,
+            "_close_conids": closers([short, long]),
+            "_width_cap": width,
+        }
+    if len(calls) == 2 and len(puts) == 2:
+        call_short, call_long = calls[0], calls[1]
+        put_long, put_short = puts[0], puts[1]
+        cw = abs(call_long["strike"] - call_short["strike"])
+        pw = abs(put_short["strike"] - put_long["strike"])
+        return {
+            "strategy": "iron_condor",
+            "legs": [view(put_short), view(put_long), view(call_short), view(call_long)],
+            "call_width": cw,
+            "put_width": pw,
+            "contracts": abs(call_short["qty"]),
+            "net_credit": 0.0,
+            "_close_conids": closers([put_short, put_long, call_short, call_long]),
+            "_width_cap": max(cw, pw),
+        }
+    return None
+
+
+async def verify_zdte_stops(port: int = 7497, account: str | None = None, repair: bool = False):
+    """Check that every open 0DTE credit spread has a resting protective stop.
+
+    Reports protected / unprotected / unrecognized positions. With repair=True,
+    places a strike-level stop (± the symbol's preset buffer) on any unprotected
+    recognized spread — a safety net that needs no live market data.
+    """
+    # Lazy import avoids a circular dependency (zero_dte imports this module).
+    from trading_skills.broker.zero_dte import INDEX_SPECS, resolve_underlying
+
+    try:
+        async with ib_connection(port, CLIENT_IDS["zero_dte"], readonly=not repair) as ib:
+            managed = ib.managedAccounts()
+            if account and managed and account not in managed:
+                return {
+                    "success": False,
+                    "error": f"Account {account} not found. Available: {managed}",
+                }
+
+            today = _today_ny()
+            raw = await fetch_positions(ib, account=account)
+
+            await fetch_with_timeout(ib.reqAllOpenOrdersAsync(), timeout=5, default=[])
+            protected = set()
+            for t in ib.openTrades():
+                ref = t.order.orderRef or ""
+                if ref.startswith("ZDTE_STOP_") and t.orderStatus.status in _ACTIVE_STOP_STATUSES:
+                    parts = ref.split("_")
+                    if len(parts) >= 2:  # ...._<symbol>_<expiry>
+                        protected.add(((t.order.account or ""), parts[-2]))
+
+            groups: dict = {}
+            for p in raw:
+                c = p.contract
+                if c.secType != "OPT" or p.position == 0:
+                    continue
+                if c.lastTradeDateOrContractMonth != today:
+                    continue  # 0DTE only
+                groups.setdefault((p.account, c.symbol), []).append(
+                    {"right": c.right, "strike": c.strike, "qty": p.position, "conId": c.conId}
+                )
+
+            report = {
+                "success": True,
+                "today": today,
+                "positions_checked": len(groups),
+                "protected": [],
+                "unprotected": [],
+                "repaired": [],
+                "unrecognized": [],
+            }
+            for (acct, symbol), legs in groups.items():
+                cand = reconstruct_spread(legs)
+                base = {
+                    "account": acct,
+                    "symbol": symbol,
+                    "strategy": cand["strategy"] if cand else "unrecognized",
+                    "contracts": cand["contracts"] if cand else None,
+                }
+                if cand is None:
+                    report["unrecognized"].append({**base, "legs": legs})
+                elif (acct, symbol) in protected:
+                    report["protected"].append(base)
+                elif not repair:
+                    report["unprotected"].append(base)
+                else:
+                    stop = await _repair_stop(
+                        ib, cand, symbol, acct, today, INDEX_SPECS, resolve_underlying
+                    )
+                    report["repaired"].append({**base, "stop": stop})
+            return report
+    except ConnectionError as e:
+        return {"success": False, "error": str(e)}
+
+
+async def _repair_stop(ib, cand, symbol, account, today, index_specs, resolve_underlying):
+    """Place a strike-level stop on a reconstructed spread (no market data needed)."""
+    und, _sec, _at = resolve_underlying(symbol)
+    qualified = await fetch_with_timeout(ib.qualifyContractsAsync(und), timeout=10, default=[])
+    if not qualified or not qualified[0].conId:
+        return {"ok": False, "error": f"Could not qualify underlying {symbol}"}
+    underlying_exch = index_specs.get(symbol.upper(), "SMART")
+    buf = STOP_PRESETS.get(symbol.upper(), STOP_PRESETS["_default"])["buffer"]
+    # Strike-level only (mult=0, no delta) so no spot/IV lookup is required.
+    plans = stop_plan(cand, 0.0, 0.0, 0.045, mult=0, buffer_pts=buf, target_delta=None)
+    combo = _closing_combo_from_conids(symbol, "SMART", cand["_close_conids"])
+    order_ref = f"ZDTE_STOP_{cand['strategy']}_{symbol}_{today}"
+    return await _place_conditional_closes(
+        ib,
+        combo,
+        cand["_width_cap"],
+        cand["contracts"],
+        plans,
+        und.conId,
+        underlying_exch,
+        account,
+        order_ref,
+    )

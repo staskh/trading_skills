@@ -60,6 +60,10 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--stop-buffer` — points before the short strike to trigger the level stop (default: `0` = at the strike).
 - `--stop-delta` — also stop when the short-leg delta reaches this level (optional, e.g. `0.30`).
 - `--fill-timeout` — seconds to wait for the entry to fill before cancelling it (default: `20`). A stop needs a fill; if the entry doesn't fill it's cancelled so you're never unprotected.
+- `--verify-stops` — check that every open 0DTE spread has a resting protective stop, then exit (no symbol required). Add `--repair` to place a strike-level stop on any unprotected position.
+- `--repair` — with `--verify-stops`, auto-place a strike-level stop on unprotected positions.
+
+Stop defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero_dte_stop.py`) — e.g. NDX uses `mult 3.0` + a `0.35` delta backstop, SPX `2.5`, unlisted symbols `2.0`. Any `--stop-*` flag you pass overrides the preset. These are starting points; tune them with live data.
 - `--expiry YYYYMMDD` — override the expiry (default: today ET, i.e. true 0DTE)
 - `--top` — number of candidates to return (default: 5)
 - `--min-pop` — minimum probability of profit, 0–1 (default: 0, no filter)
@@ -114,6 +118,20 @@ OCA-linked stops** (either breach closes the whole condor). The close is a **mar
 limit capped at the spread width** — fills at market but never worse than the defined
 max loss. A stop reduces the *average* loss; it does **not** guarantee the price in a
 gap, so the budget-capped max loss remains the true floor.
+
+### Verifying / repairing stops
+
+```bash
+uv run python scripts/zero_dte.py --verify-stops --account U1234567          # report
+uv run python scripts/zero_dte.py --verify-stops --repair --account U1234567 # auto-fix
+```
+
+Scans open **0DTE** option positions per account and buckets them into `protected`
+(a resting `ZDTE_STOP_…` order exists), `unprotected`, and `unrecognized` (legs that
+don't form a recognized spread). With `--repair`, each unprotected recognized spread
+gets a **strike-level** stop (± the symbol's preset buffer) — a safety net that needs
+no live market data. Run it after entering trades, and periodically, to confirm nothing
+is naked.
 
 ## How ranking works
 

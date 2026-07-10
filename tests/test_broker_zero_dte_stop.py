@@ -2,6 +2,8 @@
 # ABOUTME: Verifies trigger direction, level combination, and the premium-cap solve.
 
 from trading_skills.broker.zero_dte_stop import (
+    reconstruct_spread,
+    resolve_stop_cfg,
     stop_plan,
     vertical_stop_level,
 )
@@ -158,3 +160,62 @@ class TestStopPlan:
         put = next(p for p in plans if p["side"] == "put")
         assert call["is_more"] is True and call["trigger"] > 100
         assert put["is_more"] is False and put["trigger"] < 100
+
+
+class TestResolveStopCfg:
+    def test_preset_applied_when_args_none(self):
+        cfg = resolve_stop_cfg("NDX", None, None, None, 20.0)
+        assert cfg["mult"] == 3.0  # NDX preset
+        assert cfg["delta"] == 0.35
+        assert cfg["preset_symbol"] == "NDX"
+
+    def test_explicit_args_override_preset(self):
+        cfg = resolve_stop_cfg("NDX", 1.5, 10.0, None, 20.0)
+        assert cfg["mult"] == 1.5  # explicit wins
+        assert cfg["buffer"] == 10.0
+        assert cfg["delta"] == 0.35  # still from preset
+
+    def test_unlisted_symbol_uses_default(self):
+        cfg = resolve_stop_cfg("AAPL", None, None, None, 20.0)
+        assert cfg["mult"] == 2.0
+        assert cfg["delta"] is None
+        assert cfg["preset_symbol"] == "_default"
+
+
+class TestReconstructSpread:
+    def test_bear_call_from_positions(self):
+        legs = [
+            {"right": "C", "strike": 105, "qty": -1, "conId": 1},  # short lower
+            {"right": "C", "strike": 110, "qty": 1, "conId": 2},  # long higher
+        ]
+        cand = reconstruct_spread(legs)
+        assert cand["strategy"] == "bear_call"
+        assert cand["legs"][0] == {"action": "sell", "right": "C", "strike": 105}
+        assert cand["width"] == 5
+        assert cand["contracts"] == 1
+        assert cand["_close_conids"] == [(1, "BUY"), (2, "SELL")]
+
+    def test_bull_put_from_positions(self):
+        legs = [
+            {"right": "P", "strike": 90, "qty": 1, "conId": 3},  # long lower
+            {"right": "P", "strike": 95, "qty": -1, "conId": 4},  # short higher
+        ]
+        cand = reconstruct_spread(legs)
+        assert cand["strategy"] == "bull_put"
+        assert cand["legs"][0]["strike"] == 95  # short first
+        assert cand["_close_conids"][0] == (4, "BUY")  # short → buy to close
+
+    def test_iron_condor_from_positions(self):
+        legs = [
+            {"right": "P", "strike": 90, "qty": 1, "conId": 1},
+            {"right": "P", "strike": 95, "qty": -1, "conId": 2},
+            {"right": "C", "strike": 105, "qty": -1, "conId": 3},
+            {"right": "C", "strike": 110, "qty": 1, "conId": 4},
+        ]
+        cand = reconstruct_spread(legs)
+        assert cand["strategy"] == "iron_condor"
+        assert cand["call_width"] == 5 and cand["put_width"] == 5
+        assert len(cand["_close_conids"]) == 4
+
+    def test_unrecognized_returns_none(self):
+        assert reconstruct_spread([{"right": "C", "strike": 105, "qty": -1, "conId": 1}]) is None
