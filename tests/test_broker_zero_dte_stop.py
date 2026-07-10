@@ -1,7 +1,10 @@
 # ABOUTME: Tests for 0DTE stop-loss level math (pure); order placement is manual/live.
 # ABOUTME: Verifies trigger direction, level combination, and the premium-cap solve.
 
+import asyncio
+
 from trading_skills.broker.zero_dte_stop import (
+    place_spread_bracket,
     reconstruct_spread,
     resolve_stop_cfg,
     stop_plan,
@@ -219,3 +222,87 @@ class TestReconstructSpread:
 
     def test_unrecognized_returns_none(self):
         assert reconstruct_spread([{"right": "C", "strike": 105, "qty": -1, "conId": 1}]) is None
+
+
+class _FakeQ:
+    def __init__(self, con_id):
+        self.conId = con_id
+
+
+class _FakeOrder:
+    def __init__(self, oid):
+        self.orderId = oid
+
+
+class _FakeTrade:
+    def __init__(self, oid):
+        self.order = _FakeOrder(oid)
+
+
+class _FakeBracketIB:
+    def __init__(self):
+        self.placed = []
+        self._id = 1000
+
+    async def qualifyContractsAsync(self, *contracts):
+        return [_FakeQ(500 + i) for i, _ in enumerate(contracts)]
+
+    def placeOrder(self, combo, order):
+        self._id += 1
+        self.placed.append(order)
+        return _FakeTrade(self._id)
+
+
+class TestPlaceBracket:
+    CAND = {
+        "strategy": "bear_call",
+        "width": 5,
+        "net_credit": 0.60,
+        "contracts": 3,
+        "legs": [
+            {"action": "sell", "right": "C", "strike": 105, "iv": 20.0},
+            {"action": "buy", "right": "C", "strike": 110, "iv": 19.0},
+        ],
+    }
+
+    def _run(self, target_frac, time_cutoff):
+        ib = _FakeBracketIB()
+        plans = stop_plan(self.CAND, 100, 0.01, 0.045, mult=2.0, buffer_pts=0, target_delta=None)
+        res = asyncio.run(
+            place_spread_bracket(
+                ib,
+                self.CAND,
+                "NDX",
+                "20260710",
+                "SMART",
+                "NDXP",
+                999,
+                "NASDAQ",
+                "DU1",
+                "ZDTE_STOP_bear_call_NDX_20260710",
+                plans,
+                credit=0.60,
+                target_frac=target_frac,
+                time_cutoff=time_cutoff,
+            )
+        )
+        return ib, res
+
+    def test_full_bracket_is_one_oca_group(self):
+        ib, res = self._run(0.5, "20260710 15:30:00 US/Eastern")
+        assert res["ok"] is True
+        # 3 orders: profit target + stop + time exit
+        assert len(ib.placed) == 3
+        assert {o.action for o in ib.placed} == {"BUY"}
+        assert {o.ocaGroup for o in ib.placed} == {"ZDTE_STOP_bear_call_NDX_20260710"}
+        # profit target = (1 - 0.5) * 0.60 = 0.30 debit
+        assert res["profit_target"]["limit_debit"] == 0.30
+        assert len(res["stops"]) == 1
+        assert res["time_exit"]["cutoff"] == "20260710 15:30:00 US/Eastern"
+
+    def test_disabling_target_and_time_leaves_only_stop(self):
+        ib, res = self._run(0, None)
+        assert res["profit_target"] is None
+        assert res["time_exit"] is None
+        assert len(res["stops"]) == 1
+        assert len(ib.placed) == 1  # stop only

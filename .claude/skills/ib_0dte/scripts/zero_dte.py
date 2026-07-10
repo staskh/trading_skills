@@ -16,6 +16,13 @@ from trading_skills.broker.zero_dte_stop import verify_zdte_stops
 from trading_skills.utils import generated_at_str
 
 
+def _normalize_time_exit(value):
+    """Map None (use preset) through; treat 'none'/'off'/'' as disabled ('')."""
+    if value is None:
+        return None
+    return "" if value.strip().lower() in ("none", "off", "") else value.strip()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Find best 0DTE credit spreads from Interactive Brokers"
@@ -115,6 +122,19 @@ def main():
         "(default: per-symbol preset)",
     )
     parser.add_argument(
+        "--profit-target",
+        type=float,
+        default=None,
+        help="Buy back after capturing this fraction of the credit, e.g. 0.5 = 50%% "
+        "(0 disables). Default: per-symbol preset, else 0.50.",
+    )
+    parser.add_argument(
+        "--time-exit",
+        default=None,
+        help="Flatten remaining spreads at this ET time, e.g. 15:30 ('none' disables). "
+        "Default: per-symbol preset, else 15:30.",
+    )
+    parser.add_argument(
         "--fill-timeout",
         type=float,
         default=20.0,
@@ -173,6 +193,8 @@ def main():
                 stop_mult=args.stop_mult,
                 stop_buffer=args.stop_buffer,
                 stop_delta=args.stop_delta,
+                profit_target=args.profit_target,
+                time_exit=_normalize_time_exit(args.time_exit),
                 fill_timeout=args.fill_timeout,
             )
         )

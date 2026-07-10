@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from ib_async import ComboLeg, Contract, Option, Order, PriceCondition
+from ib_async import ComboLeg, Contract, Option, Order, PriceCondition, TimeCondition
 
 from trading_skills.black_scholes import black_scholes_delta, black_scholes_price
 from trading_skills.broker.connection import CLIENT_IDS, fetch_positions, ib_connection
@@ -24,25 +24,35 @@ DEFAULT_STOP_MULT = 2.0
 STOP_PRESETS = {
     # Wide, high-beta index → lean looser on the premium cap and add a delta backstop
     # so a cheap far-OTM spread doesn't stop out on noise.
-    "NDX": {"mult": 3.0, "buffer": 0.0, "delta": 0.35},
-    "SPX": {"mult": 2.5, "buffer": 0.0, "delta": 0.35},
-    "RUT": {"mult": 2.0, "buffer": 0.0, "delta": 0.35},
-    "XSP": {"mult": 2.0, "buffer": 0.0, "delta": 0.35},
-    "_default": {"mult": DEFAULT_STOP_MULT, "buffer": 0.0, "delta": None},
+    # target = fraction of credit to capture; time_exit = ET flatten time.
+    "NDX": {"mult": 3.0, "buffer": 0.0, "delta": 0.35, "target": 0.50, "time_exit": "15:30"},
+    "SPX": {"mult": 2.5, "buffer": 0.0, "delta": 0.35, "target": 0.50, "time_exit": "15:30"},
+    "RUT": {"mult": 2.0, "buffer": 0.0, "delta": 0.35, "target": 0.50, "time_exit": "15:30"},
+    "XSP": {"mult": 2.0, "buffer": 0.0, "delta": 0.35, "target": 0.50, "time_exit": "15:30"},
+    "_default": {
+        "mult": DEFAULT_STOP_MULT,
+        "buffer": 0.0,
+        "delta": None,
+        "target": 0.50,
+        "time_exit": "15:30",
+    },
 }
 
 
-def resolve_stop_cfg(symbol, mult, buffer, delta, fill_timeout):
+def resolve_stop_cfg(symbol, mult, buffer, delta, fill_timeout, target=None, time_exit=None):
     """Merge explicit args over the per-symbol preset over the global default.
 
-    Any of mult/buffer/delta that is None falls back to the preset for `symbol`
-    (then to `_default`). fill_timeout is passed through unchanged.
+    Any of mult/buffer/delta/target/time_exit that is None falls back to the preset
+    for `symbol` (then to `_default`). fill_timeout is passed through unchanged.
+    A `target` of 0 disables the profit-take; a `time_exit` of "" disables the timer.
     """
     preset = STOP_PRESETS.get(symbol.upper(), STOP_PRESETS["_default"])
     return {
         "mult": preset["mult"] if mult is None else mult,
         "buffer": preset["buffer"] if buffer is None else buffer,
         "delta": preset["delta"] if delta is None else delta,
+        "target": preset["target"] if target is None else target,
+        "time_exit": preset["time_exit"] if time_exit is None else time_exit,
         "fill_timeout": fill_timeout,
         "preset_symbol": symbol.upper() if symbol.upper() in STOP_PRESETS else "_default",
     }
@@ -337,6 +347,117 @@ async def place_spread_stops(
         account,
         order_ref,
     )
+
+
+def _close_order(qty, order_ref, oca_group, order_type, lmt_price, conditions, account):
+    """A buy-to-close order for the reversed combo (one leg of the OCA bracket)."""
+    o = Order()
+    o.action = "BUY"
+    o.orderType = order_type
+    o.totalQuantity = qty
+    if lmt_price is not None:
+        o.lmtPrice = round(lmt_price, 2)
+    o.tif = "DAY"
+    o.orderRef = order_ref
+    o.account = account
+    if conditions:
+        o.conditions = conditions
+        o.conditionsIgnoreRth = True
+    if oca_group:
+        o.ocaGroup = oca_group
+        o.ocaType = 1  # first fill cancels the rest of the bracket
+    return o
+
+
+async def place_spread_bracket(
+    ib,
+    candidate,
+    symbol,
+    expiry,
+    exchange,
+    trading_class,
+    underlying_conid,
+    underlying_exch,
+    account,
+    order_ref,
+    plans,
+    *,
+    credit,
+    target_frac,
+    time_cutoff,
+):
+    """Place the full exit bracket on a filled spread as one OCA group.
+
+    - Profit target: resting buy-to-close LMT at (1 - target_frac) × credit.
+    - Stop(s): price-conditional marketable limit(s) capped at the spread width.
+    - Time exit: time-conditional marketable limit at `time_cutoff`.
+
+    All share one OCA group, so whichever fills first cancels the others (server-side).
+    The profit target naturally captures near-worthless winners well before the timer.
+    """
+    combo = await _closing_combo(ib, candidate["legs"], symbol, expiry, exchange, trading_class)
+    if combo is None:
+        return {"ok": False, "error": "Could not qualify legs to build the bracket"}
+
+    if candidate["strategy"] == "iron_condor":
+        width = max(candidate["call_width"], candidate["put_width"])
+    else:
+        width = candidate["width"]
+    qty = candidate["contracts"]
+    oca = order_ref  # one OCA group for the whole bracket
+
+    result = {
+        "ok": True,
+        "oca_group": oca,
+        "limit_price": round(width, 2),
+        "profit_target": None,
+        "stops": [],
+        "time_exit": None,
+    }
+
+    if target_frac and credit and credit > 0:
+        target_debit = max(0.01, round((1 - target_frac) * credit, 2))
+        order = _close_order(qty, order_ref, oca, "LMT", target_debit, None, account)
+        trade = ib.placeOrder(combo, order)
+        result["profit_target"] = {
+            "order_id": trade.order.orderId,
+            "limit_debit": target_debit,
+            "capture_frac": target_frac,
+        }
+
+    for plan in plans:
+        cond = PriceCondition()
+        cond.conId = underlying_conid
+        cond.exch = underlying_exch
+        cond.isMore = plan["is_more"]
+        cond.price = plan["trigger"]
+        order = _close_order(qty, order_ref, oca, "LMT", width, [cond], account)
+        trade = ib.placeOrder(combo, order)
+        result["stops"].append(
+            {
+                "side": plan["side"],
+                "order_id": trade.order.orderId,
+                "trigger": plan["trigger"],
+                "is_more": plan["is_more"],
+                "binding": plan["binding"],
+                "levels": plan["levels"],
+            }
+        )
+
+    if time_cutoff:
+        tcond = TimeCondition()
+        tcond.time = time_cutoff
+        tcond.isMore = True  # trigger once the clock passes the cutoff
+        order = _close_order(qty, order_ref, oca, "LMT", width, [tcond], account)
+        trade = ib.placeOrder(combo, order)
+        result["time_exit"] = {
+            "order_id": trade.order.orderId,
+            "cutoff": time_cutoff,
+            "limit_price": round(width, 2),
+        }
+
+    await asyncio.sleep(2)
+    return result
 
 
 async def emergency_close(

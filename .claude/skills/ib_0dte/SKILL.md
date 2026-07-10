@@ -59,11 +59,13 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--stop-mult` — premium-cap stop: close when the spread reaches this multiple of the credit (default: `2.0` = lose ~1× credit). `0` disables the premium cap.
 - `--stop-buffer` — points before the short strike to trigger the level stop (default: `0` = at the strike).
 - `--stop-delta` — also stop when the short-leg delta reaches this level (optional, e.g. `0.30`).
-- `--fill-timeout` — seconds to wait for the entry to fill before cancelling it (default: `20`). A stop needs a fill; if the entry doesn't fill it's cancelled so you're never unprotected.
+- `--profit-target` — buy back after capturing this fraction of the credit, e.g. `0.5` = 50% (`0` disables). Default: per-symbol preset, else `0.50`.
+- `--time-exit` — flatten remaining spreads at this ET time, e.g. `15:30` (`none` disables). Default: per-symbol preset, else `15:30`.
+- `--fill-timeout` — seconds to wait for the entry to fill before cancelling it (default: `20`). The bracket needs a fill; if the entry doesn't fill it's cancelled so you're never unprotected.
 - `--verify-stops` — check that every open 0DTE spread has a resting protective stop, then exit (no symbol required). Add `--repair` to place a strike-level stop on any unprotected position.
 - `--repair` — with `--verify-stops`, auto-place a strike-level stop on unprotected positions.
 
-Stop defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero_dte_stop.py`) — e.g. NDX uses `mult 3.0` + a `0.35` delta backstop, SPX `2.5`, unlisted symbols `2.0`. Any `--stop-*` flag you pass overrides the preset. These are starting points; tune them with live data.
+Stop and exit defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero_dte_stop.py`) — each maps `mult`, `buffer`, `delta`, `target` (profit-take), and `time_exit`. E.g. NDX uses `mult 3.0` + `0.35` delta backstop, `50%` target, `15:30` exit; SPX `mult 2.5`; unlisted symbols `mult 2.0`. Any explicit flag overrides the preset. These are starting points; tune them with live data.
 - `--expiry YYYYMMDD` — override the expiry (default: today ET, i.e. true 0DTE)
 - `--top` — number of candidates to return (default: 5)
 - `--min-pop` — minimum probability of profit, 0–1 (default: 0, no filter)
@@ -94,17 +96,24 @@ Guardrails before an order is sent:
 The connection is **read-only unless `--execute` is passed**, so a plain analysis run
 can never place an order. Confirm the proposal with the user before executing.
 
-## Stop-loss (automatic, non-negotiable on `--execute`)
+## Exit bracket (automatic, non-negotiable on `--execute`)
 
-Every `--execute` **atomically attaches a protective stop** — you can never end up
-holding an unprotected 0DTE position:
+Every `--execute` **atomically attaches a full OCA exit bracket** — you can never end
+up holding an unmanaged 0DTE position:
 
 1. The entry combo is placed and the tool **waits for it to fill** (`--fill-timeout`).
 2. If it doesn't fill, the entry is **cancelled** (no position, no risk) and the result
    reports why — retry with a marketable `--limit` or during liquid hours.
-3. On fill, a **conditional close order** is placed that buys the spread back when the
-   **underlying** breaches the stop level. If that placement fails, the position is
-   **emergency market-closed** immediately.
+3. On fill, three closing orders are placed in **one OCA group** (whichever fills first
+   cancels the others, server-side):
+   - **Profit target** — a resting limit to buy back at `(1 − target) × credit`.
+   - **Stop** — a conditional order that buys back when the **underlying** breaches the
+     stop level.
+   - **Time exit** — a conditional order that flattens at the `--time-exit` ET time.
+   If bracket placement fails, the position is **emergency market-closed** immediately.
+
+The profit target naturally captures near-worthless winners well before the timer, so
+the time exit mainly flattens positions still hovering near breakeven into the close.
 
 The stop trigger is **level-anchored on the underlying** (robust to option-price noise),
 taking whichever of these fires first:
@@ -159,9 +168,10 @@ JSON with:
 - `picked` — the 1-based rank executed (only when `--execute`)
 - `order` — the placement result when `--execute`: `order_id`, `status`, `filled`,
   `remaining`, `quantity`, `limit_price` (negative = net credit), `account`, `order_ref`,
-  `entry_status`, and `stop` (the attached stop: `stops` with each side's `trigger` /
-  `binding` level / `order_id`, or `{"ok": false, ...}` with an `emergency_close` if the
-  stop failed); or `{"ok": false, "error": ...}` if a guardrail blocked it
+  `entry_status`, and `bracket` (the attached OCA exit bracket: `profit_target`
+  (`limit_debit`), `stops` (each side's `trigger` / `binding` level / `order_id`), and
+  `time_exit` (`cutoff`); or `{"ok": false, ...}` with an `emergency_close` if bracket
+  placement failed); or `{"ok": false, "error": ...}` if a guardrail blocked it
 
 Present the top candidates as a table with columns: strikes, credit, POP,
 short delta, distance-to-short (points and %), max profit, max loss, contracts, EV.

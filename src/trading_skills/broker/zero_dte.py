@@ -14,7 +14,7 @@ from trading_skills.black_scholes import black_scholes_delta, implied_volatility
 from trading_skills.broker.connection import CLIENT_IDS, ib_connection
 from trading_skills.broker.zero_dte_stop import (
     emergency_close,
-    place_spread_stops,
+    place_spread_bracket,
     resolve_stop_cfg,
     stop_plan,
 )
@@ -836,6 +836,8 @@ async def find_0dte_spreads(
     stop_mult: float | None = None,
     stop_buffer: float | None = None,
     stop_delta: float | None = None,
+    profit_target: float | None = None,
+    time_exit: str | None = None,
     fill_timeout: float = 20.0,
     rate: float = DEFAULT_RATE,
     strike_band: float = 0.15,
@@ -1032,7 +1034,13 @@ async def find_0dte_spreads(
                     underlying_conid=contract.conId,
                     underlying_exch=INDEX_SPECS.get(symbol_u, "SMART"),
                     stop_cfg=resolve_stop_cfg(
-                        symbol_u, stop_mult, stop_buffer, stop_delta, fill_timeout
+                        symbol_u,
+                        stop_mult,
+                        stop_buffer,
+                        stop_delta,
+                        fill_timeout,
+                        target=profit_target,
+                        time_exit=time_exit,
                     ),
                 )
 
@@ -1150,8 +1158,15 @@ async def _maybe_execute(
 
     limit_credit = limit if limit is not None else candidate["net_credit"]
     result = await _place_spread_order(
-        ib, candidate, symbol_u, target, exchange, trading_class,
-        trade_account, limit_credit, order_ref,
+        ib,
+        candidate,
+        symbol_u,
+        target,
+        exchange,
+        trading_class,
+        trade_account,
+        limit_credit,
+        order_ref,
     )
     if existing and result.get("ok"):
         result["replaced_order_id"] = existing.order.orderId
@@ -1167,7 +1182,7 @@ async def _maybe_execute(
         if entry is not None and status not in ("Cancelled", "ApiCancelled"):
             ib.cancelOrder(entry.order)
         result["ok"] = False
-        result["stop"] = {
+        result["bracket"] = {
             "ok": False,
             "error": f"Entry not filled ({status}) within {stop_cfg['fill_timeout']}s; "
             "cancelled to avoid an unprotected position. Use a marketable --limit or "
@@ -1176,20 +1191,45 @@ async def _maybe_execute(
         return result
 
     plans = stop_plan(
-        candidate, spot, T, rate,
-        mult=stop_cfg["mult"], buffer_pts=stop_cfg["buffer"], target_delta=stop_cfg["delta"],
+        candidate,
+        spot,
+        T,
+        rate,
+        mult=stop_cfg["mult"],
+        buffer_pts=stop_cfg["buffer"],
+        target_delta=stop_cfg["delta"],
     )
     stop_ref = f"ZDTE_STOP_{spread_type}_{symbol_u}_{target}"
-    stop_res = await place_spread_stops(
-        ib, candidate, symbol_u, target, exchange, trading_class,
-        underlying_conid, underlying_exch, trade_account, stop_ref, plans,
+    cutoff = stop_cfg.get("time_exit")
+    time_cutoff = f"{target} {cutoff}:00 US/Eastern" if cutoff else None
+    bracket = await place_spread_bracket(
+        ib,
+        candidate,
+        symbol_u,
+        target,
+        exchange,
+        trading_class,
+        underlying_conid,
+        underlying_exch,
+        trade_account,
+        stop_ref,
+        plans,
+        credit=candidate["net_credit"],
+        target_frac=stop_cfg["target"],
+        time_cutoff=time_cutoff,
     )
-    result["stop"] = stop_res
-    if not stop_res.get("ok"):
+    result["bracket"] = bracket
+    if not bracket.get("ok"):
         # Protection failed on a live position — flatten immediately.
         result["emergency_close"] = await emergency_close(
-            ib, candidate, symbol_u, target, exchange, trading_class,
-            trade_account, f"ZDTE_EMERG_{symbol_u}_{target}",
+            ib,
+            candidate,
+            symbol_u,
+            target,
+            exchange,
+            trading_class,
+            trade_account,
+            f"ZDTE_EMERG_{symbol_u}_{target}",
         )
         result["ok"] = False
     return result
