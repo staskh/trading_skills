@@ -189,7 +189,7 @@ def main():
     parser.add_argument(
         "--fill-timeout",
         type=float,
-        default=20.0,
+        default=60.0,
         help="Seconds to wait for the entry to fill before cancelling it (stops need a fill)",
     )
     parser.add_argument("--expiries", action="store_true", help="List available expiries and exit")

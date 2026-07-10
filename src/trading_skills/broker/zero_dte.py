@@ -919,7 +919,7 @@ async def find_0dte_spreads(
     stop_delta: float | None = None,
     profit_target: float | None = None,
     time_exit: str | None = None,
-    fill_timeout: float = 20.0,
+    fill_timeout: float = 60.0,
     rate: float = DEFAULT_RATE,
     strike_band: float = 0.15,
 ) -> dict:

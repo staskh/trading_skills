@@ -62,7 +62,7 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--stop-delta` — also stop when the short-leg delta reaches this level (optional, e.g. `0.30`).
 - `--profit-target` — buy back after capturing this fraction of the credit, e.g. `0.5` = 50% (`0` disables). Default: per-symbol preset, else `0.50`.
 - `--time-exit` — flatten remaining spreads at this ET time, e.g. `15:30` (`none` disables). Default: per-symbol preset, else `15:30`.
-- `--fill-timeout` — seconds to wait for the entry to fill before cancelling it (default: `20`). The bracket needs a fill; if the entry doesn't fill it's cancelled so you're never unprotected.
+- `--fill-timeout` — seconds to wait for the entry to fill before cancelling it (default: `60`). The bracket needs a fill; if the entry doesn't fill it's cancelled so you're never unprotected.
 - `--verify-stops` — check that every open 0DTE spread has a resting protective stop, then exit (no symbol required). Add `--repair` to place a strike-level stop on any unprotected position.
 - `--repair` — with `--verify-stops`, auto-place a strike-level stop on unprotected positions.
 
