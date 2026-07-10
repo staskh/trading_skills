@@ -6,6 +6,9 @@ import argparse
 import asyncio
 import json
 import sys
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from trading_skills.broker.zero_dte import (
     SPREAD_TYPES,
@@ -15,12 +18,39 @@ from trading_skills.broker.zero_dte import (
 from trading_skills.broker.zero_dte_stop import verify_zdte_stops
 from trading_skills.utils import generated_at_str
 
+_NY = ZoneInfo("America/New_York")
+
 
 def _normalize_time_exit(value):
     """Map None (use preset) through; treat 'none'/'off'/'' as disabled ('')."""
     if value is None:
         return None
     return "" if value.strip().lower() in ("none", "off", "") else value.strip()
+
+
+def _sandbox_dir() -> Path:
+    """Locate the repo's sandbox/ dir (walk up to pyproject.toml); create if missing."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pyproject.toml").exists():
+            sb = parent / "sandbox"
+            sb.mkdir(exist_ok=True)
+            return sb
+    sb = Path.cwd() / "sandbox"
+    sb.mkdir(exist_ok=True)
+    return sb
+
+
+def _save_result(result: dict, name: str) -> str:
+    """Always persist the run to sandbox/ as timestamped JSON; return the path.
+
+    Records every run (dry-run, execute, verify) so there's a durable trade log —
+    e.g. the order.bracket / binding details that TWS alone doesn't reconstruct.
+    """
+    ts = datetime.now(_NY).strftime("%Y-%m-%d_%H%M%S")
+    path = _sandbox_dir() / f"{name}_{ts}.json"
+    result["saved_to"] = str(path)
+    path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return str(path)
 
 
 def main():
@@ -161,47 +191,47 @@ def main():
         result = asyncio.run(
             verify_zdte_stops(port=args.port, account=args.account, repair=args.repair)
         )
-        result["generated_at"] = ga
-        result.setdefault("data_delay", "real-time")
-        print(json.dumps(result, indent=2))
-        sys.exit(0 if result.get("success") else 1)
-
-    if not args.symbol:
-        parser.error("symbol is required (except with --verify-stops)")
-    symbol = args.symbol.upper()
-
-    if args.expiries:
-        result = asyncio.run(get_0dte_expiries(symbol, port=args.port))
+        name = "verify_stops"
     else:
-        result = asyncio.run(
-            find_0dte_spreads(
-                symbol,
-                spread_type=args.spread_type,
-                budget=args.budget,
-                expiry=args.expiry,
-                port=args.port,
-                account=args.account,
-                execute=args.execute,
-                pick=args.pick,
-                limit=args.limit,
-                replace=args.replace,
-                top=args.top,
-                min_pop=args.min_pop,
-                max_width=args.max_width,
-                max_short_delta=args.delta,
-                allow_stale=args.allow_stale,
-                fetch_events=not args.no_events,
-                stop_mult=args.stop_mult,
-                stop_buffer=args.stop_buffer,
-                stop_delta=args.stop_delta,
-                profit_target=args.profit_target,
-                time_exit=_normalize_time_exit(args.time_exit),
-                fill_timeout=args.fill_timeout,
+        if not args.symbol:
+            parser.error("symbol is required (except with --verify-stops)")
+        symbol = args.symbol.upper()
+        if args.expiries:
+            result = asyncio.run(get_0dte_expiries(symbol, port=args.port))
+            name = f"{symbol}_0dte_expiries"
+        else:
+            result = asyncio.run(
+                find_0dte_spreads(
+                    symbol,
+                    spread_type=args.spread_type,
+                    budget=args.budget,
+                    expiry=args.expiry,
+                    port=args.port,
+                    account=args.account,
+                    execute=args.execute,
+                    pick=args.pick,
+                    limit=args.limit,
+                    replace=args.replace,
+                    top=args.top,
+                    min_pop=args.min_pop,
+                    max_width=args.max_width,
+                    max_short_delta=args.delta,
+                    allow_stale=args.allow_stale,
+                    fetch_events=not args.no_events,
+                    stop_mult=args.stop_mult,
+                    stop_buffer=args.stop_buffer,
+                    stop_delta=args.stop_delta,
+                    profit_target=args.profit_target,
+                    time_exit=_normalize_time_exit(args.time_exit),
+                    fill_timeout=args.fill_timeout,
+                )
             )
-        )
+            mode = "exec" if args.execute else "dryrun"
+            name = f"{symbol}_0dte_{args.spread_type}_{mode}"
 
     result["generated_at"] = ga
     result.setdefault("data_delay", "real-time")  # broker sets this when it knows
+    _save_result(result, name)  # always persist a copy to sandbox/
 
     print(json.dumps(result, indent=2))
     if not result.get("success"):

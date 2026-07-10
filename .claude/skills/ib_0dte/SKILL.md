@@ -154,6 +154,11 @@ is naked.
 
 ## Output
 
+**Every run is automatically saved** to `sandbox/` as timestamped JSON (e.g.
+`NDX_0dte_bear_call_exec_2026-07-10_093015.json`), and the path is echoed as
+`saved_to`. This gives a durable trade log — including the `order.bracket` /
+`binding` details that TWS alone doesn't reconstruct. No flag needed.
+
 JSON with:
 - `underlying_price`, `expiry`, `dte`, `spread_type`, `budget`, `asset_type`, `account`
 - `dry_run` — `true` unless `--execute` was passed
