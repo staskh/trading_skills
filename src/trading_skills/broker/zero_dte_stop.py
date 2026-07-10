@@ -25,10 +25,10 @@ STOP_PRESETS = {
     # Wide, high-beta index → lean looser on the premium cap and add a delta backstop
     # so a cheap far-OTM spread doesn't stop out on noise.
     # target = fraction of credit to capture; time_exit = ET flatten time.
-    "NDX": {"mult": 3.0, "buffer": 0.0, "delta": 0.35, "target": 0.75, "time_exit": "15:30"},
-    "SPX": {"mult": 2.5, "buffer": 0.0, "delta": 0.35, "target": 0.75, "time_exit": "15:30"},
-    "RUT": {"mult": 2.0, "buffer": 0.0, "delta": 0.35, "target": 0.75, "time_exit": "15:30"},
-    "XSP": {"mult": 2.0, "buffer": 0.0, "delta": 0.35, "target": 0.75, "time_exit": "15:30"},
+    "NDX": {"mult": 3.0, "buffer": 0.0, "delta": 0.5, "target": 0.75, "time_exit": "15:30"},
+    "SPX": {"mult": 2.5, "buffer": 0.0, "delta": 0.5, "target": 0.75, "time_exit": "15:30"},
+    "RUT": {"mult": 2.0, "buffer": 0.0, "delta": 0.5, "target": 0.75, "time_exit": "15:30"},
+    "XSP": {"mult": 2.0, "buffer": 0.0, "delta": 0.5, "target": 0.75, "time_exit": "15:30"},
     "_default": {
         "mult": DEFAULT_STOP_MULT,
         "buffer": 0.0,

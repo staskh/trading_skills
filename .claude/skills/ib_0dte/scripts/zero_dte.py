@@ -60,7 +60,8 @@ def main():
         "--delta",
         type=float,
         default=None,
-        help="Cap the |delta| of the short leg(s), e.g. 0.20 — a manual risk limit (optional)",
+        help="Cap the |delta| of the short leg(s) at ENTRY. "
+        "Default: 0.10 for indexes, 0.20 for stocks (override here).",
     )
     parser.add_argument(
         "--allow-stale",

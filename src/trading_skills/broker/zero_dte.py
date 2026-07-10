@@ -40,6 +40,15 @@ DEFAULT_RATE = 0.045  # annualized risk-free rate for BS fallback
 
 SPREAD_TYPES = ("bear_call", "bull_put", "iron_condor")
 
+# Default cap on the short-leg |delta| at ENTRY, by underlying class. Indexes sell
+# only well-OTM short legs (high POP); stocks allow a bit closer. "_index"/"_stock"
+# are the class fallbacks; per-symbol keys may be added for tuning. Explicit --delta
+# always wins.
+ENTRY_MAX_DELTA = {
+    "_index": 0.10,
+    "_stock": 0.20,
+}
+
 
 def resolve_underlying(symbol: str):
     """Return (contract, sec_type, asset_type) for an equity or cash-settled index."""
@@ -47,6 +56,18 @@ def resolve_underlying(symbol: str):
     if symbol in INDEX_SPECS:
         return Index(symbol, INDEX_SPECS[symbol], "USD"), "IND", "index"
     return Stock(symbol, "SMART", "USD"), "STK", "stock"
+
+
+def resolve_entry_delta(symbol: str, asset_type: str, explicit: float | None) -> float | None:
+    """Effective short-leg delta cap for entry: explicit --delta wins, else the preset.
+
+    Indexes default to 0.10, stocks/ETFs to 0.20 (per-symbol keys override the class
+    fallback in ENTRY_MAX_DELTA).
+    """
+    if explicit is not None:
+        return explicit
+    fallback = "_index" if asset_type == "index" else "_stock"
+    return ENTRY_MAX_DELTA.get(symbol.upper(), ENTRY_MAX_DELTA[fallback])
 
 
 def _today_ny() -> str:
@@ -962,6 +983,9 @@ async def find_0dte_spreads(
             # No live quotes and we didn't allow stale marks → market is likely closed.
             no_live_data = bool(fetched_legs) and all(o.get("no_live_quote") for o in fetched_legs)
 
+            # Entry short-delta cap: explicit --delta wins, else per-class preset.
+            eff_max_delta = resolve_entry_delta(symbol_u, asset_type, max_short_delta)
+
             if spread_type == "bear_call":
                 candidates = build_verticals(
                     calls,
@@ -972,7 +996,7 @@ async def find_0dte_spreads(
                     rate,
                     min_pop=min_pop,
                     max_width=max_width,
-                    max_short_delta=max_short_delta,
+                    max_short_delta=eff_max_delta,
                 )
             elif spread_type == "bull_put":
                 candidates = build_verticals(
@@ -984,7 +1008,7 @@ async def find_0dte_spreads(
                     rate,
                     min_pop=min_pop,
                     max_width=max_width,
-                    max_short_delta=max_short_delta,
+                    max_short_delta=eff_max_delta,
                 )
             else:
                 candidates = build_iron_condors(
@@ -996,7 +1020,7 @@ async def find_0dte_spreads(
                     rate,
                     min_pop=min_pop,
                     max_width=max_width,
-                    max_short_delta=max_short_delta,
+                    max_short_delta=eff_max_delta,
                 )
 
             ranked = rank_candidates(candidates, top)
@@ -1058,6 +1082,7 @@ async def find_0dte_spreads(
                 "dte": 0 if target == _today_ny() else None,
                 "budget": budget,
                 "trading_class": trading_class,
+                "max_short_delta": eff_max_delta,
                 "candidates_evaluated": len(candidates),
                 "timing": timing,
                 "best": ranked[0] if ranked else None,

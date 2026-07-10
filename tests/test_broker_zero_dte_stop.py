@@ -169,7 +169,7 @@ class TestResolveStopCfg:
     def test_preset_applied_when_args_none(self):
         cfg = resolve_stop_cfg("NDX", None, None, None, 20.0)
         assert cfg["mult"] == 3.0  # NDX preset
-        assert cfg["delta"] == 0.35
+        assert cfg["delta"] == 0.5  # stop-delta backstop
         assert cfg["target"] == 0.75  # capture 75% of credit by default
         assert cfg["time_exit"] == "15:30"
         assert cfg["preset_symbol"] == "NDX"
@@ -178,7 +178,7 @@ class TestResolveStopCfg:
         cfg = resolve_stop_cfg("NDX", 1.5, 10.0, None, 20.0)
         assert cfg["mult"] == 1.5  # explicit wins
         assert cfg["buffer"] == 10.0
-        assert cfg["delta"] == 0.35  # still from preset
+        assert cfg["delta"] == 0.5  # still from preset
 
     def test_unlisted_symbol_uses_default(self):
         cfg = resolve_stop_cfg("AAPL", None, None, None, 20.0)

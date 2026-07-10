@@ -18,6 +18,7 @@ from trading_skills.broker.zero_dte import (
     get_0dte_expiries,
     pop_short,
     rank_candidates,
+    resolve_entry_delta,
     resolve_underlying,
 )
 
@@ -225,6 +226,17 @@ class TestResolveUnderlying:
         contract, sec_type, asset_type = resolve_underlying("spx")
         assert asset_type == "index"
         assert contract.symbol == "SPX"
+
+
+class TestResolveEntryDelta:
+    def test_index_default_is_010(self):
+        assert resolve_entry_delta("NDX", "index", None) == 0.10
+
+    def test_stock_default_is_020(self):
+        assert resolve_entry_delta("AAPL", "stock", None) == 0.20
+
+    def test_explicit_overrides_class_default(self):
+        assert resolve_entry_delta("NDX", "index", 0.25) == 0.25
 
 
 # --------------------------------------------------------------------------- #
