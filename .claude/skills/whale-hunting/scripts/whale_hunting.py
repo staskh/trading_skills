@@ -4,6 +4,7 @@
 
 import argparse
 import json
+import os
 import sys
 
 import pandas as pd
@@ -37,11 +38,13 @@ def main():
     symbol = args.symbol.strip().upper()
     print(f"Hunting whales for {symbol}...", file=sys.stderr)
 
+    has_massive_key = bool(os.getenv("MASSIVE_API_KEY"))
+
     try:
         result = whales_hunter(
             symbol,
             max_months=args.months,
-            precise=True,
+            precise=has_massive_key,
             sigma_z=args.sigma_z,
             trading_date=args.date,
         )
@@ -71,10 +74,12 @@ def main():
     )
     call_put_ratio = (call_invested / put_invested) if put_invested > 0 else None
 
+    source = "yahoo only" if result["source"] == "yahoo" else result["source"]
+
     output = {
         "underlying": symbol,
         "trading_date": str(trading_date),
-        "source": result["source"],
+        "source": source,
         "total_whales": len(whales),
         "total_call_invested": round(call_invested, 2),
         "total_put_invested": round(put_invested, 2),
