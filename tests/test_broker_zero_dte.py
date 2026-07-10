@@ -6,14 +6,17 @@ from datetime import datetime
 
 import pytest
 
+from trading_skills.black_scholes import black_scholes_price
 from trading_skills.broker.zero_dte import (
     NY,
     _maybe_execute,
+    _quote_source,
     _resolve_quote,
     assess_timing,
     build_iron_condors,
     build_verticals,
     event_guidance,
+    expected_pnl_pc,
     find_0dte_spreads,
     get_0dte_expiries,
     pop_short,
@@ -204,6 +207,41 @@ class TestResolveQuote:
         assert (delta, iv) == (0.15, 0.33)
 
 
+class TestExpectedPnl:
+    def test_none_without_sigma(self):
+        assert expected_pnl_pc("C", 100, 105, 110, 0.6, 0.02, 0.045, 0) is None
+
+    def test_vrp_makes_fairly_priced_spread_positive(self):
+        # credit = fair value at implied 0.20; valued at realized 0.17 -> positive EV
+        T, r, imp = 0.02, 0.045, 0.20
+        fair = black_scholes_price(100, 105, T, r, imp, "call") - black_scholes_price(
+            100, 110, T, r, imp, "call"
+        )
+        assert expected_pnl_pc("C", 100, 105, 110, fair, T, r, 0.85 * imp) > 0
+
+    def test_realized_equals_implied_is_near_zero(self):
+        T, r, imp = 0.02, 0.045, 0.20
+        fair = black_scholes_price(100, 105, T, r, imp, "call") - black_scholes_price(
+            100, 110, T, r, imp, "call"
+        )
+        assert abs(expected_pnl_pc("C", 100, 105, 110, fair, T, r, imp)) < 0.01
+
+
+class TestQuoteSource:
+    def test_bidask(self):
+        assert _quote_source({"bid": 1.0, "ask": 1.2, "mid": 1.1}) == "bidask"
+
+    def test_last_only(self):
+        # No live bid/ask but a last trade -> flagged as suspect "last"
+        assert _quote_source({"bid": None, "ask": None, "mid": 4.65, "stale": False}) == "last"
+
+    def test_close(self):
+        assert _quote_source({"bid": None, "ask": None, "mid": 5.0, "stale": True}) == "close"
+
+    def test_none(self):
+        assert _quote_source({"bid": None, "ask": None, "mid": None}) is None
+
+
 # --------------------------------------------------------------------------- #
 # Underlying resolution
 # --------------------------------------------------------------------------- #
@@ -322,6 +360,23 @@ class TestBuildVerticalsBearCall:
         )
         for c in out:
             assert c["width"] <= 5
+
+    def test_ev_model_is_expected_pnl_with_iv(self):
+        out = build_verticals(
+            self._calls(), "C", spot=100, budget=1000, T=0.02, r=0.045, rv_ratio=0.85
+        )
+        # legs have no iv in this fixture -> falls back to binary
+        assert all(c["ev_model"] == "binary" for c in out)
+
+    def test_target_delta_band_filters(self):
+        # calls deltas 0.50/0.30/0.15/0.07; target 0.15 (+/-0.05) keeps only 0.15 short
+        out = build_verticals(
+            self._calls(), "C", spot=100, budget=1000, T=0.01, r=0.045, target_delta=0.15
+        )
+        assert out
+        for c in out:
+            assert abs(c["short_delta"] - 0.15) <= 0.05
+            assert c["legs"][0]["strike"] == 110  # the 0.15-delta short
 
     def test_max_short_delta_filter(self):
         # calls have deltas 0.50/0.30/0.15/0.07; cap at 0.20 keeps only 0.15 & 0.07 shorts

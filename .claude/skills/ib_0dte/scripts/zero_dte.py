@@ -94,6 +94,20 @@ def main():
         "Default: 0.20 for indexes and stocks (override here).",
     )
     parser.add_argument(
+        "--target-delta",
+        type=float,
+        default=None,
+        help="Sell the short leg(s) around this delta (+/- 0.05), e.g. 0.15 — direct "
+        "control over strike selection (still bounded by --delta).",
+    )
+    parser.add_argument(
+        "--rv-ratio",
+        type=float,
+        default=0.85,
+        help="Realized/implied vol ratio for the expected-P&L EV (default 0.85). Lower "
+        "favors richer near-money credits; 1.0 ~ fair (near-zero EV).",
+    )
+    parser.add_argument(
         "--allow-stale",
         action="store_true",
         help="If IBKR streams no live quotes/greeks (off-hours), price from yesterday's close "
@@ -216,6 +230,8 @@ def main():
                     min_pop=args.min_pop,
                     max_width=args.max_width,
                     max_short_delta=args.delta,
+                    target_delta=args.target_delta,
+                    rv_ratio=args.rv_ratio,
                     allow_stale=args.allow_stale,
                     fetch_events=not args.no_events,
                     stop_mult=args.stop_mult,

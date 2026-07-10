@@ -145,11 +145,17 @@ is naked.
 ## How ranking works
 
 - **Probability of profit (POP)** — probability the spread finishes a winner: the
-  underlying stays on the safe side of the short strike(s) at expiration. Taken from
-  the IBKR short-leg delta (`POP ≈ 1 − |delta|`), with a Black-Scholes `N(d2)`
-  fallback from IBKR implied vol when greeks are missing.
-- **Expected value (EV)** — `POP × max_profit − (1 − POP) × max_loss`, in dollars for
-  the full position after budget sizing.
+  underlying stays on the safe side of the short strike(s) at expiration. From the
+  IBKR short-leg delta (`POP ≈ 1 − |delta|`), BS `N(d2)` fallback.
+- **Expected value (EV)** — the **expected P&L integrated over a lognormal** with
+  realized vol = `--rv-ratio × implied` (default 0.85). This counts *partial* losses
+  (breach just past the short is a small loss), not a flat max loss — which fixes the
+  far-OTM bias of the old binary `POP×maxP − (1−POP)×maxL`. `ev_model` is echoed
+  (`expected_pnl_rv0.85`); if a leg has no IV it falls back to the binary formula.
+  - Lower `--rv-ratio` = more credit-hungry (favors richer near-the-cap strikes);
+    `1.0` ≈ fair (EV near zero — don't use). It's an assumption, not a guarantee.
+- **`--target-delta`** — pin the short leg(s) to a delta (± 0.05) for direct strike
+  control, e.g. `--target-delta 0.15`. Still bounded by `--delta`.
 - Candidates are ranked by **total EV**, ties broken toward higher POP.
 
 ## Output

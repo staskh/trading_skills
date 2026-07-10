@@ -10,7 +10,11 @@ from zoneinfo import ZoneInfo
 from ib_async import IB, ComboLeg, Contract, Index, Option, Order, Stock
 from scipy.stats import norm
 
-from trading_skills.black_scholes import black_scholes_delta, implied_volatility
+from trading_skills.black_scholes import (
+    black_scholes_delta,
+    black_scholes_price,
+    implied_volatility,
+)
 from trading_skills.broker.connection import CLIENT_IDS, ib_connection
 from trading_skills.broker.zero_dte_stop import (
     emergency_close,
@@ -326,6 +330,17 @@ def abs_short_delta(right: str, spot: float, strike: float, delta, iv, T: float,
 # --------------------------------------------------------------------------- #
 # Pure spread construction / scoring
 # --------------------------------------------------------------------------- #
+def _quote_source(opt: dict) -> str | None:
+    """Where the mid came from: live bid/ask, a lone last trade, or stale close."""
+    if opt.get("bid") is not None and opt.get("ask") is not None:
+        return "bidask"
+    if opt.get("stale"):
+        return "close"
+    if opt.get("mid") is not None:
+        return "last"  # no live bid/ask — a lone last trade, treat with suspicion
+    return None
+
+
 def _leg_view(opt: dict) -> dict:
     """Trim an option quote to the fields we surface per leg."""
     return {
@@ -334,6 +349,7 @@ def _leg_view(opt: dict) -> dict:
         "bid": opt.get("bid"),
         "ask": opt.get("ask"),
         "mid": round(opt["mid"], 2),
+        "quote": _quote_source(opt),
         "delta": round(opt["delta"], 4) if opt.get("delta") is not None else None,
         "iv": round(opt["iv"] * 100, 2) if opt.get("iv") is not None else None,
     }
@@ -342,6 +358,25 @@ def _leg_view(opt: dict) -> dict:
 def _tradeable(opt: dict) -> bool:
     """A leg is usable only if it has a positive mid we can price against."""
     return opt.get("mid") is not None and opt["mid"] > 0
+
+
+def expected_pnl_pc(right, spot, short_k, long_k, credit, T, r, sigma):
+    """Per-contract expected P&L (dollars) of a credit vertical under lognormal(sigma).
+
+    P&L(S_T) = credit - max(0, min(intrinsic, width)); its expectation is
+    credit - E[spread intrinsic], where the spread intrinsic's expectation is the
+    (undiscounted ~ for tiny T) value of the equivalent debit spread at `sigma`.
+    Caller passes sigma = realized-vol assumption (rv_ratio x implied); with realized
+    below implied, richer near-money credits score higher — countering the far-OTM
+    bias of the binary POP*maxP - (1-POP)*maxL proxy. Returns None if sigma unusable.
+    """
+    if not (sigma and sigma > 0 and spot and T and T > 0):
+        return None
+    ot = "call" if right == "C" else "put"
+    exp_intrinsic = black_scholes_price(spot, short_k, T, r, sigma, ot) - black_scholes_price(
+        spot, long_k, T, r, sigma, ot
+    )
+    return (credit - exp_intrinsic) * 100
 
 
 def build_verticals(
@@ -355,6 +390,9 @@ def build_verticals(
     min_pop: float = 0.0,
     max_width: float | None = None,
     max_short_delta: float | None = None,
+    target_delta: float | None = None,
+    delta_band: float = 0.05,
+    rv_ratio: float | None = 0.85,
     max_legs_out: int = 12,
 ) -> list[dict]:
     """Build all viable credit verticals for one option side.
@@ -362,6 +400,8 @@ def build_verticals(
     right="C" -> bear call spreads (short OTM call, long higher call).
     right="P" -> bull put spreads (short OTM put, long lower put).
     max_short_delta caps the |delta| of the short leg (a manual risk limit).
+    target_delta (± delta_band) restricts the short leg to a delta band.
+    rv_ratio sets the realized/implied vol for the expected-P&L EV (None -> binary EV).
     """
     usable = sorted((o for o in options if _tradeable(o)), key=lambda o: o["strike"])
     strategy = "bear_call" if right == "C" else "bull_put"
@@ -379,6 +419,11 @@ def build_verticals(
         )
         # Risk cap: skip if the short delta exceeds the limit (or can't be determined).
         if max_short_delta is not None and (short_delta is None or short_delta > max_short_delta):
+            continue
+        # Target-delta band: sell around a chosen delta.
+        if target_delta is not None and (
+            short_delta is None or abs(short_delta - target_delta) > delta_band
+        ):
             continue
 
         pop = pop_short(right, spot, short["strike"], short.get("delta"), short.get("iv"), T, r)
@@ -412,11 +457,29 @@ def build_verticals(
             if contracts < 1:
                 continue  # cheapest single spread already exceeds the budget
 
-            ev_pc = pop * max_profit_pc - (1 - pop) * max_loss_pc
-            if right == "C":
-                breakeven = short["strike"] + net_credit
-            else:
-                breakeven = short["strike"] - net_credit
+            # EV: expected P&L over the lognormal (partial losses) when we can, else
+            # the conservative binary proxy.
+            ev_pc = None
+            ev_model = "binary"
+            if rv_ratio and short.get("iv"):
+                ev_pc = expected_pnl_pc(
+                    right,
+                    spot,
+                    short["strike"],
+                    long_leg["strike"],
+                    net_credit,
+                    T,
+                    r,
+                    rv_ratio * short["iv"] / 100.0,
+                )
+                if ev_pc is not None:
+                    ev_model = f"expected_pnl_rv{rv_ratio}"
+            if ev_pc is None:
+                ev_pc = pop * max_profit_pc - (1 - pop) * max_loss_pc
+
+            breakeven = (
+                short["strike"] + net_credit if right == "C" else short["strike"] - net_credit
+            )
 
             candidates.append(
                 {
@@ -438,6 +501,7 @@ def build_verticals(
                     "max_profit_total": round(max_profit_pc * contracts, 2),
                     "max_loss_total": round(max_loss_pc * contracts, 2),
                     "capital_at_risk": round(max_loss_pc * contracts, 2),
+                    "ev_model": ev_model,
                     "ev_per_contract": round(ev_pc, 2),
                     "ev_total": round(ev_pc * contracts, 2),
                     "breakeven": round(breakeven, 2),
@@ -459,6 +523,9 @@ def build_iron_condors(
     min_pop: float = 0.0,
     max_width: float | None = None,
     max_short_delta: float | None = None,
+    target_delta: float | None = None,
+    delta_band: float = 0.05,
+    rv_ratio: float | None = 0.85,
     max_legs_out: int = 12,
     top_per_side: int = 10,
 ) -> list[dict]:
@@ -466,35 +533,22 @@ def build_iron_condors(
 
     Sizing is by the condor's true max loss (only one wing can be breached at
     expiration): max_loss = max(call_width, put_width) - combined_credit.
-    max_short_delta caps the |delta| of BOTH short legs (a manual risk limit).
+    max_short_delta / target_delta / rv_ratio flow into both sides.
     """
     # Size single-side verticals against the full budget first; the pairing below
-    # re-sizes contracts against the combined condor risk. The delta cap flows into
-    # each side here, so both short legs of the condor respect it.
-    call_side = build_verticals(
-        calls,
-        "C",
-        spot,
-        budget,
-        T,
-        r,
+    # re-sizes contracts against the combined condor risk. The filters flow into
+    # each side here, so both short legs of the condor respect them.
+    side_kwargs = dict(
         min_pop=0.0,
         max_width=max_width,
         max_short_delta=max_short_delta,
+        target_delta=target_delta,
+        delta_band=delta_band,
+        rv_ratio=rv_ratio,
         max_legs_out=max_legs_out,
     )
-    put_side = build_verticals(
-        puts,
-        "P",
-        spot,
-        budget,
-        T,
-        r,
-        min_pop=0.0,
-        max_width=max_width,
-        max_short_delta=max_short_delta,
-        max_legs_out=max_legs_out,
-    )
+    call_side = build_verticals(calls, "C", spot, budget, T, r, **side_kwargs)
+    put_side = build_verticals(puts, "P", spot, budget, T, r, **side_kwargs)
     if not call_side or not put_side:
         return []
 
@@ -530,7 +584,9 @@ def build_iron_condors(
             if pop < min_pop:
                 continue
 
-            ev_pc = pop * max_profit_pc - (1 - pop) * max_loss_pc
+            # Expected P&L is additive across the two wings (linearity), so the
+            # condor's per-contract EV is just the sum of each side's.
+            ev_pc = call["ev_per_contract"] + put["ev_per_contract"]
             condors.append(
                 {
                     "strategy": "iron_condor",
@@ -539,6 +595,7 @@ def build_iron_condors(
                     "call_width": call["width"],
                     "net_credit": round(combined_credit, 2),
                     "pop": round(pop, 4),
+                    "ev_model": call.get("ev_model", "binary"),
                     "short_call_delta": call["short_delta"],
                     "short_put_delta": put["short_delta"],
                     "call_distance_to_short": call["distance_to_short"],
@@ -852,6 +909,8 @@ async def find_0dte_spreads(
     min_pop: float = 0.0,
     max_width: float | None = None,
     max_short_delta: float | None = None,
+    target_delta: float | None = None,
+    rv_ratio: float = 0.85,
     allow_stale: bool = False,
     fetch_events: bool = True,
     stop_mult: float | None = None,
@@ -983,45 +1042,36 @@ async def find_0dte_spreads(
             # No live quotes and we didn't allow stale marks → market is likely closed.
             no_live_data = bool(fetched_legs) and all(o.get("no_live_quote") for o in fetched_legs)
 
+            # Data quality: legs priced off a lone last trade (no live bid/ask) give
+            # unreliable credits — flag when they dominate (usually a missing index-
+            # options market-data entitlement).
+            priced = [o for o in fetched_legs if o.get("mid") is not None and not o.get("stale")]
+            last_only = [o for o in priced if o.get("bid") is None and o.get("ask") is None]
+            data_quality_warning = None
+            if priced and len(last_only) / len(priced) >= 0.5:
+                data_delay = "last-trade only (no live bid/ask)"
+                data_quality_warning = (
+                    "No live bid/ask for most legs — mids are last-trade prices, so credits "
+                    "are UNRELIABLE and not tradeable. Check the index-options market-data "
+                    "entitlement on this account (greeks/POP are fine; prices are not)."
+                )
+
             # Entry short-delta cap: explicit --delta wins, else per-class preset.
             eff_max_delta = resolve_entry_delta(symbol_u, asset_type, max_short_delta)
 
+            build_kwargs = dict(
+                min_pop=min_pop,
+                max_width=max_width,
+                max_short_delta=eff_max_delta,
+                target_delta=target_delta,
+                rv_ratio=rv_ratio,
+            )
             if spread_type == "bear_call":
-                candidates = build_verticals(
-                    calls,
-                    "C",
-                    spot,
-                    budget,
-                    T,
-                    rate,
-                    min_pop=min_pop,
-                    max_width=max_width,
-                    max_short_delta=eff_max_delta,
-                )
+                candidates = build_verticals(calls, "C", spot, budget, T, rate, **build_kwargs)
             elif spread_type == "bull_put":
-                candidates = build_verticals(
-                    puts,
-                    "P",
-                    spot,
-                    budget,
-                    T,
-                    rate,
-                    min_pop=min_pop,
-                    max_width=max_width,
-                    max_short_delta=eff_max_delta,
-                )
+                candidates = build_verticals(puts, "P", spot, budget, T, rate, **build_kwargs)
             else:
-                candidates = build_iron_condors(
-                    calls,
-                    puts,
-                    spot,
-                    budget,
-                    T,
-                    rate,
-                    min_pop=min_pop,
-                    max_width=max_width,
-                    max_short_delta=eff_max_delta,
-                )
+                candidates = build_iron_condors(calls, puts, spot, budget, T, rate, **build_kwargs)
 
             ranked = rank_candidates(candidates, top)
 
@@ -1083,6 +1133,10 @@ async def find_0dte_spreads(
                 "budget": budget,
                 "trading_class": trading_class,
                 "max_short_delta": eff_max_delta,
+                "target_delta": target_delta,
+                "ev_model": ("expected_pnl" if rv_ratio else "binary"),
+                "rv_ratio": rv_ratio,
+                "data_quality_warning": data_quality_warning,
                 "candidates_evaluated": len(candidates),
                 "timing": timing,
                 "best": ranked[0] if ranked else None,
