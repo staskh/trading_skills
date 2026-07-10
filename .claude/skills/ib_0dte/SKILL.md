@@ -100,6 +100,7 @@ can never place an order. Confirm the proposal with the user before executing.
 JSON with:
 - `underlying_price`, `expiry`, `dte`, `spread_type`, `budget`, `asset_type`, `account`
 - `dry_run` — `true` unless `--execute` was passed
+- `timing` — built-in intraday guidance (see **Timing & event guidance** below)
 - `best` — the top-ranked spread
 - `candidates` — top-N spreads, each with `legs` (action, right, strike, bid, ask,
   mid, delta, iv), `net_credit`, `width`, `pop`, `contracts`, per-contract and total
@@ -117,6 +118,25 @@ short delta, distance-to-short (points and %), max profit, max loss, contracts, 
 Lead with the `best` pick and state the direction and the price level it needs the
 underlying to respect (the short strike / breakeven) — the distance-to-short is the
 cushion before the trade starts losing.
+
+## Timing & event guidance
+
+Every run includes a `timing` block, computed from the current ET clock:
+
+- `window` — `pre_market` / `opening_bell` / `morning_prime` / `midday` / `afternoon` /
+  `power_hour` / `after_hours` / `weekend`
+- `entry_quality` — `best` / `good` / `fair` / `avoid` / `closed`, tailored to the
+  spread type (credit spreads favor mid-morning; iron condors favor the midday lull;
+  the open and the final power hour are `avoid`)
+- `recommendation` — one-line plain-English guidance for the current window
+- `events` — `warnings` (fires when inside the 10:00 ET data window or the 2:00 ET
+  FOMC slot), plus `verify_before_trading`, a checklist of scheduled events (FOMC,
+  CPI/PPI/NFP, ISM; earnings for stock underlyings) to confirm on today's calendar
+
+**Surface this prominently.** Before proposing or (especially) executing, state the
+`timing.recommendation` and any `timing.events.warnings`; if `entry_quality` is `avoid`
+or `closed`, call that out and suggest waiting. Event *dates* are not looked up — the
+checklist is a reminder to verify the economic calendar, not a live feed.
 
 ## Data sourcing
 

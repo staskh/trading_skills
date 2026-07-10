@@ -2,14 +2,18 @@
 # ABOUTME: Pure scoring/construction tests run offline; IB-backed tests are manual.
 
 import asyncio
+from datetime import datetime
 
 import pytest
 
 from trading_skills.broker.zero_dte import (
+    NY,
     _maybe_execute,
     _resolve_quote,
+    assess_timing,
     build_iron_condors,
     build_verticals,
+    event_guidance,
     find_0dte_spreads,
     get_0dte_expiries,
     pop_short,
@@ -29,6 +33,72 @@ def _opt(strike, mid, delta=None, iv=None, right="C"):
         "delta": delta,
         "iv": iv,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Intraday timing & event guidance
+# --------------------------------------------------------------------------- #
+def _wk(h, m):
+    # 2026-07-10 is a Friday (a trading weekday).
+    return datetime(2026, 7, 10, h, m, tzinfo=NY)
+
+
+class TestAssessTiming:
+    def test_weekend_is_closed(self):
+        sat = datetime(2026, 7, 11, 11, 0, tzinfo=NY)
+        assert assess_timing(sat, "bear_call")["entry_quality"] == "closed"
+        assert assess_timing(sat, "bear_call")["market_open"] is False
+
+    def test_pre_market_closed(self):
+        assert assess_timing(_wk(9, 0), "bear_call")["window"] == "pre_market"
+
+    def test_after_hours_closed(self):
+        assert assess_timing(_wk(16, 5), "bear_call")["window"] == "after_hours"
+
+    def test_opening_bell_avoid(self):
+        t = assess_timing(_wk(9, 35), "bear_call")
+        assert t["window"] == "opening_bell"
+        assert t["entry_quality"] == "avoid"
+
+    def test_morning_prime_best_for_credit_spread(self):
+        t = assess_timing(_wk(10, 30), "bear_call")
+        assert t["window"] == "morning_prime"
+        assert t["entry_quality"] == "best"
+
+    def test_midday_best_for_iron_condor(self):
+        assert assess_timing(_wk(12, 30), "iron_condor")["entry_quality"] == "best"
+        assert assess_timing(_wk(12, 30), "bear_call")["entry_quality"] == "fair"
+
+    def test_power_hour_avoid(self):
+        t = assess_timing(_wk(15, 30), "bear_call")
+        assert t["window"] == "power_hour"
+        assert t["entry_quality"] == "avoid"
+
+
+class TestEventGuidance:
+    def test_ten_am_window_flagged(self):
+        e = event_guidance(_wk(10, 5), "index")
+        assert e["near_release_window"] is True
+        assert any("10:00" in w for w in e["warnings"])
+
+    def test_fomc_slot_flagged(self):
+        e = event_guidance(_wk(14, 5), "index")
+        assert any("FOMC" in w for w in e["warnings"])
+
+    def test_quiet_time_no_warnings(self):
+        e = event_guidance(_wk(11, 0), "index")
+        assert e["near_release_window"] is False
+        assert e["warnings"] == []
+
+    def test_stock_underlying_adds_earnings_check(self):
+        assert any(
+            "earnings" in v.lower()
+            for v in event_guidance(_wk(11, 0), "stock")["verify_before_trading"]
+        )
+        assert not any(
+            "earnings" in v.lower()
+            for v in event_guidance(_wk(11, 0), "index")["verify_before_trading"]
+        )
 
 
 # --------------------------------------------------------------------------- #

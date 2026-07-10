@@ -60,6 +60,130 @@ def _time_to_expiry_years(expiry: str) -> float:
 
 
 # --------------------------------------------------------------------------- #
+# Intraday timing & event-risk guidance (deterministic, from the ET clock)
+# --------------------------------------------------------------------------- #
+def _mins(h: int, m: int) -> int:
+    return h * 60 + m
+
+
+def assess_timing(now: datetime, spread_type: str) -> dict:
+    """Rate the current ET time as a 0DTE entry window for `spread_type`.
+
+    Windows reflect intraday structure: the open is wide/whippy, mid-morning is
+    the prime credit-spread window, midday suits iron condors, and the final hour
+    is peak-gamma (dangerous to open new short premium).
+    """
+    hm = now.hour * 60 + now.minute
+
+    def out(window, market_open, quality, rec):
+        return {
+            "window": window,
+            "market_open": market_open,
+            "entry_quality": quality,
+            "recommendation": rec,
+        }
+
+    if now.weekday() >= 5:
+        return out(
+            "weekend",
+            False,
+            "closed",
+            "US markets are closed (weekend); 0DTE resumes next session.",
+        )
+    if hm < _mins(9, 30):
+        return out(
+            "pre_market",
+            False,
+            "closed",
+            "Pre-market — wait for the 9:30 ET open; option liquidity is poor now.",
+        )
+    if hm >= _mins(16, 0):
+        return out(
+            "after_hours",
+            False,
+            "closed",
+            "After the 4:00 ET close; today's 0DTE has settled — trade next session.",
+        )
+
+    is_condor = spread_type == "iron_condor"
+    if hm < _mins(9, 45):
+        return out(
+            "opening_bell",
+            True,
+            "avoid",
+            "First 15 min: widest spreads, whipsaw. Wait until ~9:45 to sell premium.",
+        )
+    if hm < _mins(11, 30):
+        rec = (
+            "Good liquidity, but condors do better after the range settles (midday lull)."
+            if is_condor
+            else "Prime window for credit spreads: tight spreads, clear trend, full-day theta."
+        )
+        return out("morning_prime", True, "good" if is_condor else "best", rec)
+    if hm < _mins(14, 0):
+        rec = (
+            "Midday lull — ideal for iron condors: low vol and range-bound drift decay both wings."
+            if is_condor
+            else "Midday lull: thinner premium, choppier direction; smaller edge than AM."
+        )
+        return out("midday", True, "best" if is_condor else "fair", rec)
+    if hm < _mins(15, 0):
+        return out(
+            "afternoon",
+            True,
+            "fair",
+            "Early afternoon: gamma rising — widen the short strike (--delta) and size down.",
+        )
+    return out(
+        "power_hour",
+        True,
+        "avoid",
+        "Final hour: peak gamma — high risk to open new short premium. Better to manage/close.",
+    )
+
+
+def event_guidance(now: datetime, asset_type: str) -> dict:
+    """Flag intraday macro-release windows and list events to verify before trading.
+
+    Scheduled-event *dates* are not looked up (no live economic calendar); this
+    returns the recurring intraday risk windows plus a verify-before-trading list.
+    """
+    hm = now.hour * 60 + now.minute
+    warnings = []
+    if _mins(9, 55) <= hm <= _mins(10, 20):
+        warnings.append("Near the 10:00 ET data window (ISM/JOLTS/sentiment) — expect a vol spike.")
+    if _mins(13, 55) <= hm <= _mins(14, 30):
+        warnings.append(
+            "2:00 ET FOMC slot on meeting days — don't open new 0DTE into the announcement."
+        )
+
+    verify = [
+        "FOMC rate decision — 2:00 ET on meeting days (whipsaws the afternoon)",
+        "CPI / PPI / NFP / retail sales — 8:30 ET (gaps the open)",
+        "ISM / JOLTS / consumer sentiment — 10:00 ET",
+    ]
+    if asset_type != "index":
+        verify.append(
+            "Underlying earnings — a report today/after close can gap through your strikes"
+        )
+
+    return {
+        "near_release_window": bool(warnings),
+        "warnings": warnings,
+        "verify_before_trading": verify,
+        "note": "Event dates aren't auto-checked — verify today's economic calendar first.",
+    }
+
+
+def build_timing(now: datetime, spread_type: str, asset_type: str) -> dict:
+    """Combined intraday-timing + event-risk guidance for the output."""
+    timing = assess_timing(now, spread_type)
+    timing["now_et"] = now.strftime("%H:%M ET")
+    timing["events"] = event_guidance(now, asset_type)
+    return timing
+
+
+# --------------------------------------------------------------------------- #
 # Probability of profit
 # --------------------------------------------------------------------------- #
 def pop_short(right: str, spot: float, strike: float, delta, iv, T: float, r: float):
@@ -823,6 +947,7 @@ async def find_0dte_spreads(
                 "budget": budget,
                 "trading_class": trading_class,
                 "candidates_evaluated": len(candidates),
+                "timing": build_timing(datetime.now(NY), spread_type, asset_type),
                 "best": ranked[0] if ranked else None,
                 "candidates": ranked,
                 "picked": pick if execute else None,
