@@ -45,7 +45,7 @@ SPREAD_TYPES = ("bear_call", "bull_put", "iron_condor")
 # are the class fallbacks; per-symbol keys may be added for tuning. Explicit --delta
 # always wins.
 ENTRY_MAX_DELTA = {
-    "_index": 0.10,
+    "_index": 0.20,
     "_stock": 0.20,
 }
 

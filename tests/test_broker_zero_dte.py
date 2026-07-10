@@ -229,8 +229,8 @@ class TestResolveUnderlying:
 
 
 class TestResolveEntryDelta:
-    def test_index_default_is_010(self):
-        assert resolve_entry_delta("NDX", "index", None) == 0.10
+    def test_index_default_is_020(self):
+        assert resolve_entry_delta("NDX", "index", None) == 0.20
 
     def test_stock_default_is_020(self):
         assert resolve_entry_delta("AAPL", "stock", None) == 0.20
