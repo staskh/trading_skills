@@ -24,6 +24,7 @@ dependencies = [
     "plotly>=6.6.0",
     "mistune>=3.2",
     "reportlab>=4.0",
+    "requests>=2.32",
 ]
 
 [project.scripts]

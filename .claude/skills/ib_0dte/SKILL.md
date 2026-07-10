@@ -62,6 +62,7 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--max-width` — cap the strike width in dollars (optional)
 - `--delta` — cap the `|delta|` of the short leg(s), e.g. `0.20` — a manual risk limit. Applies to both verticals and (both short legs of) iron condors. Uses the IBKR short-leg delta.
 - `--allow-stale` — if IBKR streams no live quotes/greeks (off-hours), price legs from yesterday's settlement close and derive greeks via Black-Scholes. **Off by default:** greeks come only from IBKR, so a closed market returns no candidates (with a hint) rather than stale, model-computed ones.
+- `--no-events` — skip the live economic-calendar lookup (falls back to static event guidance). The calendar is fetched by default and needs no API key.
 - `--expiries` — list available expiries and whether today has a 0DTE
 - `--port` — IB port (default: 7497 paper; use 7496 for live)
 
@@ -129,14 +130,23 @@ Every run includes a `timing` block, computed from the current ET clock:
   spread type (credit spreads favor mid-morning; iron condors favor the midday lull;
   the open and the final power hour are `avoid`)
 - `recommendation` — one-line plain-English guidance for the current window
-- `events` — `warnings` (fires when inside the 10:00 ET data window or the 2:00 ET
-  FOMC slot), plus `verify_before_trading`, a checklist of scheduled events (FOMC,
-  CPI/PPI/NFP, ISM; earnings for stock underlyings) to confirm on today's calendar
+- `events` — event-risk guidance, with `source`:
+  - `source: "nasdaq"` (**live economic calendar**, keyless, via Nasdaq): reports
+    `events_today` (each with `event`, `time_et`, `impact`, `actual`/`consensus`/`previous`),
+    `high_impact_today` (FOMC/CPI/PPI/NFP/PCE/GDP/retail/ISM + Fed-chair remarks), and
+    `warnings` for high-impact and imminent (within ~30 min) releases.
+  - `source: "static"` (fallback when the calendar can't be reached, or `--no-events`):
+    recurring intraday-window warnings plus a `verify_before_trading` checklist.
+- Timing is holiday/early-close aware via the NYSE calendar (half-days shift the close
+  and power-hour windows).
 
 **Surface this prominently.** Before proposing or (especially) executing, state the
 `timing.recommendation` and any `timing.events.warnings`; if `entry_quality` is `avoid`
-or `closed`, call that out and suggest waiting. Event *dates* are not looked up — the
-checklist is a reminder to verify the economic calendar, not a live feed.
+or `closed`, call that out and suggest waiting. Lead with any high-impact event today
+(e.g. "FOMC at 14:00 ET") — it can gap the index straight through the short strikes.
+
+The live calendar is fetched by default (no API key needed); pass `--no-events` to skip
+it. Event data is US macro releases; for stock underlyings also confirm earnings.
 
 ## Data sourcing
 

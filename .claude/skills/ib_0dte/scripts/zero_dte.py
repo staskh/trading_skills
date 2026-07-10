@@ -57,6 +57,11 @@ def main():
         "and derive greeks via Black-Scholes (default: greeks only from IBKR, no stale marks)",
     )
     parser.add_argument(
+        "--no-events",
+        action="store_true",
+        help="Skip the live economic-calendar lookup (falls back to static event guidance)",
+    )
+    parser.add_argument(
         "--account",
         help="IBKR account the trade will be committed to (default: sole managed account)",
     )
@@ -110,6 +115,7 @@ def main():
                 max_width=args.max_width,
                 max_short_delta=args.delta,
                 allow_stale=args.allow_stale,
+                fetch_events=not args.no_events,
             )
         )
 

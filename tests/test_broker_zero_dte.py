@@ -75,19 +75,33 @@ class TestAssessTiming:
         assert t["entry_quality"] == "avoid"
 
 
-class TestEventGuidance:
+class TestAssessTimingSession:
+    def test_holiday_session_is_closed(self):
+        # Weekday, midday, but the calendar says not a trading day.
+        session = {"is_trading_day": False, "close_hm": 960}
+        t = assess_timing(_wk(11, 0), "bear_call", session=session)
+        assert t["window"] == "closed"
+        assert "holiday" in t["recommendation"]
+
+    def test_early_close_shifts_power_hour(self):
+        # Half-day close at 13:00 (780 min): 12:15 should already be power_hour.
+        session = {"is_trading_day": True, "close_hm": 780}
+        assert assess_timing(_wk(12, 15), "bear_call", session=session)["window"] == "power_hour"
+        assert assess_timing(_wk(13, 30), "bear_call", session=session)["window"] == "after_hours"
+
+
+class TestEventGuidanceStatic:
     def test_ten_am_window_flagged(self):
         e = event_guidance(_wk(10, 5), "index")
+        assert e["source"] == "static"
         assert e["near_release_window"] is True
         assert any("10:00" in w for w in e["warnings"])
 
     def test_fomc_slot_flagged(self):
-        e = event_guidance(_wk(14, 5), "index")
-        assert any("FOMC" in w for w in e["warnings"])
+        assert any("FOMC" in w for w in event_guidance(_wk(14, 5), "index")["warnings"])
 
     def test_quiet_time_no_warnings(self):
         e = event_guidance(_wk(11, 0), "index")
-        assert e["near_release_window"] is False
         assert e["warnings"] == []
 
     def test_stock_underlying_adds_earnings_check(self):
@@ -99,6 +113,46 @@ class TestEventGuidance:
             "earnings" in v.lower()
             for v in event_guidance(_wk(11, 0), "index")["verify_before_trading"]
         )
+
+
+class TestEventGuidanceLive:
+    def _events(self):
+        return [
+            {
+                "event": "FOMC Statement",
+                "time_et": "14:00 ET",
+                "impact": "high",
+                "actual": None,
+                "consensus": None,
+                "previous": None,
+            },
+            {
+                "event": "Existing Home Sales",
+                "time_et": "10:00 ET",
+                "impact": "medium",
+                "actual": None,
+                "consensus": None,
+                "previous": None,
+            },
+        ]
+
+    def test_live_events_drive_source_and_high_impact(self):
+        e = event_guidance(_wk(9, 0), "index", live_events=self._events())
+        assert e["source"] == "nasdaq"
+        assert e["high_impact_today"] == ["FOMC Statement"]
+        assert any("FOMC Statement" in w for w in e["warnings"])
+        assert e["events_today"] == self._events()
+
+    def test_imminent_event_flagged(self):
+        # now 09:45; the 10:00 event is within 30 min -> imminent.
+        e = event_guidance(_wk(9, 45), "index", live_events=self._events())
+        assert e["near_release_window"] is True
+        assert any("Imminent" in w for w in e["warnings"])
+
+    def test_empty_live_list_still_nasdaq_source(self):
+        e = event_guidance(_wk(11, 0), "index", live_events=[])
+        assert e["source"] == "nasdaq"
+        assert e["warnings"] == []
 
 
 # --------------------------------------------------------------------------- #

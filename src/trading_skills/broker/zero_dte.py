@@ -12,6 +12,7 @@ from scipy.stats import norm
 
 from trading_skills.black_scholes import black_scholes_delta, implied_volatility
 from trading_skills.broker.connection import CLIENT_IDS, ib_connection
+from trading_skills.economic_calendar import fetch_us_economic_events
 from trading_skills.utils import fetch_with_timeout
 
 NY = ZoneInfo("America/New_York")
@@ -66,14 +67,42 @@ def _mins(h: int, m: int) -> int:
     return h * 60 + m
 
 
-def assess_timing(now: datetime, spread_type: str) -> dict:
+def market_session(now: datetime) -> dict | None:
+    """Return {is_trading_day, close_hm} for `now`'s date via the NYSE calendar.
+
+    Handles holidays and early closes (half-days close 13:00 ET). Returns None if
+    the calendar can't be consulted, so the caller falls back to a weekday guess.
+    """
+    try:
+        import pandas_market_calendars as mcal
+
+        d = now.strftime("%Y-%m-%d")
+        sched = mcal.get_calendar("NYSE").schedule(start_date=d, end_date=d)
+        if sched.empty:
+            return {"is_trading_day": False, "close_hm": _mins(16, 0)}
+        close_et = sched.iloc[0]["market_close"].tz_convert(NY)
+        return {"is_trading_day": True, "close_hm": close_et.hour * 60 + close_et.minute}
+    except Exception:
+        return None
+
+
+def assess_timing(now: datetime, spread_type: str, session: dict | None = None) -> dict:
     """Rate the current ET time as a 0DTE entry window for `spread_type`.
 
     Windows reflect intraday structure: the open is wide/whippy, mid-morning is
     the prime credit-spread window, midday suits iron condors, and the final hour
     is peak-gamma (dangerous to open new short premium).
+
+    session (from market_session) supplies holiday / early-close awareness; without
+    it, a plain weekday + 16:00 close is assumed.
     """
     hm = now.hour * 60 + now.minute
+    if session is not None:
+        trading_day = session["is_trading_day"]
+        close_hm = session["close_hm"]
+    else:
+        trading_day = now.weekday() < 5
+        close_hm = _mins(16, 0)
 
     def out(window, market_open, quality, rec):
         return {
@@ -83,12 +112,13 @@ def assess_timing(now: datetime, spread_type: str) -> dict:
             "recommendation": rec,
         }
 
-    if now.weekday() >= 5:
+    if not trading_day:
+        reason = "weekend" if now.weekday() >= 5 else "market holiday"
         return out(
-            "weekend",
+            "closed",
             False,
             "closed",
-            "US markets are closed (weekend); 0DTE resumes next session.",
+            f"US markets are closed ({reason}); 0DTE resumes the next session.",
         )
     if hm < _mins(9, 30):
         return out(
@@ -97,12 +127,21 @@ def assess_timing(now: datetime, spread_type: str) -> dict:
             "closed",
             "Pre-market — wait for the 9:30 ET open; option liquidity is poor now.",
         )
-    if hm >= _mins(16, 0):
+    if hm >= close_hm:
         return out(
             "after_hours",
             False,
             "closed",
-            "After the 4:00 ET close; today's 0DTE has settled — trade next session.",
+            "After the close; today's 0DTE has settled — trade the next session.",
+        )
+    # Power hour and opening are checked before the fixed midday boundaries so an
+    # early close (half-day) correctly compresses the afternoon.
+    if hm >= close_hm - 60:
+        return out(
+            "power_hour",
+            True,
+            "avoid",
+            "Final hour: peak gamma — high risk to open new short premium. Better to manage/close.",
         )
 
     is_condor = spread_type == "iron_condor"
@@ -127,28 +166,58 @@ def assess_timing(now: datetime, spread_type: str) -> dict:
             else "Midday lull: thinner premium, choppier direction; smaller edge than AM."
         )
         return out("midday", True, "best" if is_condor else "fair", rec)
-    if hm < _mins(15, 0):
-        return out(
-            "afternoon",
-            True,
-            "fair",
-            "Early afternoon: gamma rising — widen the short strike (--delta) and size down.",
-        )
     return out(
-        "power_hour",
+        "afternoon",
         True,
-        "avoid",
-        "Final hour: peak gamma — high risk to open new short premium. Better to manage/close.",
+        "fair",
+        "Early afternoon: gamma rising — widen the short strike (--delta) and size down.",
     )
 
 
-def event_guidance(now: datetime, asset_type: str) -> dict:
-    """Flag intraday macro-release windows and list events to verify before trading.
+def _minutes_from_et(time_et: str | None) -> int | None:
+    """Parse an 'HH:MM ET' string to minutes past midnight, or None."""
+    if not time_et:
+        return None
+    hh, _, rest = time_et.partition(":")
+    mm = rest[:2]
+    if hh.strip().isdigit() and mm.isdigit():
+        return int(hh) * 60 + int(mm)
+    return None
 
-    Scheduled-event *dates* are not looked up (no live economic calendar); this
-    returns the recurring intraday risk windows plus a verify-before-trading list.
+
+def event_guidance(now: datetime, asset_type: str, live_events: list[dict] | None = None) -> dict:
+    """Event-risk guidance for the day.
+
+    With `live_events` (from fetch_us_economic_events) it reports the real scheduled
+    releases — flagging high-impact ones and anything imminent. Without it, falls
+    back to the recurring intraday windows plus a verify-before-trading checklist.
     """
     hm = now.hour * 60 + now.minute
+
+    if live_events is not None:
+        high = [e for e in live_events if e["impact"] == "high"]
+        warnings = []
+        for e in high:
+            when = f" at {e['time_et']}" if e["time_et"] else ""
+            warnings.append(f"{e['event']}{when} today — major vol risk for index 0DTE.")
+        # Anything (any impact) landing within the next ~30 min is imminent.
+        imminent = [
+            e
+            for e in live_events
+            if (m := _minutes_from_et(e["time_et"])) is not None and hm <= m <= hm + 30
+        ]
+        for e in imminent:
+            warnings.append(f"Imminent: {e['event']} at {e['time_et']} — hold off entering.")
+        return {
+            "source": "nasdaq",
+            "near_release_window": bool(imminent),
+            "high_impact_today": [e["event"] for e in high],
+            "events_today": live_events,
+            "warnings": warnings,
+            "note": "Live US economic calendar (Nasdaq); times ET.",
+        }
+
+    # Fallback: recurring intraday windows + a reminder checklist.
     warnings = []
     if _mins(9, 55) <= hm <= _mins(10, 20):
         warnings.append("Near the 10:00 ET data window (ISM/JOLTS/sentiment) — expect a vol spike.")
@@ -156,7 +225,6 @@ def event_guidance(now: datetime, asset_type: str) -> dict:
         warnings.append(
             "2:00 ET FOMC slot on meeting days — don't open new 0DTE into the announcement."
         )
-
     verify = [
         "FOMC rate decision — 2:00 ET on meeting days (whipsaws the afternoon)",
         "CPI / PPI / NFP / retail sales — 8:30 ET (gaps the open)",
@@ -166,20 +234,26 @@ def event_guidance(now: datetime, asset_type: str) -> dict:
         verify.append(
             "Underlying earnings — a report today/after close can gap through your strikes"
         )
-
     return {
+        "source": "static",
         "near_release_window": bool(warnings),
         "warnings": warnings,
         "verify_before_trading": verify,
-        "note": "Event dates aren't auto-checked — verify today's economic calendar first.",
+        "note": "Live calendar unavailable — verify today's economic calendar manually.",
     }
 
 
-def build_timing(now: datetime, spread_type: str, asset_type: str) -> dict:
+def build_timing(
+    now: datetime,
+    spread_type: str,
+    asset_type: str,
+    session: dict | None = None,
+    live_events: list[dict] | None = None,
+) -> dict:
     """Combined intraday-timing + event-risk guidance for the output."""
-    timing = assess_timing(now, spread_type)
+    timing = assess_timing(now, spread_type, session)
     timing["now_et"] = now.strftime("%H:%M ET")
-    timing["events"] = event_guidance(now, asset_type)
+    timing["events"] = event_guidance(now, asset_type, live_events)
     return timing
 
 
@@ -752,6 +826,7 @@ async def find_0dte_spreads(
     max_width: float | None = None,
     max_short_delta: float | None = None,
     allow_stale: bool = False,
+    fetch_events: bool = True,
     rate: float = DEFAULT_RATE,
     strike_band: float = 0.15,
 ) -> dict:
@@ -914,6 +989,17 @@ async def find_0dte_spreads(
 
             ranked = rank_candidates(candidates, top)
 
+            # --- Timing & event guidance (fetch the live calendar off-thread) ---
+            now_et = datetime.now(NY)
+            session = market_session(now_et)
+            live_events = None
+            if fetch_events:
+                cal_date = f"{target[:4]}-{target[4:6]}-{target[6:]}"
+                live_events = await fetch_with_timeout(
+                    asyncio.to_thread(fetch_us_economic_events, cal_date), timeout=12, default=None
+                )
+            timing = build_timing(now_et, spread_type, asset_type, session, live_events)
+
             # --- Execute (place the chosen candidate as a live combo) ---
             order_result = None
             if execute:
@@ -947,7 +1033,7 @@ async def find_0dte_spreads(
                 "budget": budget,
                 "trading_class": trading_class,
                 "candidates_evaluated": len(candidates),
-                "timing": build_timing(datetime.now(NY), spread_type, asset_type),
+                "timing": timing,
                 "best": ranked[0] if ranked else None,
                 "candidates": ranked,
                 "picked": pick if execute else None,
