@@ -54,7 +54,8 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--account` — IBKR account the trade is committed to. Validated against the connection's managed accounts; echoed in the output. Defaults to the sole managed account when the login has exactly one. **Required with `--execute` when the login manages more than one account.**
 - `--execute` — place the chosen spread as a live combo order. Without it (the default), the tool is a **dry run**: it proposes but places nothing.
 - `--pick N` — 1-based rank of the candidate to execute (default: 1 = best).
-- `--limit` — net credit limit price override (default: the candidate's net credit).
+- `--limit` — absolute net-credit limit override (default: the candidate's mid credit).
+- `--limit-frac` — marketable limit as a fraction of the mid credit, e.g. `0.85` = accept 85% of mid. Computed at execution time, so it stays marketable even though a fresh pull re-selects strikes with a different mid. Ignored if `--limit` is set. (Note: IB **paper** often won't fill multi-leg 0DTE index combos at any marketable price — a paper-sim limitation, not a pricing issue.)
 - `--replace` — if a live order for this symbol/expiry/type already rests, cancel and re-place it (default: refuse as a duplicate).
 - `--stop-mult` — premium-cap stop: close when the spread reaches this multiple of the credit (default: `2.0` = lose ~1× credit). `0` disables the premium cap.
 - `--stop-buffer` — points before the short strike to trigger the level stop (default: `0` = at the strike).

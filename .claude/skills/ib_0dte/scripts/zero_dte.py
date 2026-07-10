@@ -137,7 +137,14 @@ def main():
         "--limit",
         type=float,
         default=None,
-        help="Net credit limit price override (default: candidate's net credit)",
+        help="Absolute net-credit limit override (default: candidate's mid credit)",
+    )
+    parser.add_argument(
+        "--limit-frac",
+        type=float,
+        default=None,
+        help="Marketable limit as a fraction of the mid credit, e.g. 0.85 = accept 85%% "
+        "of mid (robust to fresh-pull strike changes; ignored if --limit is set).",
     )
     parser.add_argument(
         "--replace",
@@ -225,6 +232,7 @@ def main():
                     execute=args.execute,
                     pick=args.pick,
                     limit=args.limit,
+                    limit_frac=args.limit_frac,
                     replace=args.replace,
                     top=args.top,
                     min_pop=args.min_pop,

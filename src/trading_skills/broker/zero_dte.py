@@ -904,6 +904,7 @@ async def find_0dte_spreads(
     execute: bool = False,
     pick: int = 1,
     limit: float | None = None,
+    limit_frac: float | None = None,
     replace: bool = False,
     top: int = 5,
     min_pop: float = 0.0,
@@ -1096,6 +1097,7 @@ async def find_0dte_spreads(
                     trade_account,
                     budget,
                     limit,
+                    limit_frac,
                     symbol_u,
                     target,
                     exchange,
@@ -1182,6 +1184,7 @@ async def _maybe_execute(
     trade_account,
     budget,
     limit,
+    limit_frac,
     symbol_u,
     target,
     exchange,
@@ -1235,7 +1238,14 @@ async def _maybe_execute(
         ib.cancelOrder(existing.order)
         await asyncio.sleep(2)  # let the cancel register before re-placing
 
-    limit_credit = limit if limit is not None else candidate["net_credit"]
+    # Absolute --limit wins; else --limit-frac shaves the mid to stay marketable
+    # (robust to the fresh pull re-selecting different strikes each run).
+    if limit is not None:
+        limit_credit = limit
+    elif limit_frac is not None:
+        limit_credit = round(limit_frac * candidate["net_credit"], 2)
+    else:
+        limit_credit = candidate["net_credit"]
     result = await _place_spread_order(
         ib,
         candidate,
