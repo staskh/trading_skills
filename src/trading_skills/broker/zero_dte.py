@@ -457,9 +457,16 @@ def build_verticals(
             # Combo NBBO: the marketable BUY-side (combo_ask_credit) is the credit a
             # market-taker BUY combo actually receives — this is what fills. The mid
             # (`net_credit`) is the theoretical fair-value fill and is typically NOT
-            # marketable on a multi-leg BAG order.
-            combo_ask_credit = short["bid"] - long_leg["ask"]  # market-taker BUY, worst credit
-            combo_bid_credit = short["ask"] - long_leg["bid"]  # resting BUY bid, best credit
+            # marketable on a multi-leg BAG order. When a leg is quoted from `last` or
+            # `close` (no live bid/ask), we fall back to the mid on both sides so the
+            # candidate still ranks; downstream _maybe_execute treats mid as the limit.
+            quotes = (short.get("bid"), short.get("ask"), long_leg.get("bid"), long_leg.get("ask"))
+            if all(q is not None for q in quotes):
+                combo_ask_credit = short["bid"] - long_leg["ask"]  # market-taker BUY
+                combo_bid_credit = short["ask"] - long_leg["bid"]  # resting BUY bid
+            else:
+                combo_ask_credit = net_credit
+                combo_bid_credit = net_credit
 
             max_profit_pc = net_credit * 100
             max_loss_pc = (width - net_credit) * 100
