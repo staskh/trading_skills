@@ -72,6 +72,8 @@ Stop and exit defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero
 - `--min-pop` — minimum probability of profit, 0–1 (default: 0, no filter)
 - `--max-width` — cap the strike width in dollars (optional)
 - `--delta` — cap the `|delta|` of the short leg(s) at entry. Applies to both verticals and (both short legs of) iron condors. **Defaults by class: 0.12 for indexes, 0.20 for stocks** (`ENTRY_MAX_DELTA` in `zero_dte.py`); pass a value here to override. The effective cap is echoed as `max_short_delta` in the output.
+- `--gex` — compute the **dealer gamma-exposure profile** (net GEX, gamma flip, call/put walls), annotate each candidate against the walls, and gate `entry_quality` on the regime. See **Gamma exposure (GEX)** below. Costs an extra chain fetch (it pulls both option sides).
+- `--gex-weight` — size measure behind each strike: `volume` (today's prints), `oi` (prior settlement's open interest), or `auto` (default: volume once it has printed, else OI).
 - `--allow-stale` — if IBKR streams no live quotes/greeks (off-hours), price legs from yesterday's settlement close and derive greeks via Black-Scholes. **Off by default:** greeks come only from IBKR, so a closed market returns no candidates (with a hint) rather than stale, model-computed ones.
 - `--no-events` — skip the live economic-calendar lookup (falls back to static event guidance). The calendar is fetched by default and needs no API key.
 - `--expiries` — list available expiries and whether today has a 0DTE
@@ -170,6 +172,10 @@ JSON with:
 - `underlying_price`, `expiry`, `dte`, `spread_type`, `budget`, `asset_type`, `account`
 - `dry_run` — `true` unless `--execute` was passed
 - `timing` — built-in intraday guidance (see **Timing & event guidance** below)
+- `gex` — dealer gamma-exposure profile when `--gex` is passed, else `null` (see
+  **Gamma exposure (GEX)** below): `regime`, `net_gex_bn`, `flip_level`, `call_wall`,
+  `put_wall`, `heaviest_strikes`, `weight_source`, `coverage`, `caveats`, and a
+  `guidance` sub-block
 - `best` — the top-ranked spread
 - `candidates` — top-N spreads, each with `legs` (action, right, strike, bid, ask,
   mid, delta, iv), `net_credit` (mid credit, used for max_profit/EV/breakevens),
@@ -214,6 +220,53 @@ uv run python scripts/report.py --json     # machine-readable
 
 Watch **expectancy**, not win rate: a high win rate with one fat loss can still be
 negative (the report makes that obvious).
+
+## Gamma exposure (GEX)
+
+`--gex` adds a `gex` block estimating how much gamma market makers hold across the
+chain, and what their hedging of it does to the tape:
+
+```bash
+uv run python scripts/zero_dte.py SPX --type bear_call --budget 2000 --gex
+```
+
+Per strike, `GEX = gamma × size × 100 × spot² × 0.01` — the dollars of dealer delta
+that must be re-hedged per 1% move. Net GEX is **calls minus puts**, on the standard
+assumption that dealers are **long call gamma / short put gamma** (customers buy puts
+and sell calls).
+
+- **`regime`** — `positive_gamma`: dealers hedge *against* the move (sell rallies, buy
+  dips), so vol is suppressed and price mean-reverts — the supportive regime for short
+  premium. `negative_gamma`: they hedge *with* the move, amplifying it — the regime that
+  runs credit spreads over. `neutral_gamma`: the book is balanced, no edge either way.
+- **`flip_level`** — the spot where net GEX crosses zero, found by re-deriving every
+  strike's gamma across a ±5% spot grid. Above it you're in the suppressive regime,
+  below it the amplifying one. `guidance.spot_vs_flip` says which side you're on.
+- **`call_wall` / `put_wall`** — the heaviest gamma strikes above and below spot. Dealer
+  hedging tends to defend them, so they act as barriers.
+- **`guidance.strike_guidance`** — where to put the short leg: at or **beyond** the wall
+  (bear call ≥ call wall, bull put ≤ put wall), so the level dealers defend stands
+  between spot and your short strike.
+- Each candidate gets a **`gex`** tag (`beyond_wall` / `at_wall` / `inside_wall` per
+  short leg, with `distance_to_wall`) and a **`gex_ok`** boolean. `inside_wall` means
+  price can reach your short strike without ever contesting the wall.
+- **The regime gate**: a `negative_gamma` read **downgrades `timing.entry_quality` one
+  notch** (best/good → fair → avoid) and records `timing.gex_gate` with the original
+  value and the reason. The clock only knows the time of day; the regime knows whether
+  today's hedging damps moves or feeds them.
+
+GEX is **advisory only** — it never changes strike selection, sizing, or the order path.
+Surface `gex.regime`, the walls, and any `guidance.warnings` alongside the timing block.
+
+**Weighting caveat (read this).** IBKR's open interest is the **prior settlement's** — on
+a 0DTE expiry most of the book is opened the same morning, so OI misses the flow that
+actually drives today's hedging. `auto` therefore weights by **same-day volume**, which
+sees today's flow but double-counts round-trips and can't tell an opening trade from a
+closing one. `weight_source` and `caveats` in the output state which was used. A GEX
+number built on the wrong measure can point at the wrong wall entirely — treat it as a
+regime filter and a strike-placement prior, not as an edge to lean on hard. The
+dealer long-call/short-put assumption itself fails when customers are the ones buying
+calls (a squeeze), which inverts the profile.
 
 ## Timing & event guidance
 

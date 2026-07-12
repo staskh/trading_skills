@@ -119,6 +119,20 @@ def main():
         help="Skip the live economic-calendar lookup (falls back to static event guidance)",
     )
     parser.add_argument(
+        "--gex",
+        action="store_true",
+        help="Compute the dealer gamma-exposure profile (net GEX, gamma flip, call/put walls), "
+        "annotate candidates against the walls, and gate entry_quality on the regime. "
+        "Pulls both option sides, so it costs an extra chain fetch.",
+    )
+    parser.add_argument(
+        "--gex-weight",
+        choices=("auto", "volume", "oi"),
+        default="auto",
+        help="Size behind each strike for GEX: 'volume' (today's prints — the honest 0DTE "
+        "measure), 'oi' (prior settlement's open interest), 'auto' (volume once it prints).",
+    )
+    parser.add_argument(
         "--account",
         help="IBKR account the trade will be committed to (default: sole managed account)",
     )
@@ -244,6 +258,8 @@ def main():
                     rv_ratio=args.rv_ratio,
                     allow_stale=args.allow_stale,
                     fetch_events=not args.no_events,
+                    gex=args.gex,
+                    gex_weight=args.gex_weight,
                     stop_mult=args.stop_mult,
                     stop_buffer=args.stop_buffer,
                     stop_delta=args.stop_delta,

@@ -16,6 +16,12 @@ from trading_skills.black_scholes import (
     implied_volatility,
 )
 from trading_skills.broker.connection import CLIENT_IDS, ib_connection
+from trading_skills.broker.zero_dte_gex import (
+    annotate_candidate,
+    apply_gex_gate,
+    build_gex_profile,
+    gex_guidance,
+)
 from trading_skills.broker.zero_dte_stop import (
     emergency_close,
     place_spread_bracket,
@@ -694,6 +700,36 @@ def _resolve_quote(bid, ask, last, close, g_delta, g_iv, spot, strike, right, T,
     return mid, delta, iv, stale, no_live
 
 
+_OI_BATCH = 20  # concurrent streaming market-data lines to hold at once
+
+
+async def _fetch_open_interest(ib: IB, qualified: list) -> dict[int, int]:
+    """Open interest by conId, via generic tick 101 (call/put OI).
+
+    Snapshot quotes (reqTickers) never carry OI — it only arrives on a STREAMING
+    subscription with the generic tick requested. Streamed in small batches and
+    cancelled immediately so we never hold many market-data lines (a live account
+    has a limited allowance shared with every other skill).
+    """
+    out: dict[int, int] = {}
+    for i in range(0, len(qualified), _OI_BATCH):
+        batch = qualified[i : i + _OI_BATCH]
+        tickers = [ib.reqMktData(c, genericTickList="101", snapshot=False) for c in batch]
+        try:
+            await asyncio.sleep(3)  # OI ticks arrive asynchronously
+            for t in tickers:
+                if t.contract is None:
+                    continue
+                right = t.contract.right
+                oi = t.callOpenInterest if right == "C" else t.putOpenInterest
+                if oi is not None and not math.isnan(oi) and oi >= 0:
+                    out[t.contract.conId] = int(oi)
+        finally:
+            for c in batch:
+                ib.cancelMktData(c)
+    return out
+
+
 async def _fetch_side(
     ib: IB,
     symbol: str,
@@ -706,12 +742,15 @@ async def _fetch_side(
     T: float,
     r: float,
     allow_stale: bool,
+    want_oi: bool = False,
 ) -> list[dict]:
-    """Qualify and quote one option side, capturing delta and IV from model greeks.
+    """Qualify and quote one option side, capturing delta, gamma and IV from model greeks.
 
     With allow_stale=True, legs lacking live quotes/greeks (outside RTH) fall back
     to the prior settlement close + Black-Scholes IV, marked stale. By default such
     legs are left un-priceable and dropped.
+
+    want_oi adds a streaming pass for open interest (only the GEX profile needs it).
     """
     contracts = [
         Option(symbol, expiry, strike, right, exchange, tradingClass=trading_class, currency="USD")
@@ -738,6 +777,8 @@ async def _fetch_side(
 
     await asyncio.sleep(1)  # let streamed greeks/quotes arrive
 
+    oi_by_conid = await _fetch_open_interest(ib, qualified) if want_oi else {}
+
     results = []
     for t in tickers:
         if t.contract is None:
@@ -747,16 +788,24 @@ async def _fetch_side(
         last = t.last if t.last and t.last > 0 else None
         close = t.close if t.close and not math.isnan(t.close) and t.close > 0 else None
 
-        g_delta = g_iv = None
+        g_delta = g_iv = g_gamma = None
         if t.modelGreeks:
             if t.modelGreeks.delta is not None and not math.isnan(t.modelGreeks.delta):
                 g_delta = t.modelGreeks.delta
             if t.modelGreeks.impliedVol and not math.isnan(t.modelGreeks.impliedVol):
                 g_iv = t.modelGreeks.impliedVol
+            if t.modelGreeks.gamma is not None and not math.isnan(t.modelGreeks.gamma):
+                g_gamma = t.modelGreeks.gamma
 
         mid, delta, iv, stale, no_live = _resolve_quote(
             bid, ask, last, close, g_delta, g_iv, spot, t.contract.strike, right, T, r, allow_stale
         )
+
+        # Size behind the strike, for the GEX profile. IBKR's open interest is the
+        # PRIOR settlement's, so on a 0DTE expiry `volume` (today's prints) is the
+        # only measure that sees the same-day book — see zero_dte_gex.
+        oi = oi_by_conid.get(t.contract.conId)
+        volume = t.volume if t.volume is not None and not math.isnan(t.volume) else None
 
         results.append(
             {
@@ -768,6 +817,9 @@ async def _fetch_side(
                 "mid": mid,
                 "delta": delta,
                 "iv": iv,
+                "gamma": g_gamma,
+                "volume": int(volume) if volume is not None and volume >= 0 else None,
+                "open_interest": oi,
                 "stale": stale,
                 "no_live_quote": no_live,
             }
@@ -944,6 +996,8 @@ async def find_0dte_spreads(
     rv_ratio: float = 0.85,
     allow_stale: bool = False,
     fetch_events: bool = True,
+    gex: bool = False,
+    gex_weight: str = "auto",
     stop_mult: float | None = None,
     stop_buffer: float | None = None,
     stop_delta: float | None = None,
@@ -962,6 +1016,13 @@ async def find_0dte_spreads(
         greeks via Black-Scholes if IBKR streams no live quotes/greeks (off-hours).
         Default False: greeks come only from IBKR, so a closed market yields no
         candidates rather than stale, model-computed ones.
+    gex: when True, also compute the dealer gamma-exposure profile (net GEX, gamma
+        flip, call/put walls). Fetches BOTH option sides regardless of spread type
+        (the net is calls minus puts), so it costs an extra chain pull. Read-only:
+        it annotates and gates the entry guidance but never changes strike selection
+        or the order path.
+    gex_weight: size measure behind each strike — "volume" (today's prints), "oi"
+        (prior settlement's open interest), or "auto" (volume when it has printed).
     execute: when True, place the chosen candidate as a live BAG combo order
         (default False = dry run, propose only). Requires a resolved account.
     pick: 1-based index into the ranked candidates to execute (default: the best).
@@ -1022,10 +1083,16 @@ async def find_0dte_spreads(
             if not strikes:
                 return {"success": False, "error": f"No strikes near spot for {symbol}"}
 
-            need_calls = spread_type in ("bear_call", "iron_condor")
-            need_puts = spread_type in ("bull_put", "iron_condor")
+            # A GEX profile is a net of BOTH sides, so it needs the other side of the
+            # chain even when the spread itself is one-sided.
+            need_calls = spread_type in ("bear_call", "iron_condor") or gex
+            need_puts = spread_type in ("bull_put", "iron_condor") or gex
 
             T = _time_to_expiry_years(target)
+
+            # Open interest costs a streaming pass, so only pull it when GEX asks for
+            # it AND the weighting can actually use it (volume-only never touches OI).
+            want_oi = gex and gex_weight in ("auto", "oi")
 
             calls, puts = [], []
             tasks = []
@@ -1043,6 +1110,7 @@ async def find_0dte_spreads(
                         T,
                         rate,
                         allow_stale,
+                        want_oi=want_oi,
                     )
                 )
             if need_puts:
@@ -1059,6 +1127,7 @@ async def find_0dte_spreads(
                         T,
                         rate,
                         allow_stale,
+                        want_oi=want_oi,
                     )
                 )
             fetched = await asyncio.gather(*tasks)
@@ -1106,6 +1175,16 @@ async def find_0dte_spreads(
 
             ranked = rank_candidates(candidates, top)
 
+            # --- Dealer gamma exposure (regime + walls; never changes the order) ---
+            gex_block = None
+            gex_guide = None
+            if gex:
+                profile = build_gex_profile(calls, puts, spot, T=T, rate=rate, weight_by=gex_weight)
+                gex_guide = gex_guidance(profile, spread_type, spot)
+                for candidate in ranked:
+                    annotate_candidate(candidate, profile, spread_type)
+                gex_block = {**profile, "guidance": gex_guide}
+
             # --- Timing & event guidance (fetch the live calendar off-thread) ---
             now_et = datetime.now(NY)
             session = market_session(now_et)
@@ -1116,6 +1195,8 @@ async def find_0dte_spreads(
                     asyncio.to_thread(fetch_us_economic_events, cal_date), timeout=12, default=None
                 )
             timing = build_timing(now_et, spread_type, asset_type, session, live_events)
+            if gex_guide:
+                apply_gex_gate(timing, gex_guide)  # negative gamma downgrades the window
 
             # --- Execute (place the chosen candidate as a live combo) ---
             order_result = None
@@ -1171,6 +1252,7 @@ async def find_0dte_spreads(
                 "data_quality_warning": data_quality_warning,
                 "candidates_evaluated": len(candidates),
                 "timing": timing,
+                "gex": gex_block,
                 "best": ranked[0] if ranked else None,
                 "candidates": ranked,
                 "picked": pick if execute else None,
