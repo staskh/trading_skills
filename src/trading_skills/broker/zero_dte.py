@@ -490,7 +490,12 @@ def build_verticals(
                     net_credit,
                     T,
                     r,
-                    rv_ratio * short["iv"] / 100.0,
+                    # short["iv"] is the RAW leg's IV, already a fraction (0.12) — only
+                    # _leg_view converts to percent for display. Scaling by /100 here
+                    # collapsed sigma 100x, so expected intrinsic underflowed to zero
+                    # and EV degenerated to the full credit (i.e. "rank by fattest
+                    # credit"), the exact far-OTM/near-money bias this model exists to fix.
+                    rv_ratio * short["iv"],
                 )
                 if ev_pc is not None:
                     ev_model = f"expected_pnl_rv{rv_ratio}"

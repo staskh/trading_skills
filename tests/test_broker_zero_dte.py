@@ -376,6 +376,23 @@ class TestBuildVerticalsBearCall:
         # legs have no iv in this fixture -> falls back to binary
         assert all(c["ev_model"] == "binary" for c in out)
 
+    def test_ev_uses_iv_as_a_fraction_not_a_percent(self):
+        # The raw leg's `iv` is a FRACTION (0.20), not percent — only _leg_view scales
+        # it for display. Scaling it again inside the EV collapses sigma 100x, the
+        # expected loss underflows to zero, and EV degenerates to the whole credit.
+        # Guard the defining property: a credit spread that can lose money must have
+        # EV strictly below its max profit.
+        legs = [
+            _opt(105, mid=1.00, delta=0.20, iv=0.20),
+            _opt(110, mid=0.40, delta=0.08, iv=0.22),
+        ]
+        [c] = build_verticals(legs, "C", spot=100, budget=10_000, T=0.02, r=0.045, rv_ratio=0.85)
+        assert c["ev_model"] == "expected_pnl_rv0.85"
+
+        expected = expected_pnl_pc("C", 100, 105, 110, c["net_credit"], 0.02, 0.045, 0.85 * 0.20)
+        assert c["ev_per_contract"] == pytest.approx(expected, abs=0.01)
+        assert c["ev_per_contract"] < c["max_profit_per_contract"]
+
     def test_target_delta_band_filters(self):
         # calls deltas 0.50/0.30/0.15/0.07; target 0.15 (+/-0.05) keeps only 0.15 short
         out = build_verticals(
