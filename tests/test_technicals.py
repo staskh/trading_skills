@@ -4,6 +4,8 @@
 
 import numpy as np
 import pandas as pd
+import pandas_ta as ta
+import pytest
 
 from trading_skills.technicals import (
     compute_indicators,
@@ -39,6 +41,24 @@ class TestComputeIndicators:
         assert "macd" in macd
         assert "signal" in macd
         assert "histogram" in macd
+
+    def test_macd_output_includes_crossover(self):
+        result = compute_indicators("AAPL", period="6mo")
+        macd = result["indicators"]["macd"]
+        assert "crossover" in macd
+        if macd["crossover"] is not None:
+            assert macd["crossover"]["direction"] in ("up", "down")
+            assert isinstance(macd["crossover"]["days_ago"], int)
+
+    def test_ema_output_includes_crossover(self):
+        result = compute_indicators("AAPL", period="6mo")
+        ema = result["indicators"]["ema"]
+        assert "ema9" in ema
+        assert "ema21" in ema
+        assert "crossover" in ema
+        if ema["crossover"] is not None:
+            assert ema["crossover"]["direction"] in ("up", "down")
+            assert isinstance(ema["crossover"]["days_ago"], int)
 
     def test_bollinger_bands(self):
         result = compute_indicators("AAPL", period="3mo")
@@ -122,15 +142,44 @@ class TestDetectMacdCrossover:
     """Tests for MACD crossover detection — uses synthetic histogram data."""
 
     def _make_macd_df(self, hist_values):
-        """Minimal 3-column DataFrame matching pandas-ta macd() output layout."""
+        """Minimal 3-column DataFrame matching pandas-ta macd() output layout.
+
+        pandas-ta column order is [MACD_, MACDh_, MACDs_] = (line, histogram, signal).
+        """
         n = len(hist_values)
         return pd.DataFrame(
             {
                 "MACD_12_26_9": [1.0] * n,
-                "MACDs_12_26_9": [0.5] * n,
                 "MACDh_12_26_9": hist_values,
+                "MACDs_12_26_9": [0.5] * n,
             }
         )
+
+    def test_reads_histogram_column_not_signal(self):
+        # Real pandas-ta layout: histogram crosses up at the last bar, while the
+        # signal line stays constant and never crosses zero. A detector that reads
+        # the signal column instead of the histogram would return None here.
+        df = pd.DataFrame(
+            {
+                "MACD_12_26_9": [1.0, 1.0, 1.0],
+                "MACDh_12_26_9": [-1.0, -0.5, 0.5],
+                "MACDs_12_26_9": [2.0, 2.0, 2.0],
+            }
+        )
+        result = detect_macd_crossover(df)
+        assert result == {"direction": "up", "days_ago": 0}
+
+    def test_column_order_independent(self):
+        # Columns selected by name, so declaration order must not matter.
+        df = pd.DataFrame(
+            {
+                "MACDs_12_26_9": [2.0, 2.0, 2.0],
+                "MACD_12_26_9": [1.0, 1.0, 1.0],
+                "MACDh_12_26_9": [1.0, 0.5, -0.5],
+            }
+        )
+        result = detect_macd_crossover(df)
+        assert result == {"direction": "down", "days_ago": 0}
 
     def test_detects_up_crossover(self):
         df = self._make_macd_df([-2.0, -1.0, 1.0, 2.0])
@@ -347,6 +396,18 @@ class TestComputeRawIndicators:
         assert raw["macd_signal"] is not None
         assert raw["macd_hist"] is not None
         assert raw["prev_macd_hist"] is not None
+
+    def test_macd_columns_mapped_to_correct_names(self):
+        # signal must come from MACDs_, histogram from MACDh_ — not positionally swapped.
+        df = self._make_df()
+        macd = ta.macd(df["Close"])
+        raw = compute_raw_indicators(df)
+        assert raw["macd_line"] == pytest.approx(macd["MACD_12_26_9"].iloc[-1])
+        assert raw["macd_signal"] == pytest.approx(macd["MACDs_12_26_9"].iloc[-1])
+        assert raw["macd_hist"] == pytest.approx(macd["MACDh_12_26_9"].iloc[-1])
+        assert raw["prev_macd_hist"] == pytest.approx(macd["MACDh_12_26_9"].iloc[-2])
+        # Defining identity of MACD: histogram = line - signal.
+        assert raw["macd_hist"] == pytest.approx(raw["macd_line"] - raw["macd_signal"])
 
     def test_adx_values(self):
         df = self._make_df()
