@@ -88,6 +88,19 @@ You MUST complete all of the following steps before opening a pull request:
 
 Do not open a PR if either step fails.
 
+## 0DTE Trading Defaults
+
+Always apply these flags when running `zero_dte.py` unless the user explicitly overrides:
+
+| Parameter | Default | Reason |
+|-----------|---------|--------|
+| `--port` | `7496` | Live trading account; never use 7497 (paper) |
+| `--account` | `U790497` | User's live IB account |
+| `--budget` | `50000` | Standard capital-at-risk per trade |
+| `--max-width` (NDX only) | `100` | NDX bid/ask per leg is ~$1.50–$2 wide; narrow spreads have negative combo_ask_credit and are unfillable at market |
+
+Always run sequentially (not in parallel) when scanning multiple symbols — concurrent connections share client ID 50 and collide.
+
 ## Key Paths
 
 - `.claude/skills/*/SKILL.md` - Skill definitions
