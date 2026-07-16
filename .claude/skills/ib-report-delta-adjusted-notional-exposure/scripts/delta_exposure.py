@@ -6,13 +6,16 @@ import argparse
 import asyncio
 import json
 
+from trading_skills.broker.connection import default_ib_port
 from trading_skills.broker.delta_exposure import get_delta_exposure
 from trading_skills.utils import generated_at_str
 
 
 def main():
     parser = argparse.ArgumentParser(description="Calculate delta-adjusted notional exposure")
-    parser.add_argument("--port", type=int, default=7497, help="IB port (7496=live, 7497=paper)")
+    parser.add_argument(
+        "--port", type=int, default=default_ib_port(7497), help="IB port (7496=live, 7497=paper)"
+    )
 
     args = parser.parse_args()
     result = asyncio.run(get_delta_exposure(args.port))

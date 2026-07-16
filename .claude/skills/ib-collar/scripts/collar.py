@@ -7,13 +7,16 @@ import asyncio
 import json
 
 from trading_skills.broker.collar import find_collar_candidates
+from trading_skills.broker.connection import default_ib_port
 from trading_skills.utils import generated_at_str
 
 
 async def main():
     parser = argparse.ArgumentParser(description="Generate tactical collar analysis")
     parser.add_argument("symbol", help="Stock symbol to analyze")
-    parser.add_argument("--port", type=int, default=7497, help="IB port (7496=live, 7497=paper)")
+    parser.add_argument(
+        "--port", type=int, default=default_ib_port(7497), help="IB port (7496=live, 7497=paper)"
+    )
     parser.add_argument("--account", type=str, default=None, help="IB account ID")
 
     args = parser.parse_args()

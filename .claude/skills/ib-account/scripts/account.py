@@ -7,16 +7,17 @@ import asyncio
 import json
 
 from trading_skills.broker.account import get_account_summary
+from trading_skills.broker.connection import default_ib_port
 from trading_skills.utils import generated_at_str
 
 
 def main():
     parser = argparse.ArgumentParser(description="Fetch IB account summary")
-    parser.add_argument("--port", type=int, default=7497, help="IB port (7496=live, 7497=paper)")
-    parser.add_argument("--account", type=str, default=None, help="Specific account ID to fetch")
     parser.add_argument(
-        "--all-accounts", action="store_true", help="Fetch all managed accounts"
+        "--port", type=int, default=default_ib_port(7497), help="IB port (7496=live, 7497=paper)"
     )
+    parser.add_argument("--account", type=str, default=None, help="Specific account ID to fetch")
+    parser.add_argument("--all-accounts", action="store_true", help="Fetch all managed accounts")
 
     args = parser.parse_args()
     result = asyncio.run(

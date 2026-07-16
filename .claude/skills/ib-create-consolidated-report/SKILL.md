@@ -17,7 +17,7 @@ uv run python scripts/consolidate.py <directory> [--port PORT] [--output-dir OUT
 ## Arguments
 
 - `directory` - Path to directory containing IBRK trade CSV files
-- `--port` - IB port to fetch unrealized P&L (7497=paper, 7496=live). If not specified, auto-probes both ports (tries 7496 first, then 7497).
+- `--port` - IB port to fetch unrealized P&L (7497=paper, 7496=live). If not specified, auto-probes both ports (tries 7496 first, then 7497). Defaults to the `IB_PORT` env var when set (`--port` still overrides).
 - `--output-dir` - Output directory for reports (default: sandbox/)
 
 ## Consolidation Logic
