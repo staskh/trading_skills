@@ -7,6 +7,7 @@ import asyncio
 import json
 import sys
 
+from trading_skills.broker.connection import default_ib_port
 from trading_skills.broker.portfolio_action import (
     analyze_portfolio,
     get_portfolio_data,
@@ -15,7 +16,9 @@ from trading_skills.broker.portfolio_action import (
 
 async def main():
     parser = argparse.ArgumentParser(description="Generate portfolio action report")
-    parser.add_argument("--port", type=int, default=7497, help="IB port (7496=live, 7497=paper)")
+    parser.add_argument(
+        "--port", type=int, default=default_ib_port(7497), help="IB port (7496=live, 7497=paper)"
+    )
     parser.add_argument("--account", type=str, default=None, help="Specific account ID")
 
     args = parser.parse_args()

@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from trading_skills.broker.connection import default_ib_port
 from trading_skills.broker.consolidate import (
     AGG_COLS,
     GROUP_COLS,
@@ -213,12 +214,9 @@ def generate_markdown(
             f"| Long (open/close) | {long_opens}/{long_closes} | {format_money(long_pnl)} |"
         )
         lines.append(
-            f"| Short (open/close) | {short_opens}/{short_closes}"
-            f" | {format_money(short_pnl)} |"
+            f"| Short (open/close) | {short_opens}/{short_closes} | {format_money(short_pnl)} |"
         )
-        lines.append(
-            f"| **Total** | {len(rows)} | {format_money(total_symbol_pnl, bold=True)} |"
-        )
+        lines.append(f"| **Total** | {len(rows)} | {format_money(total_symbol_pnl, bold=True)} |")
         lines.append("")
 
         lines.append("#### Trades (by Date)")
@@ -352,7 +350,7 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=None,
+        default=default_ib_port(None),
         help="IB port to fetch unrealized P&L (7497=paper, 7496=live)",
     )
 

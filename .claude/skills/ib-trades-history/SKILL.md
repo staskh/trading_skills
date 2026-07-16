@@ -13,6 +13,7 @@ Fetch trade executions from Interactive Brokers.
 TWS or IB Gateway must be running locally with API enabled:
 - **Paper trading** — port 7497
 - **Live trading** — port 7496
+- **`IB_PORT` env var** — default port when `--port` is omitted (e.g. `IB_PORT=4001` for a Gateway container). Precedence: `--port` flag > `IB_PORT` > built-in default. Set it in the shell or a `.env` file.
 
 **Port fallback:** If the configured port fails, automatically retry on the other port.
 If the retry succeeds, save to memory which account type worked (live/paper) and reuse it for all IB skill calls in this and future sessions — until the user explicitly asks for the other account.
