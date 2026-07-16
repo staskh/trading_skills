@@ -73,7 +73,8 @@ async def main():
     dry_run = not args.execute
     if args.forced and dry_run:
         print(
-            "Warning: dry-run will preview forced replacement, but no orders are submitted unless --execute is added.",
+            "Warning: dry-run will preview forced replacement, but no orders "
+            "are submitted unless --execute is added.",
             file=sys.stderr,
         )
 
