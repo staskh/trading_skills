@@ -23,17 +23,19 @@ the markdown report below using your analysis — not mechanical string formatti
 
 One row per symbol, sorted by `pmcc_score` descending. Use these exact columns:
 
-| Symbol | Price | IV% | Capital | Ann. Yield | Trend | Earnings | PMCC Score |
-|--------|------:|----:|--------:|-----------:|-------|----------|:----------:|
+| Symbol | Industry | Price | IV% | Capital | Ann. Yield | Trend | Earnings | Weeklies | PMCC Score |
+|--------|----------|------:|----:|--------:|-----------:|-------|----------|:--------:|:----------:|
 
 Column definitions:
 - **Symbol** — ticker
+- **Industry** — `industry` (falls back to sector); "N/A" if unknown
 - **Price** — current stock price (`price`)
 - **IV%** — ATM implied volatility (`iv_pct`)
 - **Capital** — LEAPS cost basis (`leaps.mid × 100`, formatted as `$X,XXX`)
 - **Ann. Yield** — annualized short-call yield estimate (`metrics.annual_yield_est_pct`)
 - **Trend** — derive from `score_breakdown.trend_delta`: ≥1.5 → Bullish, ≤-1.5 → Bearish, >0 → Leaning Bull, <0 → Leaning Bear, 0 → Neutral
 - **Earnings** — days to next earnings from `earnings_date`; flag with ⚠ if < 30 days; "passed" if in the past; "N/A" if unknown
+- **Weeklies** — `has_weeklies`: "Yes" / "No" (No costs −1 in the score)
 - **PMCC Score** — `pmcc_score/max_possible_score`
 
 ---
@@ -47,14 +49,24 @@ One section per symbol, in the same order as the summary table. Each section con
 ### {SYMBOL} — Score {pmcc_score}/{max_possible_score}
 ```
 
-#### 2b. LEAPS Table
+Follow the header with a one-line italicized company description from `description`
+(omit if null).
+
+#### 2b. Indicators
+
+Report every trend indicator the scorer actually consumed, from
+`score_breakdown.trend` (keys such as `sma50`, `rsi`, `macd`). One bullet per
+indicator, e.g. `- SMA50: price above (+1.0)`. Keep this list in sync with whatever
+indicators appear in `score_breakdown.trend` — do not hardcode the set.
+
+#### 2c. LEAPS Table
 
 | Expiry | Strike | Delta | IV% | Last | Bid | Ask | Mid | Capital |
 |--------|-------:|------:|----:|-----:|----:|----:|----:|--------:|
 
 Populate from `leaps.*`. IV% = `leaps.iv × 100`. Flag off-hours data: if `leaps.bid == 0 and leaps.ask == 0`, add note: `⚠ No live bid/ask — using last price`.
 
-#### 2c. Short Call Table
+#### 2d. Short Call Table
 
 | Expiry | Strike | Delta | IV% | Last | Bid | Ask | Mid | Premium | Yield% |
 |--------|-------:|------:|----:|-----:|----:|----:|----:|--------:|-------:|
@@ -62,7 +74,7 @@ Populate from `leaps.*`. IV% = `leaps.iv × 100`. Flag off-hours data: if `leaps
 Populate from `short.*`. Premium = `short.mid × 100`. Yield% = `metrics.short_yield_pct`.
 Flag wide spreads: if `short.spread_pct > 20`, add note: `⚠ Wide spread — use limit order at mid`.
 
-#### 2d. Suggested PMCC Setup
+#### 2e. Suggested PMCC Setup
 
 Short bullet list:
 - **Buy**: `{leaps.expiry}` `${leaps.strike}C` @ `${leaps.mid}` (δ `{leaps.delta}`)
@@ -70,7 +82,7 @@ Short bullet list:
 - **Net Debit**: `${metrics.net_debit}` | **Max Risk**: `${metrics.capital_required}`
 - **Max Profit**: `${metrics.max_profit}` | **Ann. Yield Est.**: `{metrics.annual_yield_est_pct}%`
 
-#### 2e. Strengths
+#### 2f. Strengths
 
 Bullet list of positive scoring factors from `score_breakdown`. Include:
 - Delta accuracy (LEAPS and short)
@@ -85,7 +97,7 @@ Write each as a human-readable sentence, not a raw score string. Example:
 - ✓ LEAPS delta 0.787 is on target (±0.05 of 0.80)
 - ✓ Strong bullish trend: price above SMA50, RSI 76.8, MACD positive
 
-#### 2f. Weaknesses
+#### 2g. Weaknesses
 
 Bullet list of zero or negative scoring factors. Same style as Strengths.
 If there are no weaknesses, write: `No material weaknesses identified.`
@@ -97,8 +109,10 @@ Highlight these risk factors explicitly when present:
 - **Earnings within short expiry**: warn IV crush / gap risk
 - **High IV** (>70%): warn expensive entry, IV crush exposure
 - **Bearish trend**: note momentum is against the position
+- **No weekly options** (`weekly_options_delta` = −1): warn that roll/adjustment cadence is limited to monthly expiries
+- **Thin strike density** (`strike_density_delta` < 0): warn that few strikes between spot and short limit strike selection and rolls
 
-#### 2g. Verdict
+#### 2h. Verdict
 
 One paragraph (3–5 sentences) synthesizing the setup. Cover:
 1. Go / No-go recommendation with confidence level

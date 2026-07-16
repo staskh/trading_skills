@@ -2,20 +2,24 @@
 # ABOUTME: Validates PMCC scoring, option chain analysis, and constraints.
 
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
+import trading_skills.scanner_pmcc as spm
 from trading_skills.black_scholes import black_scholes_price
 from trading_skills.scanner_pmcc import (
     analyze_pmcc,
     compute_atm_iv,
     compute_base_score,
     compute_earnings_score,
+    compute_strike_density_score,
     compute_trend_score,
+    compute_weekly_options_score,
     find_strike_by_delta,
     format_scan_markdown,
     format_scan_results,
+    has_weekly_options,
 )
 
 
@@ -72,8 +76,8 @@ class TestAnalyzePMCC:
     def test_score_range(self):
         result = analyze_pmcc("AAPL")
         if "pmcc_score" in result:
-            # Base score 0-11, trend adj -2 to +2, earnings adj -2 to +1
-            assert -4 <= result["pmcc_score"] <= 14
+            # Base 0-11, trend -2..+2, earnings -2..+1, weekly -1..0, strike -2..0
+            assert -7 <= result["pmcc_score"] <= 14
 
     def test_has_score_breakdown(self):
         result = analyze_pmcc("AAPL")
@@ -724,6 +728,10 @@ class TestFormatScanMarkdown:
             "pmcc_score": 10.0,
             "max_possible_score": 14,
             "earnings_date": "2026-08-01",
+            "industry": "Consumer Electronics",
+            "description": "Apple designs and sells consumer electronics.",
+            "has_weeklies": True,
+            "short_window": "7-21",
             "leaps": {
                 "expiry": "2027-01-15",
                 "days": 300,
@@ -781,6 +789,10 @@ class TestFormatScanMarkdown:
                 "iv": "+1.0",
                 "yield_delta": 2.0,
                 "yield": "+2.0",
+                "weekly_options_delta": 0.0,
+                "weekly_options": "0.0 (weekly options available)",
+                "strike_density_delta": -1.0,
+                "strike_density": "-1.0 (only 4 strikes between spot and short)",
             },
         }
         return {
@@ -840,3 +852,205 @@ class TestFormatScanMarkdown:
         }
         md = format_scan_markdown(output)
         assert isinstance(md, str)
+
+    def test_summary_has_industry_column(self):
+        md = format_scan_markdown(self._make_scan_output())
+        assert "Industry" in md
+        assert "Consumer Electronics" in md
+
+    def test_detail_has_company_description(self):
+        md = format_scan_markdown(self._make_scan_output())
+        assert "Apple designs and sells consumer electronics." in md
+
+    def test_has_indicators_section(self):
+        md = format_scan_markdown(self._make_scan_output())
+        assert "Indicators" in md
+        assert "SMA50" in md
+
+    def test_summary_has_weeklies_column(self):
+        md = format_scan_markdown(self._make_scan_output())
+        assert "Weeklies" in md
+
+    def test_strike_density_shown_as_weakness(self):
+        md = format_scan_markdown(self._make_scan_output())
+        assert "strikes between spot and short" in md
+
+
+def _clean_calls(strikes, base_bid, step, volume=500, oi=1000, last_trade="2026-05-16"):
+    """Build a valid calls DataFrame with descending bid/ask as strike rises."""
+    n = len(strikes)
+    bids = [max(0.1, base_bid - i * step) for i in range(n)]
+    asks = [b + 0.5 for b in bids]
+    last = [(b + a) / 2 for b, a in zip(bids, asks)]
+    return pd.DataFrame(
+        {
+            "strike": strikes,
+            "bid": bids,
+            "ask": asks,
+            "lastPrice": last,
+            "impliedVolatility": [0.30] * n,
+            "volume": [volume] * n,
+            "openInterest": [oi] * n,
+            "lastTradeDate": [pd.Timestamp(last_trade)] * n,
+        }
+    )
+
+
+def _mock_ticker(day_offsets, price=150.0, info=None):
+    """Build a mock yfinance Ticker with expirations at the given day offsets.
+
+    The largest offset is treated as the LEAPS expiry; all others share a short chain.
+    """
+    from unittest.mock import MagicMock
+
+    today = date.today()
+    expirations = [(today + timedelta(days=d)).strftime("%Y-%m-%d") for d in day_offsets]
+    leaps_expiry = expirations[day_offsets.index(max(day_offsets))]
+
+    leaps_calls = _clean_calls([100.0, 110.0, 120.0, 130.0, 140.0], base_bid=52.0, step=8.0)
+    short_calls = _clean_calls([150.0, 155.0, 160.0, 165.0, 170.0, 175.0], base_bid=4.0, step=0.7)
+
+    mock = MagicMock()
+    mock.info = info or {"currentPrice": price}
+    mock.options = expirations
+
+    def option_chain(exp):
+        chain = MagicMock()
+        chain.calls = leaps_calls if exp == leaps_expiry else short_calls
+        return chain
+
+    mock.option_chain = option_chain
+    mock.history = MagicMock(
+        return_value=pd.DataFrame(
+            {"Close": [145.0] * 90, "Volume": [1_000_000] * 90},
+            index=pd.date_range("2025-02-17", periods=90),
+        )
+    )
+    return mock
+
+
+class TestEarningsScoreTimezone:
+    """A1: date math must use America/New_York, not naive datetime.now()."""
+
+    def test_uses_ny_date_not_naive(self, monkeypatch):
+        real_datetime = datetime
+
+        class FakeDatetime:
+            @classmethod
+            def now(cls, tz=None):
+                # Simulate a UTC host already past midnight: naive now() is a day ahead
+                if tz is None:
+                    return real_datetime(2026, 1, 2, 4, 0, 0)
+                return real_datetime(2026, 1, 1, 23, 0, 0, tzinfo=tz)
+
+            @staticmethod
+            def strptime(*args, **kwargs):
+                return real_datetime.strptime(*args, **kwargs)
+
+        monkeypatch.setattr(spm, "datetime", FakeDatetime)
+        # Earnings on Feb 16: 46 days from NY date (Jan 1) -> +1.0 (>45),
+        # but 45 days from naive Jan 2 -> -1.0. NY answer is correct.
+        delta, _ = compute_earnings_score("2026-02-16", short_days=14)
+        assert delta == 1.0
+
+
+class TestShortYieldSemantics:
+    """A3: short_yield_pct is the period yield; annual is that annualized by short_days."""
+
+    def test_annual_is_period_yield_annualized(self, monkeypatch):
+        monkeypatch.setattr(spm, "get_next_earnings_date", lambda s: None)
+        result = analyze_pmcc("TEST", ticker=_mock_ticker([14, 300]))
+        assert "pmcc_score" in result, result.get("error")
+        m = result["metrics"]
+        sd = result["short"]["days"]
+        expected_annual = m["short_yield_pct"] * 365 / sd
+        assert abs(m["annual_yield_est_pct"] - expected_annual) < 0.3
+
+
+class TestShortWindowReported:
+    """A4: analyze_pmcc reports the short-expiry window actually used."""
+
+    def test_reports_primary_window(self, monkeypatch):
+        monkeypatch.setattr(spm, "get_next_earnings_date", lambda s: None)
+        result = analyze_pmcc("TEST", ticker=_mock_ticker([14, 300]))
+        assert "pmcc_score" in result, result.get("error")
+        assert result["short_window"] == "7-21"
+
+    def test_reports_fallback_window(self, monkeypatch):
+        monkeypatch.setattr(spm, "get_next_earnings_date", lambda s: None)
+        # 25 days is outside 7-21 but inside the 5-30 fallback window
+        result = analyze_pmcc("TEST", ticker=_mock_ticker([25, 300]))
+        assert "pmcc_score" in result, result.get("error")
+        assert result["short_window"] == "5-30 (fallback)"
+
+
+class TestHasWeeklyOptions:
+    """C1: weekly-options detection helper."""
+
+    def test_detects_weeklies_from_close_expirations(self):
+        today = date.today()
+        exps = [(today + timedelta(days=d)).strftime("%Y-%m-%d") for d in (7, 14, 21, 300)]
+        assert has_weekly_options(exps, today) is True
+
+    def test_no_weeklies_when_only_monthly(self):
+        today = date.today()
+        exps = [(today + timedelta(days=d)).strftime("%Y-%m-%d") for d in (18, 46, 300)]
+        assert has_weekly_options(exps, today) is False
+
+    def test_weekly_score_penalizes_absence(self):
+        delta, bd = compute_weekly_options_score(False)
+        assert delta == -1.0
+        assert "weekly_options" in bd
+        assert bd["weekly_options_delta"] == -1.0
+
+    def test_weekly_score_neutral_when_present(self):
+        delta, bd = compute_weekly_options_score(True)
+        assert delta == 0.0
+        assert bd["weekly_options_delta"] == 0.0
+
+    def test_integration_no_weeklies_applies_penalty(self, monkeypatch):
+        monkeypatch.setattr(spm, "get_next_earnings_date", lambda s: None)
+        result = analyze_pmcc("TEST", ticker=_mock_ticker([14, 300]))
+        assert "pmcc_score" in result, result.get("error")
+        assert result["has_weeklies"] is False
+        assert result["score_breakdown"]["weekly_options_delta"] == -1.0
+
+    def test_integration_weeklies_no_penalty(self, monkeypatch):
+        monkeypatch.setattr(spm, "get_next_earnings_date", lambda s: None)
+        result = analyze_pmcc("TEST", ticker=_mock_ticker([7, 14, 21, 300]))
+        assert "pmcc_score" in result, result.get("error")
+        assert result["has_weeklies"] is True
+        assert result["score_breakdown"]["weekly_options_delta"] == 0.0
+
+
+class TestStrikeDensityScore:
+    """C2: strike-density penalty between spot and short strike."""
+
+    def test_fewer_than_three_strikes_penalized_two(self):
+        delta, bd = compute_strike_density_score(2)
+        assert delta == -2.0
+        assert bd["strike_density_delta"] == -2.0
+
+    def test_fewer_than_five_strikes_penalized_one(self):
+        delta, bd = compute_strike_density_score(4)
+        assert delta == -1.0
+
+    def test_five_or_more_strikes_no_penalty(self):
+        delta, bd = compute_strike_density_score(5)
+        assert delta == 0.0
+
+    def test_integration_breakdown_present(self, monkeypatch):
+        monkeypatch.setattr(spm, "get_next_earnings_date", lambda s: None)
+        result = analyze_pmcc("TEST", ticker=_mock_ticker([14, 300]))
+        assert "pmcc_score" in result, result.get("error")
+        bd = result["score_breakdown"]
+        assert "strike_density_delta" in bd
+        assert bd["strike_density_delta"] in (-2.0, -1.0, 0.0)
+
+    def test_integration_deltas_still_sum(self, monkeypatch):
+        monkeypatch.setattr(spm, "get_next_earnings_date", lambda s: None)
+        result = analyze_pmcc("TEST", ticker=_mock_ticker([14, 300]))
+        assert "pmcc_score" in result, result.get("error")
+        bd = result["score_breakdown"]
+        total = sum(bd[k] for k in bd if k.endswith("_delta") and isinstance(bd[k], (int, float)))
+        assert abs(round(total, 1) - result["pmcc_score"]) < 0.01
