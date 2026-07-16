@@ -26,6 +26,25 @@ def _to_int(val, default=0) -> int:
     return int(val)
 
 
+def _dividend_yield(info: dict, price: float) -> float:
+    """Return the continuous dividend yield as a fraction from yfinance info.
+
+    yfinance is inconsistent: dividendRate is annual $/share, trailingAnnualDividendYield
+    is a fraction, and dividendYield is a percent. Derive from rate/price when possible,
+    then fall back through the other fields.
+    """
+    rate = info.get("dividendRate")
+    if rate and price and price > 0:
+        return rate / price
+    trailing = info.get("trailingAnnualDividendYield")
+    if trailing:
+        return trailing
+    pct = info.get("dividendYield")
+    if pct:
+        return pct / 100 if pct > 1 else pct
+    return 0.0
+
+
 def _first_sentence(text: str | None) -> str | None:
     """Return the first sentence of a company description, or None."""
     if not text:
@@ -295,7 +314,15 @@ def format_scan_markdown(output: dict) -> str:
 
 
 def find_strike_by_delta(
-    chain, current_price, target_delta, expiry_days, iv, r=0.05, min_strike=None, max_strike=None
+    chain,
+    current_price,
+    target_delta,
+    expiry_days,
+    iv,
+    r=0.05,
+    min_strike=None,
+    max_strike=None,
+    q=0.0,
 ):
     """Find strike closest to target delta with optional strike constraints.
 
@@ -336,7 +363,7 @@ def find_strike_by_delta(
             option_iv = iv  # default fallback
             if effective_mid > 0:
                 iv_from_price = implied_volatility(
-                    effective_mid, current_price, strike, T, r, "call"
+                    effective_mid, current_price, strike, T, r, "call", q
                 )
                 if iv_from_price is not None and iv_from_price >= 0.01:
                     option_iv = iv_from_price
@@ -358,12 +385,12 @@ def find_strike_by_delta(
                     T_for_iv = T + days_since_trade / 365
                     if T_for_iv > 0:
                         iv_from_last = implied_volatility(
-                            last, current_price, strike, T_for_iv, r, "call"
+                            last, current_price, strike, T_for_iv, r, "call", q
                         )
                         if iv_from_last is not None and iv_from_last >= 0.01:
                             option_iv = iv_from_last
 
-        delta = black_scholes_delta(current_price, strike, T, r, option_iv, "call")
+        delta = black_scholes_delta(current_price, strike, T, r, option_iv, "call", q)
         delta_diff = abs(delta - target_delta)
 
         if delta_diff < best_delta_diff:
@@ -378,7 +405,11 @@ def find_strike_by_delta(
 
 
 def compute_atm_iv(
-    atm_calls: pd.DataFrame, current_price: float, expiry_date: str, r: float = 0.05
+    atm_calls: pd.DataFrame,
+    current_price: float,
+    expiry_date: str,
+    r: float = 0.05,
+    q: float = 0.0,
 ) -> float:
     """Compute average ATM implied volatility from option chain data.
 
@@ -414,7 +445,7 @@ def compute_atm_iv(
             if days_to_expiry <= 0:
                 continue
             T = days_to_expiry / 365
-            iv = implied_volatility(mid, current_price, strike, T, r, "call")
+            iv = implied_volatility(mid, current_price, strike, T, r, "call", q)
         elif last_price > 0:
             last_trade = row.get("lastTradeDate")
             if last_trade is None or (hasattr(last_trade, "__bool__") and pd.isna(last_trade)):
@@ -423,7 +454,7 @@ def compute_atm_iv(
             T = (expiry_dt - trade_date).days / 365
             if T <= 0:
                 continue
-            iv = implied_volatility(last_price, current_price, strike, T, r, "call")
+            iv = implied_volatility(last_price, current_price, strike, T, r, "call", q)
         else:
             continue
 
@@ -776,12 +807,15 @@ def analyze_pmcc(
         leaps_chain = ticker.option_chain(leaps_expiry)
         short_chain = ticker.option_chain(short_expiry)
 
+        # Dividend yield — ignoring it biases recovered IV/delta on dividend payers
+        div_yield = _dividend_yield(info, current_price)
+
         # Estimate IV from ATM options, with fallback to lastPrice-based IV
         atm_calls = leaps_chain.calls[
             (leaps_chain.calls["strike"] >= current_price * 0.95)
             & (leaps_chain.calls["strike"] <= current_price * 1.05)
         ]
-        avg_iv = compute_atm_iv(atm_calls, current_price, leaps_expiry)
+        avg_iv = compute_atm_iv(atm_calls, current_price, leaps_expiry, q=div_yield)
 
         # Find LEAPS call
         leaps_strike, leaps_option = find_strike_by_delta(
@@ -791,6 +825,7 @@ def analyze_pmcc(
             leaps_days,
             avg_iv,
             max_strike=current_price * 1.02,
+            q=div_yield,
         )
 
         if leaps_option is None:
@@ -807,6 +842,7 @@ def analyze_pmcc(
             short_days,
             avg_iv,
             min_strike=leaps_strike + 0.01,
+            q=div_yield,
         )
 
         if short_option is None:
@@ -840,7 +876,13 @@ def analyze_pmcc(
 
         remaining_T = (leaps_days - short_days) / 365
         leaps_value_at_short_expiry = black_scholes_price(
-            S=short_strike, K=leaps_strike, T=remaining_T, r=0.05, sigma=avg_iv, option_type="call"
+            S=short_strike,
+            K=leaps_strike,
+            T=remaining_T,
+            r=0.05,
+            sigma=avg_iv,
+            option_type="call",
+            q=div_yield,
         )
         max_profit = leaps_value_at_short_expiry + short_mid - leaps_mid
         roi_pct = (max_profit / leaps_mid * 100) if leaps_mid > 0 else 0
@@ -927,6 +969,7 @@ def analyze_pmcc(
             "description": _first_sentence(info.get("longBusinessSummary")),
             "has_weeklies": has_weeklies,
             "short_window": short_window,
+            "dividend_yield": round(div_yield, 4),
             "leaps": {
                 "expiry": leaps_expiry,
                 "days": leaps_days,

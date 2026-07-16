@@ -9,6 +9,7 @@ import pandas as pd
 import trading_skills.scanner_pmcc as spm
 from trading_skills.black_scholes import black_scholes_price
 from trading_skills.scanner_pmcc import (
+    _dividend_yield,
     analyze_pmcc,
     compute_atm_iv,
     compute_base_score,
@@ -176,7 +177,7 @@ class TestAnalyzePMCC:
         intrinsic_only = (short["strike"] - leaps["strike"]) + short["mid"] - leaps["mid"]
         assert metrics["max_profit"] > intrinsic_only
 
-        # Verify max_profit matches BS calculation
+        # Verify max_profit matches BS calculation (dividend-adjusted)
         remaining_T = remaining_days / 365
         iv = result["iv_pct"] / 100
         leaps_value_at_short_expiry = black_scholes_price(
@@ -186,6 +187,7 @@ class TestAnalyzePMCC:
             r=0.05,
             sigma=iv,
             option_type="call",
+            q=result["dividend_yield"],
         )
         expected_max_profit = leaps_value_at_short_expiry + short["mid"] - leaps["mid"]
         # iv_pct is rounded to 1 decimal, so allow tolerance for BS repricing error
@@ -608,6 +610,64 @@ class TestNaNOptionData:
         assert "last_price" in result["short"]
         assert result["leaps"]["iv"] > 0
         assert result["short"]["iv"] > 0
+
+
+class TestDividendYieldHelper:
+    """_dividend_yield normalizes the messy yfinance dividend fields to a fraction."""
+
+    def test_prefers_rate_over_price(self):
+        # dividendRate is annual $ per share; yield = rate / price
+        assert abs(_dividend_yield({"dividendRate": 1.72}, 25.0) - 1.72 / 25.0) < 1e-9
+
+    def test_falls_back_to_trailing_yield_fraction(self):
+        # trailingAnnualDividendYield is already a fraction
+        assert abs(_dividend_yield({"trailingAnnualDividendYield": 0.0693}, 25.0) - 0.0693) < 1e-9
+
+    def test_normalizes_percent_dividend_yield(self):
+        # info["dividendYield"] is a percent (e.g. 6.93 meaning 6.93%)
+        assert abs(_dividend_yield({"dividendYield": 6.93}, 25.0) - 0.0693) < 1e-9
+
+    def test_zero_when_no_dividend(self):
+        assert _dividend_yield({}, 25.0) == 0.0
+
+    def test_zero_when_price_missing(self):
+        # Can't derive from rate without a price; no other field -> 0
+        assert _dividend_yield({"dividendRate": 1.72}, 0) == 0.0
+
+
+class TestAtmIvDividend:
+    """compute_atm_iv with a dividend yield recovers a higher IV from the same prices."""
+
+    def _atm_calls(self):
+        # ATM-ish calls near spot 100 with live bid/ask
+        return _make_chain(
+            strikes=[95.0, 100.0, 105.0],
+            bids=[9.0, 6.5, 4.5],
+            asks=[9.4, 6.9, 4.9],
+            last_prices=[9.2, 6.7, 4.7],
+            ivs=[0.001, 0.001, 0.001],
+        )
+
+    def test_dividend_raises_recovered_iv(self):
+        no_div = compute_atm_iv(self._atm_calls(), 100.0, "2027-05-18", q=0.0)
+        with_div = compute_atm_iv(self._atm_calls(), 100.0, "2027-05-18", q=0.07)
+        assert with_div > no_div
+
+
+class TestFindStrikeDividend:
+    """find_strike_by_delta with a dividend yield recovers a higher per-option IV."""
+
+    def test_dividend_raises_calculated_iv(self):
+        chain = _make_chain(
+            strikes=[100.0],
+            bids=[6.5],
+            asks=[6.9],
+            last_prices=[6.7],
+            ivs=[0.001],
+        )
+        _, opt_no_div = find_strike_by_delta(chain, 100.0, 0.50, 365, 0.30, q=0.0)
+        _, opt_div = find_strike_by_delta(chain, 100.0, 0.50, 365, 0.30, q=0.07)
+        assert opt_div["calculated_iv"] > opt_no_div["calculated_iv"]
 
 
 class TestComputeAtmIv:

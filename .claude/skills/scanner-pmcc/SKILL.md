@@ -76,6 +76,7 @@ Returns JSON with:
   - `description` - one-sentence company description, or null
   - `has_weeklies` - whether the symbol lists weekly options (bool)
   - `short_window` - short-expiry window actually used: `"7-21"` or `"5-30 (fallback)"`
+  - `dividend_yield` - continuous dividend yield (fraction) used in the BS/IV math
   - `leaps` - expiry, strike, delta, **iv** (calculated from bid/ask), **last_price**, bid/ask, spread%, volume, OI
   - `short` - expiry, strike, delta, **iv** (calculated from bid/ask), **last_price**, bid/ask, spread%, volume, OI
   - `earnings_date` - next earnings date (YYYY-MM-DD) or null
@@ -134,6 +135,14 @@ IV is always computed from market price data via Black-Scholes, never taken from
 - **Off-hours (bid=ask=0)**: IV derived from last price, using the option's last trade timestamp as the pricing moment (not current wall-clock time)
 
 This applies to both `compute_atm_iv` (used for scanner baseline IV) and per-option delta calculations.
+
+**Dividends**: the Black-Scholes inversion uses the underlying's continuous dividend
+yield (Merton model). Ignoring it biases recovered IV downward for calls on dividend
+payers — badly for high yielders (e.g. a 7%-yield name would read ~12% IV instead of
+~24%). The yield is normalized from yfinance's inconsistent fields (`dividendRate/price`,
+then `trailingAnnualDividendYield`, then `dividendYield`) and reported as `dividend_yield`
+(a fraction) in each result. The same yield feeds the strike-selection deltas and the
+max-profit repricing.
 
 ## Key Constraints
 
