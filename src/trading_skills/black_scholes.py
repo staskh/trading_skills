@@ -6,16 +6,18 @@ import math
 from scipy.stats import norm
 
 
-def _d1_d2(S: float, K: float, T: float, r: float, sigma: float) -> tuple[float, float]:
-    """Calculate d1 and d2 for Black-Scholes formula."""
+def _d1_d2(
+    S: float, K: float, T: float, r: float, sigma: float, q: float = 0.0
+) -> tuple[float, float]:
+    """Calculate d1 and d2 for Black-Scholes formula (q = continuous dividend yield)."""
     sqrt_T = math.sqrt(T)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * sqrt_T)
+    d1 = (math.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * sqrt_T)
     d2 = d1 - sigma * sqrt_T
     return d1, d2
 
 
 def black_scholes_price(
-    S: float, K: float, T: float, r: float, sigma: float, option_type: str
+    S: float, K: float, T: float, r: float, sigma: float, option_type: str, q: float = 0.0
 ) -> float:
     """Calculate Black-Scholes option price.
 
@@ -26,31 +28,34 @@ def black_scholes_price(
         r: Risk-free rate
         sigma: Volatility (annualized)
         option_type: 'call' or 'put'
+        q: Continuous dividend yield (annualized)
     """
     if T <= 0 or sigma <= 0:
         if option_type == "call":
             return max(0, S - K)
         return max(0, K - S)
 
-    d1, d2 = _d1_d2(S, K, T, r, sigma)
+    d1, d2 = _d1_d2(S, K, T, r, sigma, q)
 
     if option_type == "call":
-        return S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+        return S * math.exp(-q * T) * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
     else:
-        return K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+        return K * math.exp(-r * T) * norm.cdf(-d2) - S * math.exp(-q * T) * norm.cdf(-d1)
 
 
-def black_scholes_vega(S: float, K: float, T: float, r: float, sigma: float) -> float:
+def black_scholes_vega(
+    S: float, K: float, T: float, r: float, sigma: float, q: float = 0.0
+) -> float:
     """Calculate vega (derivative of price w.r.t. sigma)."""
     if T <= 0 or sigma <= 0:
         return 0.0
 
-    d1, _ = _d1_d2(S, K, T, r, sigma)
-    return S * norm.pdf(d1) * math.sqrt(T)
+    d1, _ = _d1_d2(S, K, T, r, sigma, q)
+    return S * math.exp(-q * T) * norm.pdf(d1) * math.sqrt(T)
 
 
 def black_scholes_delta(
-    S: float, K: float, T: float, r: float, sigma: float, option_type: str
+    S: float, K: float, T: float, r: float, sigma: float, option_type: str, q: float = 0.0
 ) -> float:
     """Calculate Black-Scholes delta.
 
@@ -61,6 +66,7 @@ def black_scholes_delta(
         r: Risk-free rate
         sigma: Volatility (annualized)
         option_type: 'call' or 'put'
+        q: Continuous dividend yield (annualized)
     """
     if T <= 0 or sigma <= 0:
         if option_type == "call":
@@ -68,45 +74,55 @@ def black_scholes_delta(
         else:
             return -1.0 if S < K else 0.0
 
-    d1, _ = _d1_d2(S, K, T, r, sigma)
+    d1, _ = _d1_d2(S, K, T, r, sigma, q)
 
     if option_type == "call":
-        return norm.cdf(d1)
+        return math.exp(-q * T) * norm.cdf(d1)
     else:
-        return norm.cdf(d1) - 1.0
+        return math.exp(-q * T) * (norm.cdf(d1) - 1.0)
 
 
 def black_scholes_greeks(
-    S: float, K: float, T: float, r: float, sigma: float, option_type: str
+    S: float, K: float, T: float, r: float, sigma: float, option_type: str, q: float = 0.0
 ) -> dict:
-    """Calculate all Black-Scholes Greeks."""
+    """Calculate all Black-Scholes Greeks (q = continuous dividend yield)."""
     if T <= 0:
         return {"error": "Option has expired"}
 
     if sigma <= 0:
         return {"error": "Invalid volatility"}
 
-    d1, d2 = _d1_d2(S, K, T, r, sigma)
+    d1, d2 = _d1_d2(S, K, T, r, sigma, q)
     sqrt_T = math.sqrt(T)
 
     N_d1 = norm.cdf(d1)
     N_d2 = norm.cdf(d2)
     n_d1 = norm.pdf(d1)
+    disc_q = math.exp(-q * T)
 
     if option_type == "call":
-        delta = N_d1
-        theta = (-S * n_d1 * sigma / (2 * sqrt_T) - r * K * math.exp(-r * T) * N_d2) / 365
+        delta = disc_q * N_d1
+        theta = (
+            -S * disc_q * n_d1 * sigma / (2 * sqrt_T)
+            - r * K * math.exp(-r * T) * N_d2
+            + q * S * disc_q * N_d1
+        ) / 365
         rho = K * T * math.exp(-r * T) * N_d2 / 100
-        price = S * N_d1 - K * math.exp(-r * T) * N_d2
+        price = S * disc_q * N_d1 - K * math.exp(-r * T) * N_d2
     else:
-        delta = N_d1 - 1
+        delta = disc_q * (N_d1 - 1)
+        N_neg_d1 = norm.cdf(-d1)
         N_neg_d2 = norm.cdf(-d2)
-        theta = (-S * n_d1 * sigma / (2 * sqrt_T) + r * K * math.exp(-r * T) * N_neg_d2) / 365
+        theta = (
+            -S * disc_q * n_d1 * sigma / (2 * sqrt_T)
+            + r * K * math.exp(-r * T) * N_neg_d2
+            - q * S * disc_q * N_neg_d1
+        ) / 365
         rho = -K * T * math.exp(-r * T) * N_neg_d2 / 100
-        price = K * math.exp(-r * T) * N_neg_d2 - S * (1 - N_d1)
+        price = K * math.exp(-r * T) * N_neg_d2 - S * disc_q * N_neg_d1
 
-    gamma = n_d1 / (S * sigma * sqrt_T)
-    vega = S * n_d1 * sqrt_T / 100
+    gamma = disc_q * n_d1 / (S * sigma * sqrt_T)
+    vega = S * disc_q * n_d1 * sqrt_T / 100
 
     return {
         "price": round(price, 4),
@@ -125,10 +141,15 @@ def implied_volatility(
     T: float,
     r: float,
     option_type: str,
+    q: float = 0.0,
     max_iterations: int = 100,
     tolerance: float = 1e-6,
 ) -> float | None:
-    """Calculate implied volatility using Newton-Raphson with bisection fallback."""
+    """Calculate implied volatility using Newton-Raphson with bisection fallback.
+
+    q is the continuous dividend yield; ignoring it biases recovered IV
+    (downward for calls on dividend payers).
+    """
     if market_price <= 0 or T <= 0:
         return None
 
@@ -136,11 +157,11 @@ def implied_volatility(
     sigma = 0.3
 
     for _ in range(max_iterations):
-        price = black_scholes_price(S, K, T, r, sigma, option_type)
-        vega = black_scholes_vega(S, K, T, r, sigma)
+        price = black_scholes_price(S, K, T, r, sigma, option_type, q)
+        vega = black_scholes_vega(S, K, T, r, sigma, q)
 
         if vega < 1e-10:
-            return _implied_volatility_bisection(market_price, S, K, T, r, option_type)
+            return _implied_volatility_bisection(market_price, S, K, T, r, option_type, q)
 
         diff = price - market_price
         if abs(diff) < tolerance:
@@ -153,7 +174,7 @@ def implied_volatility(
         elif sigma > 5.0:
             sigma = 5.0
 
-    return _implied_volatility_bisection(market_price, S, K, T, r, option_type)
+    return _implied_volatility_bisection(market_price, S, K, T, r, option_type, q)
 
 
 def _implied_volatility_bisection(
@@ -163,6 +184,7 @@ def _implied_volatility_bisection(
     T: float,
     r: float,
     option_type: str,
+    q: float = 0.0,
     max_iterations: int = 100,
     tolerance: float = 1e-6,
 ) -> float | None:
@@ -171,7 +193,7 @@ def _implied_volatility_bisection(
 
     for _ in range(max_iterations):
         mid = (low + high) / 2
-        price = black_scholes_price(S, K, T, r, mid, option_type)
+        price = black_scholes_price(S, K, T, r, mid, option_type, q)
 
         if abs(price - market_price) < tolerance:
             return mid

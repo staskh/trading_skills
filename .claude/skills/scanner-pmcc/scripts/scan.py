@@ -46,7 +46,7 @@ def main():
     output["criteria"] = {
         "leaps_min_days": args.min_leaps_days,
         "leaps_target_delta": args.leaps_delta,
-        "short_days_range": "7-21",
+        "short_days_range": "7-21 (falls back to 5-30); actual per result in short_window",
         "short_target_delta": args.short_delta,
         "short_strike": "above LEAPS strike",
     }
