@@ -13,6 +13,7 @@ from trading_skills.scanner_pmcc import (
     compute_atm_iv,
     compute_base_score,
     compute_earnings_score,
+    compute_short_premium_score,
     compute_strike_density_score,
     compute_trend_score,
     compute_weekly_options_score,
@@ -76,8 +77,9 @@ class TestAnalyzePMCC:
     def test_score_range(self):
         result = analyze_pmcc("AAPL")
         if "pmcc_score" in result:
-            # Base 0-11, trend -2..+2, earnings -2..+1, weekly -1..0, strike -2..0
-            assert -7 <= result["pmcc_score"] <= 14
+            # Base 0-11, trend -2..+2, earnings -2..+1, weekly -1..0,
+            # strike -2..0, short_premium -1..0
+            assert -8 <= result["pmcc_score"] <= 14
 
     def test_has_score_breakdown(self):
         result = analyze_pmcc("AAPL")
@@ -1021,6 +1023,36 @@ class TestHasWeeklyOptions:
         assert "pmcc_score" in result, result.get("error")
         assert result["has_weeklies"] is True
         assert result["score_breakdown"]["weekly_options_delta"] == 0.0
+
+
+class TestShortPremiumScore:
+    """Short-premium penalty: too little credit isn't worth selling."""
+
+    def test_under_ten_cents_penalized_one(self):
+        delta, bd = compute_short_premium_score(0.05)
+        assert delta == -1.0
+        assert bd["short_premium_delta"] == -1.0
+        assert "short_premium" in bd
+
+    def test_under_fifty_cents_penalized_half(self):
+        delta, bd = compute_short_premium_score(0.30)
+        assert delta == -0.5
+        assert bd["short_premium_delta"] == -0.5
+
+    def test_at_fifty_cents_no_penalty(self):
+        delta, _ = compute_short_premium_score(0.50)
+        assert delta == 0.0
+
+    def test_ten_cents_boundary_is_half_penalty(self):
+        # 0.10 is not < 0.10 but is < 0.50
+        delta, _ = compute_short_premium_score(0.10)
+        assert delta == -0.5
+
+    def test_integration_breakdown_present(self, monkeypatch):
+        monkeypatch.setattr(spm, "get_next_earnings_date", lambda s: None)
+        result = analyze_pmcc("TEST", ticker=_mock_ticker([14, 300]))
+        assert "pmcc_score" in result, result.get("error")
+        assert "short_premium_delta" in result["score_breakdown"]
 
 
 class TestStrikeDensityScore:

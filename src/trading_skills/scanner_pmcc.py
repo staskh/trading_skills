@@ -237,6 +237,7 @@ def format_scan_markdown(output: dict) -> str:
             "yield",
             "weekly_options",
             "strike_density",
+            "short_premium",
         ]:
             delta_key = f"{key}_delta"
             val = bd.get(delta_key, 0)
@@ -547,6 +548,22 @@ def compute_strike_density_score(num_strikes: int) -> tuple[float, dict]:
         d = 0.0
     note = f"{d:+.1f} ({num_strikes} strikes between spot and short)"
     return d, {"strike_density": note, "strike_density_delta": d}
+
+
+def compute_short_premium_score(short_mid: float) -> tuple[float, dict]:
+    """Score the short-call credit. Penalty-only.
+
+    Too little premium isn't worth the assignment/transaction risk of selling.
+    Under $0.10 -> -1.0; under $0.50 -> -0.5; otherwise 0.0.
+    """
+    if short_mid < 0.10:
+        d = -1.0
+    elif short_mid < 0.50:
+        d = -0.5
+    else:
+        d = 0.0
+    note = f"{d:+.1f} (short premium ${short_mid:.2f})"
+    return d, {"short_premium": note, "short_premium_delta": d}
 
 
 def compute_base_score(
@@ -872,7 +889,12 @@ def analyze_pmcc(
         )
         strike_delta, strike_breakdown = compute_strike_density_score(num_strikes_to_short)
 
-        score = base_score + trend_delta + earnings_delta + weekly_delta + strike_delta
+        # Short-premium adequacy (penalty-only)
+        premium_delta, premium_breakdown = compute_short_premium_score(short_mid)
+
+        score = (
+            base_score + trend_delta + earnings_delta + weekly_delta + strike_delta + premium_delta
+        )
 
         score_breakdown = {
             **base_breakdown,
@@ -882,6 +904,7 @@ def analyze_pmcc(
             "earnings": earnings_breakdown,
             **weekly_breakdown,
             **strike_breakdown,
+            **premium_breakdown,
         }
 
         leaps_iv = leaps_option.get("calculated_iv", avg_iv)

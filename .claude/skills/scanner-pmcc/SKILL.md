@@ -29,7 +29,7 @@ uv run python scripts/scan.py SYMBOLS [options]
 - `--output` - Save results to JSON file (use this; Claude generates the report from the JSON)
 - `--report` - Save auto-generated markdown to file (programmatic fallback only — prefer Claude-generated reports)
 
-## Scoring System (max possible: 14, range: -7 to 14)
+## Scoring System (max possible: 14, range: -8 to 14)
 
 | Category | Condition | Points |
 |----------|-----------|--------|
@@ -59,10 +59,12 @@ uv run python scripts/scan.py SYMBOLS [options]
 | **Weekly Options** | No weekly options listed | -1 |
 | **Strike Density** | < 3 strikes spot→short | -2 |
 | | < 5 strikes spot→short | -1 |
+| **Short Premium** | Short mid < $0.10 | -1 |
+| | Short mid < $0.50 | -0.5 |
 
-Weekly-options and strike-density are penalty-only (0 at best), so `max_possible_score`
-stays **14** while the theoretical minimum is **-7** (base 0, trend -2, earnings -2,
-weekly -1, strike -2).
+Weekly-options, strike-density, and short-premium are penalty-only (0 at best), so
+`max_possible_score` stays **14** while the theoretical minimum is **-8** (base 0,
+trend -2, earnings -2, weekly -1, strike -2, short premium -1).
 
 ## Output
 
@@ -84,6 +86,7 @@ Returns JSON with:
     - Earnings: `earnings_delta`, `earnings`
     - Weekly options: `weekly_options_delta`, `weekly_options`
     - Strike density: `strike_density_delta`, `strike_density`
+    - Short premium: `short_premium_delta`, `short_premium`
     - All `_delta` values sum to `pmcc_score`
 - `errors` - Symbols that failed (no options, insufficient data)
 

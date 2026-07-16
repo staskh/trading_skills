@@ -111,6 +111,7 @@ Highlight these risk factors explicitly when present:
 - **Bearish trend**: note momentum is against the position
 - **No weekly options** (`weekly_options_delta` = −1): warn that roll/adjustment cadence is limited to monthly expiries
 - **Thin strike density** (`strike_density_delta` < 0): warn that few strikes between spot and short limit strike selection and rolls
+- **Thin short premium** (`short_premium_delta` < 0): warn the credit collected is too small to justify the assignment/transaction risk
 
 #### 2h. Verdict
 
