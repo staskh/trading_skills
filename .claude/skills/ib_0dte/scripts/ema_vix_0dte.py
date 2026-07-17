@@ -241,21 +241,36 @@ def _detect_signal(bars: list[dict]) -> tuple[str | None, str, str | None]:
 async def run(args: argparse.Namespace) -> dict:
     symbol = args.symbol.upper()
 
-    # ── 1. Fetch bars + live VIX from IB (single connection) ─────────────
-    bars, vix_val, vix_source = await _fetch_bars(symbol, port=args.port, client_id=args.client_id)
+    # ── 1. Fetch bars + live intraday VIX from IB (single connection) ─────
+    bars, vix_intraday, vix_source = await _fetch_bars(
+        symbol, port=args.port, client_id=args.client_id
+    )
 
-    # ── 2. VIX regime filter ──────────────────────────────────────────────
-    if vix_val >= args.vix_threshold:
+    # ── 2. Dual VIX gate ──────────────────────────────────────────────────
+    # Both intraday VIX (current market state) AND prior-day close (regime
+    # continuity) must be below the threshold. A market recovering from a
+    # high-VIX close is still fragile — the prior-day gate blocks those days.
+    vix_prior = _vix_fallback()
+    vix_val = max(vix_intraday, vix_prior)
+    skip_vix = vix_intraday >= args.vix_threshold or vix_prior >= args.vix_threshold
+    if skip_vix:
+        blocker = (
+            f"intraday VIX {vix_intraday:.1f}"
+            if vix_intraday >= args.vix_threshold
+            else f"prior-day VIX {vix_prior:.1f}"
+        )
         return {
             "success": False,
             "symbol": symbol,
             "strategy": "ema_vix",
+            "vix_intraday": round(vix_intraday, 2),
+            "vix_prior": round(vix_prior, 2),
             "vix": round(vix_val, 2),
             "vix_source": vix_source,
             "vix_threshold": args.vix_threshold,
             "signal": "VIX-SKIP",
             "spread_type": None,
-            "reason": f"VIX {vix_val:.1f} >= {args.vix_threshold} — no trade today",
+            "reason": f"{blocker} >= {args.vix_threshold} — no trade today",
             "generated_at": generated_at_str(),
             "data_delay": "real-time",
         }
@@ -268,6 +283,8 @@ async def run(args: argparse.Namespace) -> dict:
             "success": False,
             "symbol": symbol,
             "strategy": "ema_vix",
+            "vix_intraday": round(vix_intraday, 2),
+            "vix_prior": round(vix_prior, 2),
             "vix": round(vix_val, 2),
             "vix_source": vix_source,
             "signal": signal_name,
@@ -312,6 +329,8 @@ async def run(args: argparse.Namespace) -> dict:
     # Annotate with strategy metadata
     result["strategy"] = "ema_vix"
     result["signal"] = signal_name
+    result["vix_intraday"] = round(vix_intraday, 2)
+    result["vix_prior"] = round(vix_prior, 2)
     result["vix"] = round(vix_val, 2)
     result["vix_source"] = vix_source
     result["vix_threshold"] = args.vix_threshold
