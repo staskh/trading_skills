@@ -85,8 +85,8 @@ def _ema_series(closes: list[float], period: int) -> list[float | None]:
     return result
 
 
-def _vix_value() -> float:
-    """Return most-recent available VIX close from yfinance (prior-day close at open)."""
+def _vix_fallback() -> float:
+    """Prior-day VIX close from yfinance — used only when IB VIX fetch fails."""
     try:
         raw = yf.download("^VIX", period="5d", interval="1d", auto_adjust=True, progress=False)
         if hasattr(raw.columns, "get_level_values"):
@@ -99,11 +99,13 @@ def _vix_value() -> float:
         return 18.0
 
 
-async def _fetch_bars(symbol: str, port: int, client_id: int = 61) -> list[dict]:
-    """Fetch 10 trading days of 30-min RTH bars for symbol."""
+async def _fetch_bars(symbol: str, port: int, client_id: int = 61) -> tuple[list[dict], float]:
+    """Fetch 30-min RTH bars for symbol + live intraday VIX, in a single IB connection."""
     ib = IB()
     try:
         await ib.connectAsync("127.0.0.1", port, clientId=client_id, readonly=True)
+
+        # ── Symbol bars (10 trading days, 30-min RTH) ─────────────────────
         if symbol.upper() in INDEX_MAP:
             exch, ccy = INDEX_MAP[symbol.upper()]
             contract = Index(symbol.upper(), exch, ccy)
@@ -123,15 +125,32 @@ async def _fetch_bars(symbol: str, port: int, client_id: int = 61) -> list[dict]
         result = []
         for b in bars:
             dt_utc = b.date.astimezone(UTC) if hasattr(b.date, "astimezone") else b.date
-            result.append(
-                {
-                    "dt": dt_utc,
-                    "open": b.open,
-                    "close": b.close,
-                }
-            )
+            result.append({"dt": dt_utc, "open": b.open, "close": b.close})
         result.sort(key=lambda x: x["dt"])
-        return result
+
+        # ── Live VIX: last 30 min of 1-min bars from IB ───────────────────
+        vix_val = _vix_fallback()
+        vix_source = "yfinance-fallback"
+        try:
+            vix_contract = Index("VIX", "CBOE", "USD")
+            await ib.qualifyContractsAsync(vix_contract)
+            vix_bars = await ib.reqHistoricalDataAsync(
+                vix_contract,
+                endDateTime="",
+                durationStr="1800 S",
+                barSizeSetting="1 min",
+                whatToShow="TRADES",
+                useRTH=False,
+                formatDate=2,
+                keepUpToDate=False,
+            )
+            if vix_bars:
+                vix_val = float(vix_bars[-1].close)
+                vix_source = "ib-live"
+        except Exception:
+            pass  # yfinance fallback already set
+
+        return result, vix_val, vix_source
     finally:
         ib.disconnect()
 
@@ -222,14 +241,17 @@ def _detect_signal(bars: list[dict]) -> tuple[str | None, str, str | None]:
 async def run(args: argparse.Namespace) -> dict:
     symbol = args.symbol.upper()
 
-    # ── 1. VIX regime filter ──────────────────────────────────────────────
-    vix_val = _vix_value()
+    # ── 1. Fetch bars + live VIX from IB (single connection) ─────────────
+    bars, vix_val, vix_source = await _fetch_bars(symbol, port=args.port, client_id=args.client_id)
+
+    # ── 2. VIX regime filter ──────────────────────────────────────────────
     if vix_val >= args.vix_threshold:
-        result = {
+        return {
             "success": False,
             "symbol": symbol,
             "strategy": "ema_vix",
             "vix": round(vix_val, 2),
+            "vix_source": vix_source,
             "vix_threshold": args.vix_threshold,
             "signal": "VIX-SKIP",
             "spread_type": None,
@@ -237,27 +259,25 @@ async def run(args: argparse.Namespace) -> dict:
             "generated_at": generated_at_str(),
             "data_delay": "real-time",
         }
-        return result
 
-    # ── 2. Fetch bars and detect EMA signal ───────────────────────────────
-    bars = await _fetch_bars(symbol, port=args.port, client_id=args.client_id)
+    # ── 3. Detect EMA signal ──────────────────────────────────────────────
     spread_type, signal_name, skip_reason = _detect_signal(bars)
 
     if spread_type is None:
-        result = {
+        return {
             "success": False,
             "symbol": symbol,
             "strategy": "ema_vix",
             "vix": round(vix_val, 2),
+            "vix_source": vix_source,
             "signal": signal_name,
             "spread_type": None,
             "reason": skip_reason,
             "generated_at": generated_at_str(),
             "data_delay": "real-time",
         }
-        return result
 
-    # ── 3. Delegate to find_0dte_spreads ──────────────────────────────────
+    # ── 4. Delegate to find_0dte_spreads ──────────────────────────────────
     target_delta = args.target_delta if args.target_delta is not None else 0.12
     result = await find_0dte_spreads(
         symbol,
@@ -293,6 +313,7 @@ async def run(args: argparse.Namespace) -> dict:
     result["strategy"] = "ema_vix"
     result["signal"] = signal_name
     result["vix"] = round(vix_val, 2)
+    result["vix_source"] = vix_source
     result["vix_threshold"] = args.vix_threshold
     return result
 
