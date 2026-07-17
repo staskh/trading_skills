@@ -1,18 +1,21 @@
 ---
 name: ib_0dte
-description: Find and place the best 0DTE (zero-days-to-expiration) credit spreads from Interactive Brokers for index or stock options. Builds bear call spreads (default), bull put spreads, or iron condors, ranked by probability-weighted expected value within a capital-at-risk budget, then optionally executes the chosen spread as a native combo order. Supports cash-settled indices (SPX, NDX, RUT, VIX) and any optionable stock/ETF. Use when the user asks about 0DTE trades, same-day expiration spreads, or best credit spreads for today. Requires TWS or IB Gateway running locally.
+description: Find and place the best 0DTE (zero-days-to-expiration) credit spreads from Interactive Brokers. Default execution route is the EMA9/EMA21 + VIX<20 regime strategy (ema_vix_0dte.py), which auto-selects bull_put or bear_call based on today's 30-min bar signals and skips the trade when VIX >= 20. Supports cash-settled indices (SPX, NDX, RUT, VIX) and any optionable stock/ETF. Manual spread type override is available via zero_dte.py. Requires TWS or IB Gateway running locally.
 dependencies: ["trading-skills"]
 ---
 
 # IB 0DTE Credit Spread Finder & Executor
 
-Find the best zero-days-to-expiration credit spreads for an underlying, sized to a
-budget and ranked by probability-weighted expected value — then optionally place the
-chosen spread as a live order. All data comes from IBKR.
+**Default execution route: `ema_vix_0dte.py`** — the EMA9/EMA21 + VIX<20 regime
+strategy. It reads today's 30-min IB bars, checks VIX, and auto-selects `bull_put`
+or `bear_call` (or skips entirely) before delegating to the spread finder. Use this
+unless the user explicitly requests a manual spread type.
 
-The workflow is three stages: **find** the best spreads → **propose** the top pick
-as an orderable spec (dry run, the default) → **execute** it as a native combo order
-only when `--execute` is passed.
+`zero_dte.py` is the manual override when the user specifies `--type bear_call`,
+`--type bull_put`, or `--type iron_condor` directly.
+
+Both scripts share the same spread-finding engine (find → propose → execute on
+`--execute`) and all the same flags. All data comes from IBKR.
 
 Supports cash-settled indices (**SPX, NDX, RUT, VIX, XSP, DJX**) — which trade as
 `Index` contracts on their home exchange — as well as any optionable stock or ETF.
@@ -27,6 +30,38 @@ Index options require the appropriate **index-options market-data entitlement**
 (separate from equity/ETF data). Without it, index quotes will not populate.
 
 ## Instructions
+
+### EMA + VIX Strategy (recommended — fully automatic signal)
+
+Run at **10:30 ET (14:30 UTC)**. The script checks VIX, reads today's 30-min bars,
+determines bull_put vs bear_call from the EMA9/EMA21 cross + R→R confirmation,
+then calls the spread finder automatically:
+
+```bash
+# Dry run (propose only, no order placed)
+uv run python scripts/ema_vix_0dte.py NDX --budget 50000 --port 7496
+
+# Live execution
+uv run python scripts/ema_vix_0dte.py NDX --budget 50000 --port 7496 \
+    --account U790497 --execute
+
+# SPX variant
+uv run python scripts/ema_vix_0dte.py SPX --budget 50000 --port 7496 \
+    --account U790497 --execute
+```
+
+Signal logic (exits early with `success: false` and a reason if any check fails):
+1. **VIX ≥ 20** → no trade (`signal: "VIX-SKIP"`)
+2. **EMA9 last crossed above EMA21** → `bull_put`
+3. **EMA9 last crossed below EMA21 + both 9:30 and 10:00 ET bars are red** → `bear_call`
+4. **EMA down but R→R not confirmed** → no trade (`signal: "EMA-Dn-no-RR"`)
+
+Additional flags:
+- `--vix-threshold 20` — change the VIX cutoff (default: 20)
+- `--target-delta 0.12` — short-leg delta target (default: 0.12, ≈1.5% OTM at VIX<20)
+- All other `zero_dte.py` flags (`--max-width`, `--gex`, `--stop-mult`, etc.) pass through
+
+### Manual spread finder (explicit type)
 
 Optionally confirm a same-day (0DTE) expiry exists first:
 ```bash
