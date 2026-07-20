@@ -461,7 +461,8 @@ def build_verticals(
             # `close` (no live bid/ask), we fall back to the mid on both sides so the
             # candidate still ranks; downstream _maybe_execute treats mid as the limit.
             quotes = (short.get("bid"), short.get("ask"), long_leg.get("bid"), long_leg.get("ask"))
-            if all(q is not None for q in quotes):
+            has_live_quotes = all(q is not None for q in quotes)
+            if has_live_quotes:
                 combo_ask_credit = short["bid"] - long_leg["ask"]  # market-taker BUY
                 combo_bid_credit = short["ask"] - long_leg["bid"]  # resting BUY bid
             else:
@@ -533,6 +534,7 @@ def build_verticals(
                     "ev_total": round(ev_pc * contracts, 2),
                     "breakeven": round(breakeven, 2),
                     "risk_reward": round(max_profit_pc / max_loss_pc, 3),
+                    "has_live_quotes": has_live_quotes,
                 }
             )
 
@@ -652,8 +654,27 @@ def build_iron_condors(
 
 
 def rank_candidates(candidates: list[dict], top: int) -> list[dict]:
-    """Rank by total POP-weighted expected value, breaking ties toward higher POP."""
-    ranked = sorted(candidates, key=lambda c: (c["ev_total"], c["pop"]), reverse=True)
+    """Rank candidates by executability first, then EV and POP.
+
+    Priority order (highest wins):
+    1. Live quotes (no stale last-price legs) — stale EV is fabricated
+    2. Marketable at market (combo_ask_credit >= 0) — fillable without working a limit
+    3. ev_total — expected P&L scaled by contracts
+    4. pop — tiebreaker toward higher probability
+
+    This prevents narrow spreads with negative combo_ask_credit (unfillable at market)
+    from crowding out wider, lower-EV spreads that actually fill.
+    """
+    ranked = sorted(
+        candidates,
+        key=lambda c: (
+            c.get("has_live_quotes", False),
+            c.get("combo_ask_credit", -999) >= 0,
+            c["ev_total"],
+            c["pop"],
+        ),
+        reverse=True,
+    )
     return ranked[:top]
 
 
@@ -674,11 +695,20 @@ def _select_chain(chains: list, target_expiry: str):
 
 
 async def _underlying_price(ib: IB, contract) -> float | None:
-    [ticker] = await ib.reqTickersAsync(contract)
-    await asyncio.sleep(0.5)
+    # Snapshot (reqTickersAsync) often misses the LAST tick for Index contracts because
+    # IB only streams tick type 4 on non-snapshot subscriptions. Use streaming + cancel.
+    ticker = ib.reqMktData(contract, snapshot=False)
+    await asyncio.sleep(2.0)
+    ib.cancelMktData(contract)
+
     price = ticker.marketPrice()
     if price is None or math.isnan(price):
-        price = ticker.close if ticker.close and not math.isnan(ticker.close) else None
+        for val in (ticker.last, ticker.close):
+            if val is not None and not math.isnan(val) and val > 0:
+                price = val
+                break
+        else:
+            price = None
     return price
 
 
@@ -713,6 +743,7 @@ def _resolve_quote(bid, ask, last, close, g_delta, g_iv, spot, strike, right, T,
 
 
 _OI_BATCH = 20  # concurrent streaming market-data lines to hold at once
+_QUOTE_BATCH = 40  # streaming lines per batch for option bid/ask + greeks
 
 
 async def _fetch_open_interest(ib: IB, qualified: list) -> dict[int, int]:
@@ -780,14 +811,20 @@ async def _fetch_side(
         qualified = [c for c in qualified if c is not None and c.conId]
         if not qualified:
             return []
-        try:
-            tickers = await asyncio.wait_for(ib.reqTickersAsync(*qualified), timeout=30)
-        except asyncio.TimeoutError:
-            return []
     finally:
         ib_logger.setLevel(prev_level)
 
-    await asyncio.sleep(1)  # let streamed greeks/quotes arrive
+    # reqTickersAsync (snapshot) closes the stream before bid/ask + model-greeks arrive
+    # for slower strikes (NDX 0DTE, far-OTM). Stream in batches and cancel after reading
+    # so every tick type has time to land — same pattern as _fetch_open_interest.
+    tickers = []
+    for i in range(0, len(qualified), _QUOTE_BATCH):
+        batch = qualified[i : i + _QUOTE_BATCH]
+        batch_tickers = [ib.reqMktData(c, snapshot=False) for c in batch]
+        await asyncio.sleep(3)
+        tickers.extend(batch_tickers)
+        for c in batch:
+            ib.cancelMktData(c)
 
     oi_by_conid = await _fetch_open_interest(ib, qualified) if want_oi else {}
 
