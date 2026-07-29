@@ -50,6 +50,7 @@ class TestMCPServerImport:
             "ib_delta_exposure",
             "ib_collar",
             "ib_trailing_stop",
+            "ib_0dte_ema_vix",
             "get_version",
         ]
         for tool_name in expected_tools:
@@ -229,6 +230,34 @@ class TestIBTools:
 
         result = asyncio.run(ib_collar("AAPL", port=7497))
         assert "error" in result
+
+    def test_ib_0dte_ema_vix_handles_no_connection(self):
+        """ib_0dte_ema_vix returns a graceful failure when IB not connected."""
+        import asyncio
+
+        from mcp_server.server import ib_0dte_ema_vix
+
+        result = asyncio.run(ib_0dte_ema_vix("NDX", port=7497))
+        # No TWS on the test port → strategy fails to fetch bars; must not raise.
+        assert result.get("success") is False or "error" in result
+
+    def test_ib_0dte_ema_vix_uses_vxn_for_ndx(self):
+        """NDX/QQQ gate on VXN; other symbols on VIX (unit check, no IB needed)."""
+        from trading_skills.broker.ema_vix import _vol_index_for
+
+        assert _vol_index_for("NDX") == ("VXN", "^VXN")
+        assert _vol_index_for("QQQ") == ("VXN", "^VXN")
+        assert _vol_index_for("SPX") == ("VIX", "^VIX")
+        assert _vol_index_for("AAPL") == ("VIX", "^VIX")
+
+    def test_ib_0dte_ema_vix_per_index_default_threshold(self):
+        """Default vol cutoff is per-index: VXN 35, VIX 20."""
+        from trading_skills.broker.ema_vix import DEFAULT_THRESHOLD, _vol_index_for
+
+        assert DEFAULT_THRESHOLD[_vol_index_for("NDX")[0]] == 35.0
+        assert DEFAULT_THRESHOLD[_vol_index_for("QQQ")[0]] == 35.0
+        assert DEFAULT_THRESHOLD[_vol_index_for("SPX")[0]] == 20.0
+        assert DEFAULT_THRESHOLD[_vol_index_for("SPY")[0]] == 20.0
 
     def test_ib_trades_history_forwards_flex_query_id_list(self):
         """A list of flex_query_ids must be forwarded unchanged so MCP clients
