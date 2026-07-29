@@ -10,28 +10,46 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.12"]
+        python-version: ["3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+        with:
+          cache-dependency-glob: uv.lock
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
+      # --python is required on every uv invocation: .python-version pins 3.13,
+      # and uv falls back to it otherwise, which would ignore the matrix.
+      # --locked fails if uv.lock is stale rather than silently re-resolving.
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --dev --locked --python ${{ matrix.python-version }}
+
+      - name: Verify interpreter matches matrix
+        run: |
+          uv run --python ${{ matrix.python-version }} python -c "
+          import sys
+          want = '${{ matrix.python-version }}'
+          got = f'{sys.version_info.major}.{sys.version_info.minor}'
+          assert got == want, f'expected Python {want}, got {got}'
+          print(f'Python {got} confirmed')
+          "
 
       - name: Lint
-        run: uv run ruff check src/ tests/
+        run: |
+          uv run --python ${{ matrix.python-version }} ruff check src/ tests/ mcp_server/
+          uv run --python ${{ matrix.python-version }} ruff format --check src/ tests/ mcp_server/
 
       - name: Run tests
         env:
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
         run: |
-          uv run pytest tests/ -v --tb=short \
+          uv run --python ${{ matrix.python-version }} pytest tests/ -v --tb=short \
             --cov=trading_skills --cov-report=term-missing \
             --cov-fail-under=65
