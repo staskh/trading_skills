@@ -47,13 +47,17 @@ select = ["E", "F", "I", "W"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = ["manual: requires live broker connection (deselected by default)"]
-addopts = "-m 'not manual'"
+# Many tests query live market-data APIs, which intermittently rate-limit or
+# time out. Retrying absorbs those transients; a deterministic failure still
+# fails every attempt.
+addopts = "-m 'not manual' --reruns 2 --reruns-delay 2"
 
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=0.24",
     "pytest-cov>=7.0.0",
+    "pytest-rerunfailures>=15.0",
     "python-dotenv>=1.0",
     "ruff>=0.8",
     "nbconvert>=7.17.0",
