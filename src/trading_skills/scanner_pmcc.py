@@ -26,6 +26,34 @@ def _to_int(val, default=0) -> int:
     return int(val)
 
 
+def _dividend_yield(info: dict, price: float) -> float:
+    """Return the continuous dividend yield as a fraction from yfinance info.
+
+    yfinance is inconsistent: dividendRate is annual $/share, trailingAnnualDividendYield
+    is a fraction, and dividendYield is a percent. Derive from rate/price when possible,
+    then fall back through the other fields.
+    """
+    rate = info.get("dividendRate")
+    if rate and price and price > 0:
+        return rate / price
+    trailing = info.get("trailingAnnualDividendYield")
+    if trailing:
+        return trailing
+    pct = info.get("dividendYield")
+    if pct:
+        return pct / 100 if pct > 1 else pct
+    return 0.0
+
+
+def _first_sentence(text: str | None) -> str | None:
+    """Return the first sentence of a company description, or None."""
+    if not text:
+        return None
+    text = text.strip()
+    idx = text.find(". ")
+    return text[: idx + 1] if idx != -1 else text
+
+
 def format_scan_results(results: list[dict]) -> dict:
     """Sort and wrap PMCC scan results into output dict.
 
@@ -110,22 +138,27 @@ def format_scan_markdown(output: dict) -> str:
     lines += [
         "## Summary",
         "",
-        "| Symbol | Price | IV% | Capital | Ann. Yield | Trend | Earnings | PMCC Score |",
-        "|--------|------:|----:|--------:|-----------:|-------|----------|:----------:|",
+        "| Symbol | Industry | Price | IV% | Capital | Ann. Yield | Trend "
+        "| Earnings | Weeklies | PMCC Score |",
+        "|--------|----------|------:|----:|--------:|-----------:|-------"
+        "|----------|:--------:|:----------:|",
     ]
     for r in results:
         sym = r["symbol"]
+        industry = r.get("industry") or "N/A"
         price = r.get("price", 0)
         iv_pct = r.get("iv_pct", 0)
         capital = r.get("metrics", {}).get("capital_required", 0)
         ann_yield = r.get("metrics", {}).get("annual_yield_est_pct", 0)
         trend = _trend_label(r.get("score_breakdown", {}))
         earnings = _earnings_label(r.get("earnings_date"))
+        hw = r.get("has_weeklies")
+        weeklies = "Yes" if hw is True else ("No" if hw is False else "N/A")
         score = r.get("pmcc_score", 0)
         max_score = r.get("max_possible_score", 14)
         lines.append(
-            f"| {sym} | ${price:.2f} | {iv_pct:.1f}% | ${capital:,.0f} "
-            f"| {ann_yield:.1f}% | {trend} | {earnings} | {score}/{max_score} |"
+            f"| {sym} | {industry} | ${price:.2f} | {iv_pct:.1f}% | ${capital:,.0f} "
+            f"| {ann_yield:.1f}% | {trend} | {earnings} | {weeklies} | {score}/{max_score} |"
         )
 
     lines += [""]
@@ -144,6 +177,10 @@ def format_scan_markdown(output: dict) -> str:
         bd = r.get("score_breakdown", {})
 
         lines += [f"### {sym} — Score {score}/{max_score}", ""]
+
+        description = r.get("description")
+        if description:
+            lines += [f"*{description}*", ""]
 
         # LEAPS details
         leaps_iv_pct = leaps.get("iv", 0) * 100
@@ -195,6 +232,16 @@ def format_scan_markdown(output: dict) -> str:
             "",
         ]
 
+        # Indicators — every trend indicator the scorer consumed
+        trend_indicators = bd.get("trend", {})
+        if isinstance(trend_indicators, dict) and trend_indicators:
+            indicator_labels = {"sma50": "SMA50", "rsi": "RSI", "macd": "MACD"}
+            lines += ["**Indicators**", ""]
+            for indicator, explanation in trend_indicators.items():
+                label = indicator_labels.get(indicator, indicator)
+                lines.append(f"- {label}: {explanation}")
+            lines += [""]
+
         # Score breakdown strengths/weaknesses
         strengths = []
         weaknesses = []
@@ -207,6 +254,9 @@ def format_scan_markdown(output: dict) -> str:
             "short_spread",
             "iv",
             "yield",
+            "weekly_options",
+            "strike_density",
+            "short_premium",
         ]:
             delta_key = f"{key}_delta"
             val = bd.get(delta_key, 0)
@@ -264,7 +314,15 @@ def format_scan_markdown(output: dict) -> str:
 
 
 def find_strike_by_delta(
-    chain, current_price, target_delta, expiry_days, iv, r=0.05, min_strike=None, max_strike=None
+    chain,
+    current_price,
+    target_delta,
+    expiry_days,
+    iv,
+    r=0.05,
+    min_strike=None,
+    max_strike=None,
+    q=0.0,
 ):
     """Find strike closest to target delta with optional strike constraints.
 
@@ -305,7 +363,7 @@ def find_strike_by_delta(
             option_iv = iv  # default fallback
             if effective_mid > 0:
                 iv_from_price = implied_volatility(
-                    effective_mid, current_price, strike, T, r, "call"
+                    effective_mid, current_price, strike, T, r, "call", q
                 )
                 if iv_from_price is not None and iv_from_price >= 0.01:
                     option_iv = iv_from_price
@@ -327,12 +385,12 @@ def find_strike_by_delta(
                     T_for_iv = T + days_since_trade / 365
                     if T_for_iv > 0:
                         iv_from_last = implied_volatility(
-                            last, current_price, strike, T_for_iv, r, "call"
+                            last, current_price, strike, T_for_iv, r, "call", q
                         )
                         if iv_from_last is not None and iv_from_last >= 0.01:
                             option_iv = iv_from_last
 
-        delta = black_scholes_delta(current_price, strike, T, r, option_iv, "call")
+        delta = black_scholes_delta(current_price, strike, T, r, option_iv, "call", q)
         delta_diff = abs(delta - target_delta)
 
         if delta_diff < best_delta_diff:
@@ -347,7 +405,11 @@ def find_strike_by_delta(
 
 
 def compute_atm_iv(
-    atm_calls: pd.DataFrame, current_price: float, expiry_date: str, r: float = 0.05
+    atm_calls: pd.DataFrame,
+    current_price: float,
+    expiry_date: str,
+    r: float = 0.05,
+    q: float = 0.0,
 ) -> float:
     """Compute average ATM implied volatility from option chain data.
 
@@ -383,7 +445,7 @@ def compute_atm_iv(
             if days_to_expiry <= 0:
                 continue
             T = days_to_expiry / 365
-            iv = implied_volatility(mid, current_price, strike, T, r, "call")
+            iv = implied_volatility(mid, current_price, strike, T, r, "call", q)
         elif last_price > 0:
             last_trade = row.get("lastTradeDate")
             if last_trade is None or (hasattr(last_trade, "__bool__") and pd.isna(last_trade)):
@@ -392,7 +454,7 @@ def compute_atm_iv(
             T = (expiry_dt - trade_date).days / 365
             if T <= 0:
                 continue
-            iv = implied_volatility(last_price, current_price, strike, T, r, "call")
+            iv = implied_volatility(last_price, current_price, strike, T, r, "call", q)
         else:
             continue
 
@@ -454,7 +516,7 @@ def compute_earnings_score(earnings_date_str: str | None, short_days: int) -> tu
         return 0.0, {"earnings": "0.0 (no earnings date)"}
 
     try:
-        today = datetime.now().date()
+        today = datetime.now(_NY).date()
         earnings_date = datetime.strptime(earnings_date_str, "%Y-%m-%d").date()
         days_to_earnings = (earnings_date - today).days
 
@@ -474,6 +536,65 @@ def compute_earnings_score(earnings_date_str: str | None, short_days: int) -> tu
 
     except (ValueError, TypeError):
         return 0.0, {"earnings": "0.0 (invalid earnings date)"}
+
+
+def has_weekly_options(expirations: list[str], today) -> bool:
+    """Detect weekly options by spacing of near-term expirations.
+
+    Returns True when any two consecutive expirations within the next 60 days
+    are 10 or fewer calendar days apart (monthly-only chains sit ~30d apart).
+    """
+    near = []
+    for exp in expirations:
+        try:
+            days = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
+        except (ValueError, TypeError):
+            continue
+        if 0 <= days <= 60:
+            near.append(days)
+    near.sort()
+    return any(b - a <= 10 for a, b in zip(near, near[1:]))
+
+
+def compute_weekly_options_score(has_weeklies: bool) -> tuple[float, dict]:
+    """Score weekly-options availability. Penalty-only: 0.0 or -1.0."""
+    if has_weeklies:
+        d = 0.0
+        return d, {"weekly_options": "0.0 (weekly options available)", "weekly_options_delta": d}
+    d = -1.0
+    return d, {"weekly_options": "-1.0 (no weekly options available)", "weekly_options_delta": d}
+
+
+def compute_strike_density_score(num_strikes: int) -> tuple[float, dict]:
+    """Score strike density between spot and short strike. Penalty-only.
+
+    Counts strikes from spot up to and including the short strike.
+    Fewer than 3 -> -2.0; fewer than 5 -> -1.0; otherwise 0.0.
+    """
+    if num_strikes < 3:
+        d = -2.0
+    elif num_strikes < 5:
+        d = -1.0
+    else:
+        d = 0.0
+    note = f"{d:+.1f} ({num_strikes} strikes between spot and short)"
+    return d, {"strike_density": note, "strike_density_delta": d}
+
+
+def compute_short_premium_score(short_mid: float) -> tuple[float, dict]:
+    """Score the short-call credit. Penalty-only.
+
+    Too little premium isn't worth the assignment/transaction risk of selling.
+    Under $0.10 -> -1.0; under $0.50 -> -0.5; otherwise 0.0.
+    """
+    if short_mid < 0.10:
+        d = -1.0
+    elif short_mid < 0.50:
+        d = -0.5
+    else:
+        d = 0.0
+    note = f"{d:+.1f} (short premium ${short_mid:.2f})"
+    return d, {"short_premium": note, "short_premium_delta": d}
 
 
 def compute_base_score(
@@ -642,13 +763,13 @@ def analyze_pmcc(
         if not expirations:
             return {"symbol": symbol, "error": "No options available"}
 
-        today = datetime.now()
+        today = datetime.now(_NY).date()
 
         # Find LEAPS expiry
         leaps_expiry = None
         leaps_days = 0
         for exp in expirations:
-            exp_date = datetime.strptime(exp, "%Y-%m-%d")
+            exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
             days_to_exp = (exp_date - today).days
             if days_to_exp >= min_leaps_days:
                 leaps_expiry = exp
@@ -661,8 +782,9 @@ def analyze_pmcc(
         # Find short-term expiry
         short_expiry = None
         short_days = 0
+        short_window = f"{short_days_range[0]}-{short_days_range[1]}"
         for exp in expirations:
-            exp_date = datetime.strptime(exp, "%Y-%m-%d")
+            exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
             days_to_exp = (exp_date - today).days
             if short_days_range[0] <= days_to_exp <= short_days_range[1]:
                 short_expiry = exp
@@ -671,11 +793,12 @@ def analyze_pmcc(
 
         if not short_expiry:
             for exp in expirations:
-                exp_date = datetime.strptime(exp, "%Y-%m-%d")
+                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
                 days_to_exp = (exp_date - today).days
                 if 5 <= days_to_exp <= 30:
                     short_expiry = exp
                     short_days = days_to_exp
+                    short_window = "5-30 (fallback)"
                     break
 
         if not short_expiry:
@@ -684,12 +807,15 @@ def analyze_pmcc(
         leaps_chain = ticker.option_chain(leaps_expiry)
         short_chain = ticker.option_chain(short_expiry)
 
+        # Dividend yield — ignoring it biases recovered IV/delta on dividend payers
+        div_yield = _dividend_yield(info, current_price)
+
         # Estimate IV from ATM options, with fallback to lastPrice-based IV
         atm_calls = leaps_chain.calls[
             (leaps_chain.calls["strike"] >= current_price * 0.95)
             & (leaps_chain.calls["strike"] <= current_price * 1.05)
         ]
-        avg_iv = compute_atm_iv(atm_calls, current_price, leaps_expiry)
+        avg_iv = compute_atm_iv(atm_calls, current_price, leaps_expiry, q=div_yield)
 
         # Find LEAPS call
         leaps_strike, leaps_option = find_strike_by_delta(
@@ -699,6 +825,7 @@ def analyze_pmcc(
             leaps_days,
             avg_iv,
             max_strike=current_price * 1.02,
+            q=div_yield,
         )
 
         if leaps_option is None:
@@ -715,6 +842,7 @@ def analyze_pmcc(
             short_days,
             avg_iv,
             min_strike=leaps_strike + 0.01,
+            q=div_yield,
         )
 
         if short_option is None:
@@ -743,12 +871,18 @@ def analyze_pmcc(
         leaps_intrinsic = max(0, current_price - leaps_strike)
         leaps_extrinsic = leaps_mid - leaps_intrinsic
 
-        weekly_yield = (short_mid / leaps_mid * 100) if leaps_mid > 0 else 0
-        annual_yield_est = weekly_yield * (365 / short_days) if short_days > 0 else 0
+        period_yield = (short_mid / leaps_mid * 100) if leaps_mid > 0 else 0
+        annual_yield_est = period_yield * (365 / short_days) if short_days > 0 else 0
 
         remaining_T = (leaps_days - short_days) / 365
         leaps_value_at_short_expiry = black_scholes_price(
-            S=short_strike, K=leaps_strike, T=remaining_T, r=0.05, sigma=avg_iv, option_type="call"
+            S=short_strike,
+            K=leaps_strike,
+            T=remaining_T,
+            r=0.05,
+            sigma=avg_iv,
+            option_type="call",
+            q=div_yield,
         )
         max_profit = leaps_value_at_short_expiry + short_mid - leaps_mid
         roi_pct = (max_profit / leaps_mid * 100) if leaps_mid > 0 else 0
@@ -786,7 +920,23 @@ def analyze_pmcc(
         earnings_date_str = get_next_earnings_date(symbol)
         earnings_delta, earnings_breakdown = compute_earnings_score(earnings_date_str, short_days)
 
-        score = base_score + trend_delta + earnings_delta
+        # Weekly-options availability (penalty-only)
+        has_weeklies = has_weekly_options(expirations, today)
+        weekly_delta, weekly_breakdown = compute_weekly_options_score(has_weeklies)
+
+        # Strike density from spot up to and including the short strike (penalty-only)
+        short_strikes = short_chain.calls["strike"]
+        num_strikes_to_short = int(
+            ((short_strikes >= current_price) & (short_strikes <= short_strike)).sum()
+        )
+        strike_delta, strike_breakdown = compute_strike_density_score(num_strikes_to_short)
+
+        # Short-premium adequacy (penalty-only)
+        premium_delta, premium_breakdown = compute_short_premium_score(short_mid)
+
+        score = (
+            base_score + trend_delta + earnings_delta + weekly_delta + strike_delta + premium_delta
+        )
 
         score_breakdown = {
             **base_breakdown,
@@ -794,6 +944,9 @@ def analyze_pmcc(
             "trend": trend_breakdown,
             "earnings_delta": earnings_delta,
             "earnings": earnings_breakdown,
+            **weekly_breakdown,
+            **strike_breakdown,
+            **premium_breakdown,
         }
 
         leaps_iv = leaps_option.get("calculated_iv", avg_iv)
@@ -812,6 +965,11 @@ def analyze_pmcc(
             "pmcc_score": round(score, 1),
             "max_possible_score": 14,
             "earnings_date": earnings_date_str,
+            "industry": info.get("industry") or info.get("sector"),
+            "description": _first_sentence(info.get("longBusinessSummary")),
+            "has_weeklies": has_weeklies,
+            "short_window": short_window,
+            "dividend_yield": round(div_yield, 4),
             "leaps": {
                 "expiry": leaps_expiry,
                 "days": leaps_days,
@@ -844,7 +1002,7 @@ def analyze_pmcc(
             },
             "metrics": {
                 "net_debit": round(leaps_mid - short_mid, 2),
-                "short_yield_pct": round(weekly_yield, 2),
+                "short_yield_pct": round(period_yield, 2),
                 "annual_yield_est_pct": round(annual_yield_est, 1),
                 "max_profit": round(max_profit, 2),
                 "roi_pct": round(roi_pct, 1),

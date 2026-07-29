@@ -35,10 +35,19 @@ Single symbol returns:
 Multiple symbols returns:
 - `results` - Array of individual symbol results
 
+### Crossovers
+
+- `indicators.macd.crossover` - Most recent MACD line/signal crossover, or `null`:
+  - `direction` - `"up"` (MACD crossed above signal = bullish) or `"down"` (crossed below = bearish)
+  - `days_ago` - Trading bars since the crossover (0 = happened on the most recent bar)
+- `indicators.ema.crossover` - Most recent EMA9/EMA21 crossover (same shape; `null` if none).
+  `indicators.ema` also reports `ema9` and `ema21` alongside `ema12`/`ema26`.
+
 ## Interpretation
 
 - RSI > 70 = overbought, RSI < 30 = oversold
-- MACD crossover = momentum shift
+- MACD crossover = momentum shift; `crossover.days_ago` of 0-5 = fresh signal
+- EMA9/21 crossover confirms short-term momentum; MACD typically leads, EMA confirms
 - Price near Bollinger Band = potential reversal
 - Golden cross (SMA20 > SMA50) = bullish
 - ADX > 25 = strong trend

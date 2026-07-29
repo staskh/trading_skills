@@ -7,6 +7,7 @@ import asyncio
 import json
 import sys
 
+from trading_skills.broker.connection import default_ib_port
 from trading_skills.broker.options import get_expiries, get_option_chain
 from trading_skills.utils import generated_at_str
 
@@ -16,7 +17,9 @@ def main():
     parser.add_argument("symbol", help="Ticker symbol")
     parser.add_argument("--expiries", action="store_true", help="List expiration dates only")
     parser.add_argument("--expiry", help="Fetch chain for specific expiry (YYYYMMDD)")
-    parser.add_argument("--port", type=int, default=7497, help="IB port (7497=paper, 7496=live)")
+    parser.add_argument(
+        "--port", type=int, default=default_ib_port(7497), help="IB port (7497=paper, 7496=live)"
+    )
     parser.add_argument(
         "--sec-type",
         dest="sec_type",

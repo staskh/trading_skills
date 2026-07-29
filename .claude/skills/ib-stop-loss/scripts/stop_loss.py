@@ -7,6 +7,7 @@ import asyncio
 import json
 import sys
 
+from trading_skills.broker.connection import default_ib_port
 from trading_skills.broker.stop_loss import get_stop_loss_data
 
 
@@ -22,7 +23,9 @@ async def main():
     parser = argparse.ArgumentParser(
         description="Manage conditional stop-loss orders for PMCC, naked LEAPS, and stock positions"
     )
-    parser.add_argument("--port", type=int, default=7497, help="IB port (7496=live, 7497=paper)")
+    parser.add_argument(
+        "--port", type=int, default=default_ib_port(7497), help="IB port (7496=live, 7497=paper)"
+    )
     parser.add_argument("--account", type=str, default=None, help="Specific account ID")
     parser.add_argument(
         "--symbols",

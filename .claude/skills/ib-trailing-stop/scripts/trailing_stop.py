@@ -7,6 +7,7 @@ import asyncio
 import json
 import sys
 
+from trading_skills.broker.connection import default_ib_port
 from trading_skills.broker.trailing_stop import get_trailing_stop_data
 
 
@@ -14,7 +15,9 @@ async def main():
     parser = argparse.ArgumentParser(
         description="Manage native TRAIL orders for stocks and naked LEAPS (PMCC excluded)"
     )
-    parser.add_argument("--port", type=int, default=7497, help="IB port (7496=live, 7497=paper)")
+    parser.add_argument(
+        "--port", type=int, default=default_ib_port(7497), help="IB port (7496=live, 7497=paper)"
+    )
     parser.add_argument("--account", type=str, default=None, help="Specific account ID")
     parser.add_argument(
         "--symbols",
@@ -70,7 +73,8 @@ async def main():
     dry_run = not args.execute
     if args.forced and dry_run:
         print(
-            "Warning: dry-run will preview forced replacement, but no orders are submitted unless --execute is added.",
+            "Warning: dry-run will preview forced replacement, but no orders "
+            "are submitted unless --execute is added.",
             file=sys.stderr,
         )
 

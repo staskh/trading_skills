@@ -195,6 +195,53 @@ class TestBisectionFallback:
         assert abs(iv - sigma) < 0.01
 
 
+class TestDividendYield:
+    """Continuous dividend yield q must shift pricing, delta, and IV (Merton BS)."""
+
+    def test_call_cheaper_with_dividend(self):
+        no_div = black_scholes_price(100, 100, 1.0, 0.05, 0.2, "call")
+        with_div = black_scholes_price(100, 100, 1.0, 0.05, 0.2, "call", q=0.05)
+        assert with_div < no_div
+
+    def test_put_pricier_with_dividend(self):
+        no_div = black_scholes_price(100, 100, 1.0, 0.05, 0.2, "put")
+        with_div = black_scholes_price(100, 100, 1.0, 0.05, 0.2, "put", q=0.05)
+        assert with_div > no_div
+
+    def test_call_delta_lower_with_dividend(self):
+        no_div = black_scholes_delta(100, 100, 1.0, 0.05, 0.2, "call")
+        with_div = black_scholes_delta(100, 100, 1.0, 0.05, 0.2, "call", q=0.05)
+        assert with_div < no_div
+
+    def test_put_call_parity_with_dividend(self):
+        """C - P = S*e^(-qT) - K*e^(-rT)."""
+        S, K, T, r, sigma, q = 100, 100, 1.0, 0.05, 0.3, 0.04
+        call = black_scholes_price(S, K, T, r, sigma, "call", q=q)
+        put = black_scholes_price(S, K, T, r, sigma, "put", q=q)
+        parity = S * math.exp(-q * T) - K * math.exp(-r * T)
+        assert abs((call - put) - parity) < 1e-6
+
+    def test_iv_roundtrips_with_dividend(self):
+        sigma, q = 0.30, 0.06
+        price = black_scholes_price(100, 100, 0.5, 0.05, sigma, "call", q=q)
+        iv = implied_volatility(price, 100, 100, 0.5, 0.05, "call", q=q)
+        assert iv is not None
+        assert abs(iv - sigma) < 0.001
+
+    def test_ignoring_dividend_underestimates_iv(self):
+        """A dividend payer's call inverted with q=0 recovers a too-low IV."""
+        sigma, q = 0.30, 0.07
+        price = black_scholes_price(100, 100, 1.0, 0.05, sigma, "call", q=q)
+        iv_ignoring = implied_volatility(price, 100, 100, 1.0, 0.05, "call")  # q=0 (buggy)
+        iv_correct = implied_volatility(price, 100, 100, 1.0, 0.05, "call", q=q)
+        assert iv_ignoring < iv_correct
+        assert abs(iv_correct - sigma) < 0.001
+
+    def test_greeks_accept_dividend(self):
+        g = black_scholes_greeks(100, 100, 1.0, 0.05, 0.2, "call", q=0.05)
+        assert g["delta"] < black_scholes_greeks(100, 100, 1.0, 0.05, 0.2, "call")["delta"]
+
+
 class TestEstimateIV:
     """Tests for moneyness-based IV estimation."""
 

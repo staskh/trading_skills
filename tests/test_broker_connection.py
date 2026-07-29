@@ -8,6 +8,7 @@ import pytest
 
 from trading_skills.broker.connection import (
     CLIENT_IDS,
+    default_ib_port,
     fetch_positions,
     fetch_spot_prices,
     ib_connection,
@@ -15,6 +16,34 @@ from trading_skills.broker.connection import (
 )
 
 MODULE = "trading_skills.broker.connection"
+
+
+class TestDefaultIbPort:
+    """Tests for default_ib_port: IB_PORT env var resolution with fallback."""
+
+    def test_returns_fallback_when_env_unset(self, monkeypatch):
+        monkeypatch.delenv("IB_PORT", raising=False)
+        assert default_ib_port(7497) == 7497
+
+    def test_returns_env_value_when_set(self, monkeypatch):
+        monkeypatch.setenv("IB_PORT", "4001")
+        assert default_ib_port(7497) == 4001
+
+    def test_env_value_overrides_live_fallback(self, monkeypatch):
+        monkeypatch.setenv("IB_PORT", "4002")
+        assert default_ib_port(7496) == 4002
+
+    def test_returns_none_fallback_when_env_unset(self, monkeypatch):
+        monkeypatch.delenv("IB_PORT", raising=False)
+        assert default_ib_port(None) is None
+
+    def test_ignores_invalid_env_value(self, monkeypatch):
+        monkeypatch.setenv("IB_PORT", "not-a-port")
+        assert default_ib_port(7497) == 7497
+
+    def test_ignores_blank_env_value(self, monkeypatch):
+        monkeypatch.setenv("IB_PORT", "   ")
+        assert default_ib_port(7497) == 7497
 
 
 class TestIbConnection:

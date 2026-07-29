@@ -2,12 +2,34 @@
 # ABOUTME: Provides context manager, position fetching, normalization, and spot price helpers.
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
 from ib_async import IB, Stock
 
 from trading_skills.broker.futures import detect_future_exchange, front_future
 from trading_skills.utils import fetch_with_timeout
+
+
+def default_ib_port(fallback: int | None) -> int | None:
+    """Resolve the default IB port from the IB_PORT env var, else the fallback.
+
+    Reads IB_PORT (from the shell or a .env file). Used as the argparse default
+    for --port across all ib-* skills so the port need not be passed on every
+    call. An explicit --port flag still wins because argparse only applies this
+    default when the flag is absent. A missing, blank, or non-integer IB_PORT
+    yields the fallback.
+    """
+    load_dotenv()
+    raw = os.environ.get("IB_PORT")
+    if raw is None:
+        return fallback
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return fallback
+
 
 # Documented clientId allocation — one source of truth for all broker modules.
 CLIENT_IDS = {
