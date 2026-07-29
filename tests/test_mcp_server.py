@@ -15,6 +15,16 @@ class TestMCPServerImport:
 
         assert mcp.name == "trading-skills"
 
+    def test_server_reports_package_version(self):
+        """Server advertises the installed package version to clients."""
+        from importlib.metadata import version as pkg_version
+
+        from mcp_server.server import mcp
+
+        expected = pkg_version("trading-skills")
+        assert expected
+        assert mcp.version == expected
+
     def test_all_tools_registered(self):
         """All expected tools are registered."""
         from mcp_server.server import mcp

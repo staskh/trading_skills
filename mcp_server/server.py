@@ -14,7 +14,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 from importlib.metadata import version as pkg_version
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from trading_skills.broker.account import get_account_summary
 from trading_skills.broker.collar import find_collar_candidates
@@ -63,7 +63,7 @@ from trading_skills.spreads import (
 from trading_skills.technicals import compute_indicators
 
 # Create MCP server
-mcp = FastMCP("trading-skills")
+mcp = MCPServer("trading-skills", version=pkg_version("trading-skills"))
 
 
 # ============================================================================
