@@ -21,6 +21,10 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           cache-dependency-glob: uv.lock
+          # Both matrix legs hash the same uv.lock, so without a per-version
+          # suffix they share one cache entry and collide over wheels built for
+          # different ABIs (cp312 vs cp313).
+          cache-suffix: py${{ matrix.python-version }}
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
