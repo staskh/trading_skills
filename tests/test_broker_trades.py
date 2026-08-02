@@ -479,3 +479,111 @@ class TestFetchFromFiles:
         assert result["connected"] is False
         assert "Malformed FlexReport XML" in result["error"]
         assert str(bad) in result["error"]
+
+
+def _spread_xml() -> str:
+    """A FlexReport export holding one bull put spread, opened and closed."""
+
+    def trade(tid, strike, buy_sell, oc, price, pnl, dt):
+        return (
+            f'<Trade accountId="U1" assetCategory="OPT" symbol="NDX 260727P{strike}" '
+            f'underlyingSymbol="NDX" tradeID="{tid}" multiplier="100" strike="{strike}" '
+            f'expiry="20260727" putCall="P" dateTime="{dt}" tradeDate="20260727" '
+            f'transactionType="ExchTrade" exchange="CBOE" quantity="10" '
+            f'tradePrice="{price}" ibCommission="-1.5" fifoPnlRealized="{pnl}" '
+            f'buySell="{buy_sell}" openCloseIndicator="{oc}" />'
+        )
+
+    return (
+        "<FlexQueryResponse><FlexStatements><FlexStatement><Trades>"
+        + trade("1", "27175", "SELL", "O", "8.50", "0", "20260727;103700")
+        + trade("2", "27075", "BUY", "O", "4.60", "0", "20260727;103700")
+        + trade("3", "27175", "BUY", "C", "0.75", "7722.58", "20260727;114600")
+        + trade("4", "27075", "SELL", "C", "0.45", "-4177.42", "20260727;114600")
+        + "</Trades></FlexStatement></FlexStatements></FlexQueryResponse>"
+    )
+
+
+class TestGroupSpreads:
+    """Tests for the --group-spreads integration on get_trades."""
+
+    def test_file_source_groups_and_reconciles(self, tmp_path):
+        path = tmp_path / "trades.xml"
+        path.write_text(_spread_xml(), encoding="utf-8")
+
+        result = asyncio.run(
+            get_trades(
+                files=[str(path)],
+                symbol="NDX",
+                start_date="2026-01-01",
+                end_date="2026-12-31",
+                group_spreads=True,
+            )
+        )
+
+        assert result["spread_count"] == 1
+        assert result["leg_count"] == 4
+        spread = result["spreads"][0]
+        assert spread["type"] == "Bull put"
+        assert spread["short_strike"] == 27175
+        assert spread["width"] == 100
+        assert spread["credit"] == 3.90
+        assert spread["realizedPnL"] == 3545.16
+
+        grouping = result["spread_grouping"]
+        assert grouping["supported"] is True
+        assert grouping["reconciled"] is True
+        assert grouping["warnings"] == []
+        assert grouping["legs_accounted"] == result["leg_count"]
+
+    def test_omitting_flag_leaves_output_unchanged(self, tmp_path):
+        path = tmp_path / "trades.xml"
+        path.write_text(_spread_xml(), encoding="utf-8")
+
+        result = asyncio.run(
+            get_trades(
+                files=[str(path)],
+                symbol="NDX",
+                start_date="2026-01-01",
+                end_date="2026-12-31",
+            )
+        )
+
+        assert "spreads" not in result
+        assert "spread_grouping" not in result
+
+    def test_live_api_source_reports_unsupported(self):
+        """The API path lacks open/close indicators and must say so, not guess."""
+        fill = _make_fill(
+            symbol="NDX",
+            sec_type="OPT",
+            strike=27175,
+            expiry="20260727",
+            right="P",
+            time_str="2026-07-27T10:37:00",
+        )
+        mock_ib = MagicMock()
+        mock_ib.managedAccounts.return_value = ["U123456"]
+        mock_ib.reqExecutionsAsync = AsyncMock(return_value=[fill])
+
+        with patch("trading_skills.broker.trades.ib_connection") as conn:
+            conn.return_value.__aenter__ = AsyncMock(return_value=mock_ib)
+            conn.return_value.__aexit__ = AsyncMock(return_value=False)
+            result = asyncio.run(
+                get_trades(
+                    start_date="2026-01-01",
+                    end_date="2026-12-31",
+                    group_spreads=True,
+                )
+            )
+
+        assert result["spread_grouping"]["supported"] is False
+        assert "does not report" in result["spread_grouping"]["reason"]
+        assert "spreads" not in result
+
+    def test_error_result_is_passed_through_untouched(self, tmp_path):
+        missing = tmp_path / "nope.xml"
+        result = asyncio.run(get_trades(files=[str(missing)], group_spreads=True))
+
+        assert result["connected"] is False
+        assert "spread_grouping" not in result

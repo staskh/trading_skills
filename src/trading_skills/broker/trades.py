@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from ib_async import ExecutionFilter
 
 from trading_skills.broker.connection import CLIENT_IDS, ib_connection
+from trading_skills.broker.spreads import group_into_spreads
 
 
 class _UrllibResponse:
@@ -67,6 +68,7 @@ async def get_trades(
     flex_token: str | None = None,
     flex_query_id: str | list[str] | None = None,
     files: list[str] | None = None,
+    group_spreads: bool = False,
 ) -> dict:
     """Fetch trade executions from IB.
 
@@ -82,6 +84,9 @@ async def get_trades(
         flex_token: FlexReport token (enables extended history).
         flex_query_id: FlexReport query ID(s). Pass a list to merge multiple queries.
         files: Local FlexReport XML file path(s) to load.
+        group_spreads: Also consolidate fills into legs and pair them into vertical
+            spreads. Requires open/close indicators, so it only works on FlexReport
+            sources (web service or --file), not the live API.
     """
     today = datetime.now()
     if not start_date:
@@ -93,7 +98,7 @@ async def get_trades(
         symbol = symbol.upper()
 
     if files:
-        return _fetch_from_files(
+        result = _fetch_from_files(
             files=files,
             account=account,
             all_accounts=all_accounts,
@@ -101,13 +106,10 @@ async def get_trades(
             start_date=start_date,
             end_date=end_date,
         )
-
-    use_flex = flex_token and flex_query_id
-
-    if use_flex:
+    elif flex_token and flex_query_id:
         # Normalize to list
         query_ids = flex_query_id if isinstance(flex_query_id, list) else [flex_query_id]
-        return await _fetch_via_flex(
+        result = await _fetch_via_flex(
             port=port,
             account=account,
             all_accounts=all_accounts,
@@ -118,7 +120,7 @@ async def get_trades(
             flex_query_ids=query_ids,
         )
     else:
-        return await _fetch_via_api(
+        result = await _fetch_via_api(
             port=port,
             account=account,
             all_accounts=all_accounts,
@@ -126,6 +128,62 @@ async def get_trades(
             start_date=start_date,
             end_date=end_date,
         )
+
+    if group_spreads:
+        result = _apply_spread_grouping(result)
+
+    return result
+
+
+def _apply_spread_grouping(result: dict) -> dict:
+    """Attach leg/spread grouping to a fetch result, in place of guessing on bad input."""
+    if not result.get("connected") or result.get("error"):
+        return result
+
+    if result.get("source") == "reqExecutionsAsync":
+        result["spread_grouping"] = {
+            "supported": False,
+            "reason": (
+                "The live API does not report whether a fill opened or closed a position, "
+                "so spreads cannot be paired. Use --flex-token/--flex-query-id or --file."
+            ),
+        }
+        return result
+
+    grouped = group_into_spreads(result.get("executions", []))
+    result["legs"] = grouped["legs"]
+    result["spreads"] = grouped["spreads"]
+    result["leg_count"] = len(grouped["legs"])
+    result["spread_count"] = len(grouped["spreads"])
+    result["spread_grouping"] = {
+        "supported": True,
+        "ungrouped_leg_count": len(grouped["ungrouped"]),
+        "warnings": grouped["warnings"],
+    }
+    if grouped["ungrouped"]:
+        result["ungrouped_legs"] = grouped["ungrouped"]
+
+    # Reconciliation guard: grouping must never lose or invent P&L. Checked at leg
+    # level, where values are unrounded and therefore exact — summing the per-spread
+    # displayed P&L would drift up to half a cent per spread and flag a false mismatch
+    # on a report that is actually correct.
+    exec_pnl = sum(float(e.get("realizedPnL") or 0) for e in result.get("executions", []))
+    leg_pnl = sum(x["realizedPnL"] for x in grouped["legs"])
+    spread_pnl = sum(s["realizedPnL"] for s in grouped["spreads"])
+    ungrouped_pnl = sum(x["realizedPnL"] for x in grouped["ungrouped"])
+
+    # Every leg must land in exactly one bucket — a spread or the ungrouped list.
+    legs_accounted = sum(s["leg_count"] for s in grouped["spreads"]) + len(grouped["ungrouped"])
+    pnl_matches = abs(exec_pnl - leg_pnl) < 0.01
+    all_legs_placed = legs_accounted == len(grouped["legs"])
+
+    result["spread_grouping"]["reconciled"] = pnl_matches and all_legs_placed
+    result["spread_grouping"]["execution_pnl"] = round(exec_pnl, 2)
+    result["spread_grouping"]["spread_pnl"] = round(spread_pnl, 2)
+    result["spread_grouping"]["ungrouped_pnl"] = round(ungrouped_pnl, 2)
+    result["spread_grouping"]["legs_accounted"] = legs_accounted
+
+    return result
 
 
 def _fetch_from_files(
@@ -448,6 +506,12 @@ def _normalize_fill(fill) -> dict:
                 "strike": contract.strike,
                 "expiry": contract.lastTradeDateOrContractMonth,
                 "right": contract.right,
+                # The live API does not report whether a fill opened or closed a
+                # position, which is what spread grouping needs. Explicitly None so
+                # group_into_spreads reports an unsupported source instead of guessing.
+                "openClose": None,
+                "bookTrade": False,
+                "multiplier": float(contract.multiplier) if contract.multiplier else 100.0,
             }
         )
 
@@ -506,11 +570,21 @@ def _normalize_flex_trade(trade) -> dict:
         expiry_raw = getattr(trade, "expiry", None)
         if expiry_raw and not isinstance(expiry_raw, str):
             expiry_raw = str(expiry_raw)
+        multiplier_raw = getattr(trade, "multiplier", None)
+        try:
+            multiplier = float(multiplier_raw) if multiplier_raw else 100.0
+        except (TypeError, ValueError):
+            multiplier = 100.0
         result.update(
             {
                 "strike": float(getattr(trade, "strike", 0)),
                 "expiry": expiry_raw,
                 "right": getattr(trade, "putCall", None),
+                # Drives spread grouping: pairs opening legs against closing legs.
+                "openClose": getattr(trade, "openCloseIndicator", None) or None,
+                # BookTrade marks cash settlement at expiry rather than an exchange fill.
+                "bookTrade": getattr(trade, "transactionType", None) == "BookTrade",
+                "multiplier": multiplier,
             }
         )
 

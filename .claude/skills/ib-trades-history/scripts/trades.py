@@ -6,7 +6,11 @@ import argparse
 import asyncio
 import json
 
-from trading_skills.broker.connection import default_ib_port
+from trading_skills.broker.connection import (
+    default_flex_query_ids,
+    default_flex_token,
+    default_ib_port,
+)
 from trading_skills.broker.trades import get_trades
 
 
@@ -37,8 +41,25 @@ async def main():
         default=None,
         help="Local FlexReport XML file (repeat for multiple files)",
     )
+    parser.add_argument(
+        "--group-spreads",
+        action="store_true",
+        help=(
+            "Consolidate partial fills into legs and pair them into vertical spreads "
+            "with credit, width, max risk, capture %% and return-on-risk. "
+            "FlexReport sources only (--flex-token or --file); the live API lacks "
+            "the open/close indicator this needs."
+        ),
+    )
 
     args = parser.parse_args()
+
+    # Resolve after parsing (not as argparse defaults) because --flex-query-id
+    # uses action="append", which would append onto a default list rather than
+    # replace it.
+    flex_token = args.flex_token or default_flex_token()
+    flex_query_id = args.flex_query_id or default_flex_query_ids()
+
     result = await get_trades(
         port=args.port,
         account=args.account,
@@ -46,9 +67,10 @@ async def main():
         symbol=args.symbol,
         start_date=args.start_date,
         end_date=args.end_date,
-        flex_token=args.flex_token,
-        flex_query_id=args.flex_query_id,
+        flex_token=flex_token,
+        flex_query_id=flex_query_id,
         files=args.file,
+        group_spreads=args.group_spreads,
     )
     print(json.dumps(result, indent=2, default=str))
 

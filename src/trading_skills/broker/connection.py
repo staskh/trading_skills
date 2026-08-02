@@ -31,6 +31,35 @@ def default_ib_port(fallback: int | None) -> int | None:
         return fallback
 
 
+def default_flex_token(fallback: str | None = None) -> str | None:
+    """Resolve the FlexReport token from the IB_FLEX_TOKEN env var, else the fallback.
+
+    Reads IB_FLEX_TOKEN (from the shell or a .env file) so the token need not be
+    passed on every call. An explicit --flex-token flag still wins. A missing or
+    blank value yields the fallback.
+    """
+    load_dotenv()
+    raw = os.environ.get("IB_FLEX_TOKEN")
+    if raw is None or not raw.strip():
+        return fallback
+    return raw.strip()
+
+
+def default_flex_query_ids(fallback: list[str] | None = None) -> list[str] | None:
+    """Resolve FlexReport query ID(s) from the IB_FLEX_QUERY_ID env var.
+
+    Accepts a comma-separated list so multiple queries (e.g. one per year) can be
+    merged. An explicit --flex-query-id flag still wins. A missing or blank value
+    yields the fallback.
+    """
+    load_dotenv()
+    raw = os.environ.get("IB_FLEX_QUERY_ID")
+    if raw is None or not raw.strip():
+        return fallback
+    ids = [q.strip() for q in raw.split(",") if q.strip()]
+    return ids or fallback
+
+
 # Documented clientId allocation — one source of truth for all broker modules.
 CLIENT_IDS = {
     "portfolio": 1,
