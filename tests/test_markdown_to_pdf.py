@@ -6,6 +6,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).parent.parent / ".claude/skills/markdown-to-pdf/scripts/markdown_to_pdf.py"
 
 
@@ -369,3 +371,89 @@ class TestCLI:
         output = json.loads(result.stdout)
         assert output["success"] is True
         assert Path(output["output"]).exists()
+
+
+class TestWideTableColumnFitting:
+    """A wide financial table must never wrap a number or header mid-token.
+
+    Equal-width columns used to split "$85,950" into "$85,95" + "0" and the header
+    "Capture" into "Captur" + "e", which is misleading in a P&L report.
+    """
+
+    HEADERS = [
+        "#",
+        "Entry",
+        "Type",
+        "Short / Long",
+        "W",
+        "Lots",
+        "Credit",
+        "Max Risk",
+        "In",
+        "Out",
+        "P&L",
+        "Capture",
+        "RoR",
+    ]
+    ROW = [
+        "1",
+        "05-14",
+        "Bear call",
+        "30200 / 30400",
+        "200",
+        "18",
+        "3.21",
+        "$137,753",
+        "10:52",
+        "settled",
+        "$9,492.90",
+        "99.2%",
+        "1.62%",
+    ]
+
+    def _wide_table_md(self) -> str:
+        head = "| " + " | ".join(self.HEADERS) + " |"
+        sep = "|" + "---|" * len(self.HEADERS)
+        body = "\n".join("| " + " | ".join(self.ROW) + " |" for _ in range(6))
+        return f"# Wide\n\n{head}\n{sep}\n{body}\n"
+
+    def _pdf_text(self, path) -> str:
+        pypdf = pytest.importorskip("pypdf")
+        reader = pypdf.PdfReader(str(path))
+        return "\n".join((p.extract_text() or "") for p in reader.pages)
+
+    def test_numbers_and_headers_survive_intact(self, tmp_path):
+        md = tmp_path / "wide.md"
+        md.write_text(self._wide_table_md(), encoding="utf-8")
+        result = convert(str(md))
+        assert result["success"] is True
+
+        text = self._pdf_text(result["output"]).replace("\n", " ")
+        for token in [
+            "$137,753",
+            "$9,492.90",
+            "30200 / 30400",
+            "Bear call",
+            "Capture",
+            "Max Risk",
+            "Credit",
+            "Lots",
+        ]:
+            assert token in text, f"{token!r} was split or lost in the PDF"
+
+    def test_column_widths_are_content_proportional(self):
+        """A narrow column must not receive the same width as a wide one."""
+        rows = [
+            [(h, True) for h in ["W", "Description"]],
+            [("70", False), ("a much longer cell of text", False)],
+        ]
+        size, widths = _mod._fit_columns(rows, 2, 468.0, "Helvetica", "Helvetica-Bold")
+        assert widths[1] > widths[0] * 2
+        assert abs(sum(widths) - 468.0) < 1.0
+
+    def test_falls_back_to_equal_widths_when_nothing_fits(self):
+        """An unbreakable token wider than the page cannot be honoured; degrade cleanly."""
+        rows = [[("x" * 400, False), ("y" * 400, False)]]
+        size, widths = _mod._fit_columns(rows, 2, 468.0, "Helvetica", "Helvetica-Bold")
+        assert size == _mod._MIN_TABLE_PT
+        assert widths == [234.0, 234.0]
