@@ -10,6 +10,7 @@ Signal logic (default — bare EMA cross):
      (Nasdaq-100 vol, default cutoff 35); all other symbols on VIX (default 20).
   2. EMA9 last crossed ABOVE EMA21 -> bull_put.
   3. EMA9 last crossed BELOW EMA21 -> bear_call.
+  4. EMA9 ≈ EMA21 (gap within ic_threshold%) AND ic_gate=True -> iron_condor.
 
 Two optional confirmation gates (both OFF by default):
   rr_gate    Require both the 9:30 ET (13:30 UTC) and 10:00 ET (14:00 UTC) bars
@@ -19,6 +20,12 @@ Two optional confirmation gates (both OFF by default):
              10:30 ET or later) and anchor the EMA-cross lookback to the 10:00
              ET bar. Without it, the lookback anchors to the latest available
              bar, so the strategy can run at any time of day.
+
+Iron condor gate (off by default):
+  ic_gate       Enable iron condor when EMAs are flat (neutral regime).
+  ic_threshold  Max abs EMA gap (as % of EMA21) to qualify as flat.
+                Default 0.15% (~44pts on NDX at 29000). When the gap exceeds
+                this the last-cross direction is used as normal.
 
 This module holds the reusable strategy logic so it can be driven from both the
 CLI script (ema_vix_0dte.py) and the MCP server.
@@ -161,15 +168,18 @@ def _detect_signal(
     bars: list[dict],
     rr_gate: bool = False,
     time_gate: bool = False,
-) -> tuple[str | None, str, str | None]:
+    ic_gate: bool = False,
+    ic_threshold: float = 0.15,
+) -> tuple[str | None, str, str | None, float | None]:
     """
-    Returns (spread_type, signal_name, reason_skipped).
+    Returns (spread_type, signal_name, reason_skipped, ema_gap_pct).
 
-    spread_type: 'bull_put' | 'bear_call' | None
-    signal_name: human-readable label
+    spread_type:  'bull_put' | 'bear_call' | 'iron_condor' | None
+    signal_name:  human-readable label
     reason_skipped: set when spread_type is None
+    ema_gap_pct:  (EMA9 - EMA21) / EMA21 * 100 at the ref bar, or None
 
-    Defaults (both gates off): a bare EMA9/EMA21 cross picks the direction —
+    Defaults (all gates off): a bare EMA9/EMA21 cross picks the direction —
     up → bull_put, down → bear_call — anchored to the latest available bar, so
     it runs at any time of day.
 
@@ -178,9 +188,13 @@ def _detect_signal(
     time_gate=True: require today's 9:30 ET and 10:00 ET bars to exist (run at
                     10:30 ET or later) and anchor the EMA-cross lookback to the
                     10:00 ET bar.
+    ic_gate=True:   when EMA9 and EMA21 are within ic_threshold% of each other
+                    (neutral/flat regime), select iron_condor instead of a
+                    directional spread. Without this flag the last-cross direction
+                    is used even when EMAs are flat.
     """
     if not bars:
-        return None, "no-bars", "No bars received from IB"
+        return None, "no-bars", "No bars received from IB", None
 
     closes = [b["close"] for b in bars]
     ema9_s = _ema_series(closes, EMA_FAST)
@@ -210,6 +224,7 @@ def _detect_signal(
                 f"Need 9:30 ET and 10:00 ET bars — found bar1={'yes' if bar1 else 'no'}, "
                 f"bar2={'yes' if bar2 else 'no'}. Run at 10:30 ET or later."
             ),
+            None,
         )
 
     # Reference bar for the EMA-cross lookback:
@@ -223,6 +238,21 @@ def _detect_signal(
         ref_bar = bars[-1]
 
     ref_idx = bar_idx.get(ref_bar["dt"])
+
+    # Compute EMA gap at the reference bar (positive = EMA9 above EMA21).
+    ema_gap_pct: float | None = None
+    if ref_idx is not None:
+        ef_ref, es_ref = ema9_s[ref_idx], ema21_s[ref_idx]
+        if ef_ref is not None and es_ref is not None and es_ref != 0:
+            ema_gap_pct = round((ef_ref - es_ref) / es_ref * 100, 4)
+
+    # Iron condor gate: when EMAs are within ic_threshold% and ic_gate is on,
+    # treat the market as neutral and propose an iron condor instead of picking
+    # a directional spread. Flat EMAs can precede a breakout — the user must
+    # opt in explicitly with --ic-gate.
+    if ic_gate and ema_gap_pct is not None and abs(ema_gap_pct) <= ic_threshold:
+        return "iron_condor", "EMA-Flat", None, ema_gap_pct
+
     last_cross_dir = None
     if ref_idx is not None:
         for i in range(ref_idx, 0, -1):
@@ -238,14 +268,14 @@ def _detect_signal(
                 break
 
     if last_cross_dir is None:
-        return None, "no-cross", "No EMA9/EMA21 crossover found in recent history"
+        return None, "no-cross", "No EMA9/EMA21 crossover found in recent history", ema_gap_pct
 
     if last_cross_dir == "up":
-        return "bull_put", "EMA-Up", None
+        return "bull_put", "EMA-Up", None, ema_gap_pct
 
     # EMA is down → Bear Call. The red→red confirmation only applies with rr_gate.
     if not rr_gate:
-        return "bear_call", "EMA-Dn", None
+        return "bear_call", "EMA-Dn", None, ema_gap_pct
 
     # rr_gate on: need both morning bars present and both red.
     if not bar1 or not bar2:
@@ -257,12 +287,13 @@ def _detect_signal(
                 f"found bar1={'yes' if bar1 else 'no'}, bar2={'yes' if bar2 else 'no'}. "
                 "Run at 10:30 ET or later."
             ),
+            ema_gap_pct,
         )
 
     b1_red = bar1["close"] < bar1["open"]
     b2_red = bar2["close"] < bar2["open"]
     if b1_red and b2_red:
-        return "bear_call", "EMA-Dn+RR", None
+        return "bear_call", "EMA-Dn+RR", None, ema_gap_pct
 
     b1_str = "red" if b1_red else "green"
     b2_str = "red" if b2_red else "green"
@@ -273,6 +304,7 @@ def _detect_signal(
             f"EMA crossed down but R->R not confirmed "
             f"(9:30 bar={b1_str}, 10:00 bar={b2_str}) — skip Bear Call"
         ),
+        ema_gap_pct,
     )
 
 
@@ -308,6 +340,8 @@ async def run_ema_vix_strategy(
     time_exit: str | None = None,
     fill_timeout: float = 60.0,
     client_id: int = 61,
+    ic_gate: bool = False,
+    ic_threshold: float = 0.15,
 ) -> dict:
     """Run the EMA9/EMA21 + VIX/VXN regime strategy and return the result dict.
 
@@ -373,8 +407,8 @@ async def run_ema_vix_strategy(
         }
 
     # ── 3. Detect EMA signal ──────────────────────────────────────────────
-    spread_type, signal_name, skip_reason = _detect_signal(
-        bars, rr_gate=rr_gate, time_gate=time_gate
+    spread_type, signal_name, skip_reason, ema_gap_pct = _detect_signal(
+        bars, rr_gate=rr_gate, time_gate=time_gate, ic_gate=ic_gate, ic_threshold=ic_threshold
     )
 
     if spread_type is None:
@@ -390,6 +424,7 @@ async def run_ema_vix_strategy(
             "signal": signal_name,
             "spread_type": None,
             "reason": skip_reason,
+            "ema_gap_pct": ema_gap_pct,
             "generated_at": generated_at_str(),
             "data_delay": "real-time",
         }
@@ -429,6 +464,7 @@ async def run_ema_vix_strategy(
     # Annotate with strategy metadata
     result["strategy"] = "ema_vix"
     result["signal"] = signal_name
+    result["ema_gap_pct"] = ema_gap_pct
     result["vol_index"] = vol_symbol
     result["vix_intraday"] = round(vix_intraday, 2)
     result["vix_prior"] = round(vix_prior, 2)

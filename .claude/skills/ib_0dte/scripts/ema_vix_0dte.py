@@ -9,6 +9,7 @@ Signal logic (default — bare EMA cross):
      NDX/QQQ are gated on VXN (Nasdaq-100 vol); all other symbols on VIX.
   2. EMA9 last crossed ABOVE EMA21 → bull_put.
   3. EMA9 last crossed BELOW EMA21 → bear_call.
+  4. (With --ic-gate) EMA9/EMA21 gap within --ic-threshold% at ref bar → iron_condor.
 
 Two optional confirmation gates (both OFF by default; opt in per run):
   --rr-gate    Require both the 9:30 ET (13:30 UTC) and 10:00 ET (14:00 UTC)
@@ -18,6 +19,12 @@ Two optional confirmation gates (both OFF by default; opt in per run):
                10:30 ET or later) and anchor the EMA-cross lookback to the
                10:00 ET bar. Without it, the lookback anchors to the latest
                available bar, so the strategy can run at any time of day.
+
+Iron condor gate (opt in with --ic-gate):
+  --ic-gate    When the EMA9/EMA21 gap at the reference bar is within
+               --ic-threshold%, select iron_condor instead of a directional
+               spread. Flat EMAs can precede a breakout — opt in deliberately.
+  --ic-threshold  Gap threshold in percent for EMA-flat detection (default: 0.15).
 
 Position sizing uses the existing zero_dte library (budget / max_loss_per_contract).
 Strike targeting defaults to --target-delta 0.12, which approximates 1.5% OTM
@@ -67,7 +74,7 @@ def _save_result(result: dict, name: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="EMA9/EMA21 + VIX/VXN<20 0DTE strategy — auto-selects bull_put or bear_call"
+        description="EMA9/EMA21 + VIX/VXN 0DTE strategy — auto-selects bull_put, bear_call, or iron_condor"
     )
     parser.add_argument("symbol", help="Underlying (NDX, SPX, RUT, …)")
 
@@ -96,6 +103,18 @@ def main():
         action="store_true",
         help="Require today's 9:30 + 10:00 ET bars (run at 10:30 ET or later) and "
         "anchor the EMA-cross lookback to the 10:00 ET bar (default: off)",
+    )
+    parser.add_argument(
+        "--ic-gate",
+        action="store_true",
+        help="When EMA9/EMA21 gap is within --ic-threshold%% at the reference bar, "
+        "auto-select iron_condor instead of a directional spread (default: off)",
+    )
+    parser.add_argument(
+        "--ic-threshold",
+        type=float,
+        default=0.15,
+        help="EMA gap threshold in percent for iron condor auto-selection (default: 0.15)",
     )
 
     # Pass-through to find_0dte_spreads (same flags as zero_dte.py)
@@ -142,6 +161,8 @@ def main():
             target_delta=args.target_delta,
             rr_gate=args.rr_gate,
             time_gate=args.time_gate,
+            ic_gate=args.ic_gate,
+            ic_threshold=args.ic_threshold,
             expiry=args.expiry,
             account=args.account,
             execute=args.execute,
