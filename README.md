@@ -1,5 +1,7 @@
 # Trading Skills — AI-Powered Market Analysis
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fstaskh%2Ftrading_skills.svg)](https://mcptoplist.com/server/glama%2Fstaskh%2Ftrading_skills)
+
 Most retail traders juggle 5+ tabs — broker, charting platform, screener, news feed, spreadsheet — just to decide whether to enter a trade. This project collapses all of that into a single conversational interface powered by Claude.
 
 Ask a question in plain English, get back real data: technicals, fundamentals, option Greeks, risk metrics, earnings dates, correlation matrices, and full PDF reports. Connect your Interactive Brokers account and it manages your portfolio too — finds roll candidates for expiring shorts, flags earnings risk, and generates action reports.
