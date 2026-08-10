@@ -41,20 +41,23 @@ By **default it runs a bare EMA cross with no bar-timing or red→red gate**, so
 can be run at any time of day. Opt into the confirmation gates per run.
 
 ```bash
-# Dry run (propose only, no order placed) — bare EMA cross
-uv run python scripts/ema_vix_0dte.py NDX --budget 50000 --port 7496
+# Dry run (propose only, no order placed) — bare EMA cross.
+# Budget auto-sizes to 50% of the account's excess liquidity.
+uv run python scripts/ema_vix_0dte.py NDX --account U790497 --port 7496
 
 # With both confirmation gates on (original 10:30-ET behavior)
-uv run python scripts/ema_vix_0dte.py NDX --budget 50000 --port 7496 \
+uv run python scripts/ema_vix_0dte.py NDX --account U790497 --port 7496 \
     --rr-gate --time-gate
 
 # Live execution
+uv run python scripts/ema_vix_0dte.py NDX --account U790497 --port 7496 --execute
+
+# Explicit budget override (skips the excess-liquidity lookup)
 uv run python scripts/ema_vix_0dte.py NDX --budget 50000 --port 7496 \
     --account U790497 --execute
 
 # SPX variant
-uv run python scripts/ema_vix_0dte.py SPX --budget 50000 --port 7496 \
-    --account U790497 --execute
+uv run python scripts/ema_vix_0dte.py SPX --account U790497 --port 7496 --execute
 ```
 
 **Vol index:** NDX/QQQ are gated on **VXN** (CBOE Nasdaq-100 Volatility Index —
@@ -104,7 +107,8 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 
 - `SYMBOL` — underlying (e.g. `SPX`, `NDX`, `RUT`, `VIX`, `AAPL`, `SPY`)
 - `--type` — `bear_call` (default, bearish/neutral), `bull_put` (bullish/neutral), or `iron_condor` (neutral)
-- `--budget` — max capital at risk in dollars (default: 1000). Caps **total max loss**; position size is `floor(budget / max-loss-per-spread)`.
+- `--budget` — max capital at risk in dollars. Caps **total max loss**; position size is `floor(budget / max-loss-per-spread)`. **Default: auto-sized from the live account cushion** — see **Budget sizing** below.
+- `--budget-frac` — fraction of excess liquidity to deploy when auto-sizing (default: `0.5`). Ignored when `--budget` is passed.
 - `--account` — IBKR account the trade is committed to. Validated against the connection's managed accounts; echoed in the output. Defaults to the sole managed account when the login has exactly one. **Required with `--execute` when the login manages more than one account.**
 - `--execute` — place the chosen spread as a live combo order. Without it (the default), the tool is a **dry run**: it proposes but places nothing.
 - `--pick N` — 1-based rank of the candidate to execute (default: 1 = best).
@@ -132,6 +136,40 @@ Stop and exit defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero
 - `--no-events` — skip the live economic-calendar lookup (falls back to static event guidance). The calendar is fetched by default and needs no API key.
 - `--expiries` — list available expiries and whether today has a 0DTE
 - `--port` — IB port (default: 7497 paper; use 7496 for live)
+
+## Budget sizing (automatic)
+
+**When `--budget` is omitted, capital-at-risk is sized from the account's live margin
+cushion:** the run reads `ExcessLiquidity` for the resolved account off the connection
+it already holds and sets
+
+```
+budget = ExcessLiquidity × --budget-frac        (default 0.5)
+```
+
+A defined-risk vertical consumes roughly its max loss in margin, so the budget cap and
+the margin actually drawn are the same number — deploying the full cushion would leave
+zero buffer before IB's forced liquidation, which is why the default is half.
+
+The output echoes `budget`, `budget_source` (`excess_liquidity` or `explicit`),
+`budget_frac`, and the `excess_liquidity` reading it was derived from. **Surface the
+cushion and the derived budget when presenting candidates** so the sizing is visible.
+
+The lookup uses the **same IB connection** as the chain fetch — no second connect, so no
+client-ID collision.
+
+**It needs to know which account.** Margin does not cross account boundaries, so the
+budget can only be sized once an account resolves — automatic on a single-account login,
+otherwise **`--account` is required**. Rather than fall back to an arbitrary default, the
+run aborts with `success: false` and an explanatory error when:
+
+- no account resolved (multi-account login without `--account`),
+- `ExcessLiquidity` could not be read for that account, or
+- the cushion is **≤ 0** — no free margin means no new 0DTE spread; free margin first, or
+  pass `--budget` to override deliberately.
+
+Pass `--budget N` any time you want a fixed number; it wins over the lookup entirely
+(including `--budget 0`, which is honored as a real value, not as "unset").
 
 ## Executing a trade
 
@@ -224,6 +262,8 @@ is naked.
 
 JSON with:
 - `underlying_price`, `expiry`, `dte`, `spread_type`, `budget`, `asset_type`, `account`
+- `budget_source` (`excess_liquidity` / `explicit`), `budget_frac`, `excess_liquidity` —
+  how the budget was arrived at (see **Budget sizing**)
 - `dry_run` — `true` unless `--execute` was passed
 - `timing` — built-in intraday guidance (see **Timing & event guidance** below)
 - `gex` — dealer gamma-exposure profile when `--gex` is passed, else `null` (see

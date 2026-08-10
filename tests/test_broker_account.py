@@ -4,7 +4,7 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from trading_skills.broker.account import get_account_summary
+from trading_skills.broker.account import fetch_excess_liquidity, get_account_summary
 
 
 def _make_summary_item(tag, value, currency="USD"):
@@ -130,3 +130,49 @@ class TestGetAccountSummary:
             assert result["connected"] is True
             assert "error" in result
             assert "U999999" in result["error"]
+
+
+class TestFetchExcessLiquidity:
+    """Tests for fetch_excess_liquidity on an already-open connection."""
+
+    def _ib(self, items):
+        ib = MagicMock()
+        ib.accountSummaryAsync = AsyncMock(return_value=items)
+        return ib
+
+    def _item(self, tag, value, account="U123456"):
+        item = _make_summary_item(tag, value)
+        item.account = account
+        return item
+
+    def test_returns_excess_liquidity(self):
+        ib = self._ib(
+            [
+                self._item("NetLiquidation", "500000"),
+                self._item("ExcessLiquidity", "210000.50"),
+            ]
+        )
+        assert asyncio.run(fetch_excess_liquidity(ib, "U123456")) == 210000.50
+
+    def test_prefers_exact_account_over_aggregate(self):
+        """An aggregate row must not shadow the requested account's own figure."""
+        ib = self._ib(
+            [
+                self._item("ExcessLiquidity", "999999", account="All"),
+                self._item("ExcessLiquidity", "210000", account="U123456"),
+            ]
+        )
+        assert asyncio.run(fetch_excess_liquidity(ib, "U123456")) == 210000.0
+
+    def test_missing_tag_returns_none(self):
+        ib = self._ib([self._item("NetLiquidation", "500000")])
+        assert asyncio.run(fetch_excess_liquidity(ib, "U123456")) is None
+
+    def test_non_numeric_returns_none(self):
+        ib = self._ib([self._item("ExcessLiquidity", "")])
+        assert asyncio.run(fetch_excess_liquidity(ib, "U123456")) is None
+
+    def test_ib_error_returns_none(self):
+        ib = MagicMock()
+        ib.accountSummaryAsync = AsyncMock(side_effect=RuntimeError("no subscription"))
+        assert asyncio.run(fetch_excess_liquidity(ib, "U123456")) is None
