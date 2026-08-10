@@ -29,6 +29,28 @@ def _parse_account_summary(summary) -> dict:
     }
 
 
+async def fetch_excess_liquidity(ib, account: str) -> float | None:
+    """Return `account`'s ExcessLiquidity on an already-open connection, else None.
+
+    Takes a live `ib` handle rather than a port so callers reuse their existing
+    connection — a second connect would collide on the shared client ID.
+    """
+    try:
+        summary = await ib.accountSummaryAsync(account)
+    except Exception:
+        return None
+
+    values = [item for item in summary if item.tag == "ExcessLiquidity"]
+    if not values:
+        return None
+    # accountSummaryAsync can echo an aggregate row; prefer the exact account.
+    exact = [item for item in values if item.account == account]
+    try:
+        return float((exact or values)[0].value)
+    except (TypeError, ValueError):
+        return None
+
+
 async def get_account_summary(
     port: int = 7496, account: str = None, all_accounts: bool = False
 ) -> dict:

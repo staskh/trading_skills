@@ -41,6 +41,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from trading_skills.broker.ema_vix import run_ema_vix_strategy
+from trading_skills.broker.zero_dte import DEFAULT_BUDGET_FRAC
 from trading_skills.utils import generated_at_str
 
 NY = ZoneInfo("America/New_York")
@@ -99,7 +100,24 @@ def main():
     )
 
     # Pass-through to find_0dte_spreads (same flags as zero_dte.py)
-    parser.add_argument("--budget", type=float, default=50_000.0)
+    parser.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        help=(
+            "Max capital at risk in dollars. Default: sized live from the account's "
+            "excess liquidity x --budget-frac (needs --account on multi-account logins)"
+        ),
+    )
+    parser.add_argument(
+        "--budget-frac",
+        type=float,
+        default=DEFAULT_BUDGET_FRAC,
+        help=(
+            "Fraction of excess liquidity to deploy when auto-sizing the budget "
+            f"(default: {DEFAULT_BUDGET_FRAC}). Ignored when --budget is given"
+        ),
+    )
     parser.add_argument("--expiry", default=None)
     parser.add_argument("--top", type=int, default=5)
     parser.add_argument("--min-pop", type=float, default=0.0)
@@ -137,6 +155,7 @@ def main():
         run_ema_vix_strategy(
             args.symbol,
             budget=args.budget,
+            budget_frac=args.budget_frac,
             port=args.port,
             vix_threshold=args.vix_threshold,
             target_delta=args.target_delta,

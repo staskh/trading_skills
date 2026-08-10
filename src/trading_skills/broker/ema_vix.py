@@ -32,7 +32,7 @@ from zoneinfo import ZoneInfo
 import yfinance as yf
 from ib_async import IB, Index, Stock
 
-from trading_skills.broker.zero_dte import find_0dte_spreads
+from trading_skills.broker.zero_dte import DEFAULT_BUDGET_FRAC, find_0dte_spreads
 from trading_skills.utils import generated_at_str
 
 UTC = ZoneInfo("UTC")
@@ -279,7 +279,8 @@ def _detect_signal(
 async def run_ema_vix_strategy(
     symbol: str,
     *,
-    budget: float = 50_000.0,
+    budget: float | None = None,
+    budget_frac: float = DEFAULT_BUDGET_FRAC,
     port: int = 7496,
     vix_threshold: float | None = None,
     target_delta: float | None = None,
@@ -400,6 +401,7 @@ async def run_ema_vix_strategy(
         symbol,
         spread_type=spread_type,
         budget=budget,
+        budget_frac=budget_frac,
         expiry=expiry,
         port=port,
         account=account,

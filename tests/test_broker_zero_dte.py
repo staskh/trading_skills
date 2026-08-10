@@ -21,6 +21,7 @@ from trading_skills.broker.zero_dte import (
     get_0dte_expiries,
     pop_short,
     rank_candidates,
+    resolve_budget,
     resolve_entry_delta,
     resolve_underlying,
 )
@@ -757,3 +758,62 @@ class TestLiveIB:
         result = asyncio.run(find_0dte_spreads("SPX", spread_type="bear_call", account="U0000000"))
         assert result["success"] is False
         assert "not found" in result["error"]
+
+
+class TestResolveBudget:
+    """Budget sizing from the account's live margin cushion."""
+
+    def test_explicit_budget_wins(self):
+        """An explicit --budget is never overridden by the account cushion."""
+        r = resolve_budget(50_000.0, 210_000.0, 0.5, account="U1")
+        assert r["budget"] == 50_000.0
+        assert r["budget_source"] == "explicit"
+        assert r["error"] is None
+
+    def test_explicit_zero_is_respected(self):
+        """0 is a real budget, not 'unset' — must not fall through to auto-sizing."""
+        r = resolve_budget(0.0, 210_000.0, 0.5, account="U1")
+        assert r["budget"] == 0.0
+        assert r["budget_source"] == "explicit"
+
+    def test_auto_sizes_to_half_excess_liquidity(self):
+        r = resolve_budget(None, 210_000.0, account="U1")
+        assert r["budget"] == 105_000.0
+        assert r["budget_source"] == "excess_liquidity"
+        assert r["excess_liquidity"] == 210_000.0
+        assert r["error"] is None
+
+    def test_custom_fraction(self):
+        r = resolve_budget(None, 210_000.0, 0.25, account="U1")
+        assert r["budget"] == 52_500.0
+        assert r["budget_frac"] == 0.25
+
+    def test_full_cushion_allowed_explicitly(self):
+        r = resolve_budget(None, 100_000.0, 1.0, account="U1")
+        assert r["budget"] == 100_000.0
+
+    @pytest.mark.parametrize("frac", [0, -0.5, 1.5])
+    def test_invalid_fraction_errors(self, frac):
+        r = resolve_budget(None, 210_000.0, frac, account="U1")
+        assert r["budget"] is None
+        assert "budget_frac" in r["error"]
+
+    def test_no_account_on_multi_account_login_errors(self):
+        """Margin doesn't cross accounts, so we must never guess which one funds it."""
+        r = resolve_budget(None, None, account=None, managed=["U1", "U2", "U3"])
+        assert r["budget"] is None
+        assert "manages 3 accounts" in r["error"]
+        assert "--account" in r["error"]
+
+    def test_unreadable_cushion_errors_rather_than_defaulting(self):
+        r = resolve_budget(None, None, account="U1")
+        assert r["budget"] is None
+        assert "ExcessLiquidity" in r["error"]
+        assert "--budget" in r["error"]
+
+    @pytest.mark.parametrize("cushion", [0.0, -5_000.0])
+    def test_no_cushion_refuses_to_size(self, cushion):
+        """Zero/negative excess liquidity is auto-liquidation territory — refuse."""
+        r = resolve_budget(None, cushion, account="U1")
+        assert r["budget"] is None
+        assert "no margin cushion" in r["error"]
