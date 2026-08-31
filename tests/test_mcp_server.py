@@ -15,6 +15,34 @@ class TestMCPServerImport:
 
         assert mcp.name == "trading-skills"
 
+    def test_server_reports_package_version(self):
+        """Server advertises the installed package version to clients."""
+        from importlib.metadata import version as pkg_version
+
+        from mcp_server.server import mcp
+
+        expected = pkg_version("trading-skills")
+        assert expected
+        assert mcp.version == expected
+
+    def test_call_tool_wraps_result_as_json_content(self):
+        """Dispatch through the MCP layer, not the bare Python function.
+
+        Every other test here imports a tool function and calls it directly,
+        which skips result serialization entirely. This covers that path so a
+        change in how the SDK wraps return values cannot pass unnoticed.
+        """
+        import json
+
+        from mcp_server.server import mcp
+
+        result = asyncio.run(mcp.call_tool("get_version", {}))
+
+        assert result.is_error is False
+        assert result.content, "tool returned no content blocks"
+        payload = json.loads(result.content[0].text)
+        assert payload["version"]
+
     def test_all_tools_registered(self):
         """All expected tools are registered."""
         from mcp_server.server import mcp

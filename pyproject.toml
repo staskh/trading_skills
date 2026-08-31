@@ -3,12 +3,12 @@
 
 [project]
 name = "trading-skills"
-version = "0.17.0"
+version = "0.17.1"
 
 
 description = "AI-powered market analysis skills and MCP server for stock and options traders"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 
 dependencies = [
     "yfinance>=0.2.50",
@@ -17,7 +17,7 @@ dependencies = [
     "numpy>=2.0",
     "pandas-ta>=0.3.14b0",
     "scipy>=1.14",
-    "mcp>=1.25.0",
+    "mcp>=2.0.0",
     "lxml>=6.0.2",
     "massive>=2.4.0",
     "pandas-market-calendars>=5.3.1.2",
@@ -39,7 +39,7 @@ packages = ["src/trading_skills", "mcp_server"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
@@ -48,13 +48,18 @@ select = ["E", "F", "I", "W"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = ["manual: requires live broker connection (deselected by default)"]
-addopts = "-m 'not manual'"
+# Many tests query live market-data APIs, which intermittently rate-limit or
+# time out. Retrying absorbs those transients; a deterministic failure still
+# fails every attempt.
+addopts = "-m 'not manual' --reruns 2 --reruns-delay 2"
 
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=0.24",
     "pytest-cov>=7.0.0",
+    "pytest-rerunfailures>=15.0",
+    "python-dotenv>=1.0",
     "ruff>=0.8",
     "nbconvert>=7.17.0",
     "jupyter>=1.1.1",

@@ -8,6 +8,7 @@ import pandas_ta as ta
 import pytest
 
 from trading_skills.technicals import (
+    adx_columns,
     compute_indicators,
     compute_multi_symbol,
     compute_raw_indicators,
@@ -136,6 +137,68 @@ class TestGetEarningsData:
     def test_invalid_symbol(self):
         result = get_earnings_data("INVALIDXYZ123")
         assert result["symbol"] == "INVALIDXYZ123"
+
+
+class TestAdxColumns:
+    """Tests for ADX/DI column selection."""
+
+    def test_selects_by_name_from_pandas_ta_layout(self):
+        # pandas-ta adx() emits four columns including ADXR between ADX and DMP.
+        df = pd.DataFrame(
+            {
+                "ADX_14": [20.0],
+                "ADXR_14_2": [19.0],
+                "DMP_14": [30.0],
+                "DMN_14": [10.0],
+            }
+        )
+        assert adx_columns(df) == ("ADX_14", "DMP_14", "DMN_14")
+
+    def test_column_order_independent(self):
+        df = pd.DataFrame(
+            {
+                "DMN_14": [10.0],
+                "ADXR_14_2": [19.0],
+                "ADX_14": [20.0],
+                "DMP_14": [30.0],
+            }
+        )
+        assert adx_columns(df) == ("ADX_14", "DMP_14", "DMN_14")
+
+    def test_does_not_return_adxr(self):
+        # ADXR starts with "ADX" too, so a naive prefix match could grab it.
+        df = pd.DataFrame(
+            {
+                "ADXR_14_2": [19.0],
+                "ADX_14": [20.0],
+                "DMP_14": [30.0],
+                "DMN_14": [10.0],
+            }
+        )
+        assert "ADXR_14_2" not in adx_columns(df)
+
+    def test_raw_indicators_di_reflect_directional_movement(self):
+        # A strictly rising series has positive directional movement only, so
+        # +DI must exceed -DI. Reading pandas-ta's columns positionally picks up
+        # ADXR as +DI and DMP as -DI, which inverts this.
+        n = 60
+        close = pd.Series(np.linspace(100.0, 160.0, n))
+        df = pd.DataFrame(
+            {
+                "Open": close,
+                "High": close + 1.0,
+                "Low": close - 1.0,
+                "Close": close,
+                "Volume": [1_000_000] * n,
+            }
+        )
+        raw = compute_raw_indicators(df)
+        assert raw["dmp"] > raw["dmn"]
+
+        expected = ta.adx(df["High"], df["Low"], df["Close"], length=14)
+        assert raw["dmp"] == pytest.approx(expected["DMP_14"].iloc[-1])
+        assert raw["dmn"] == pytest.approx(expected["DMN_14"].iloc[-1])
+        assert raw["adx"] == pytest.approx(expected["ADX_14"].iloc[-1])
 
 
 class TestDetectMacdCrossover:
