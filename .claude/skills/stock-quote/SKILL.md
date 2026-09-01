@@ -24,10 +24,13 @@ Replace SYMBOL with the requested ticker (e.g., AAPL, MSFT, TSLA, SPY).
 
 The script outputs JSON with:
 - symbol, name, price, change, change_percent
+- as_of_session, market_open_now
 - volume, avg_volume, market_cap
 - high_52w, low_52w, pe_ratio, dividend_yield
 
 Present the data in a readable format. Highlight significant moves (>2% change).
+
+**Before presenting `change`/`change_percent` as "today's move", check `as_of_session` against today's NY calendar date.** Before the regular session opens (`market_open_now: false` and `as_of_session` is a prior date), Yahoo's change fields still describe the *last completed session* (yesterday's close vs. the day before) — not intraday movement in the still-unopened current session. In that case, label it as "as of `<as_of_session>` close", not "today". Once `as_of_session` equals today's date, `change`/`change_percent` are genuinely intraday.
 
 ## Dependencies
 
