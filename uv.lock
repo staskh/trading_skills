@@ -2667,6 +2667,7 @@ dependencies = [
     { name = "pandas-ta" },
     { name = "plotly" },
     { name = "reportlab" },
+    { name = "requests" },
     { name = "scipy" },
     { name = "yfinance" },
 ]
@@ -2697,6 +2698,7 @@ requires-dist = [
     { name = "pandas-ta", specifier = ">=0.3.14b0" },
     { name = "plotly", specifier = ">=6.6.0" },
     { name = "reportlab", specifier = ">=4.0" },
+    { name = "requests", specifier = ">=2.32" },
     { name = "scipy", specifier = ">=1.14" },
     { name = "yfinance", specifier = ">=0.2.50" },
 ]

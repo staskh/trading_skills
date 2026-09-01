@@ -45,6 +45,7 @@ CLIENT_IDS = {
     "stop_loss": 14,
     "trailing_stop": 15,
     "trades": 40,
+    "zero_dte": 50,
     "consolidate": 99,
 }
 
