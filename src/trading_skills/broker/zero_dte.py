@@ -956,6 +956,52 @@ async def _fetch_side(
     return sorted(results, key=lambda x: x["strike"])
 
 
+async def _fetch_chain_sides(
+    ib: IB,
+    symbol: str,
+    expiry: str,
+    strikes: list[float],
+    exchange: str,
+    trading_class: str,
+    spot: float,
+    T: float,
+    r: float,
+    allow_stale: bool,
+    *,
+    need_calls: bool,
+    need_puts: bool,
+    want_oi: bool = False,
+) -> tuple[list[dict], list[dict]]:
+    """Quote the requested option sides, one side at a time.
+
+    Each side already streams _QUOTE_BATCH market-data lines at once; running the
+    two sides concurrently doubles that past IBKR's line limit, and the side that
+    loses the race returns without greeks — which silently drops every candidate.
+    """
+    sides = []
+    for right, wanted in (("C", need_calls), ("P", need_puts)):
+        if not wanted:
+            sides.append([])
+            continue
+        sides.append(
+            await _fetch_side(
+                ib,
+                symbol,
+                expiry,
+                strikes,
+                right,
+                exchange,
+                trading_class,
+                spot,
+                T,
+                r,
+                allow_stale,
+                want_oi=want_oi,
+            )
+        )
+    return sides[0], sides[1]
+
+
 async def get_0dte_expiries(symbol: str, port: int = 7496) -> dict:
     """List near-term expiries for a symbol, flagging whether a 0DTE exists today."""
     contract, sec_type, asset_type = resolve_underlying(symbol)
@@ -1252,47 +1298,21 @@ async def find_0dte_spreads(
             # it AND the weighting can actually use it (volume-only never touches OI).
             want_oi = gex and gex_weight in ("auto", "oi")
 
-            calls, puts = [], []
-            tasks = []
-            if need_calls:
-                tasks.append(
-                    _fetch_side(
-                        ib,
-                        symbol_u,
-                        target,
-                        strikes,
-                        "C",
-                        exchange,
-                        trading_class,
-                        spot,
-                        T,
-                        rate,
-                        allow_stale,
-                        want_oi=want_oi,
-                    )
-                )
-            if need_puts:
-                tasks.append(
-                    _fetch_side(
-                        ib,
-                        symbol_u,
-                        target,
-                        strikes,
-                        "P",
-                        exchange,
-                        trading_class,
-                        spot,
-                        T,
-                        rate,
-                        allow_stale,
-                        want_oi=want_oi,
-                    )
-                )
-            fetched = await asyncio.gather(*tasks)
-            if need_calls:
-                calls = fetched.pop(0)
-            if need_puts:
-                puts = fetched.pop(0)
+            calls, puts = await _fetch_chain_sides(
+                ib,
+                symbol_u,
+                target,
+                strikes,
+                exchange,
+                trading_class,
+                spot,
+                T,
+                rate,
+                allow_stale,
+                need_calls=need_calls,
+                need_puts=need_puts,
+                want_oi=want_oi,
+            )
 
             fetched_legs = calls + puts
             stale = any(o.get("stale") for o in fetched_legs)

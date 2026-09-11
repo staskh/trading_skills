@@ -7,6 +7,7 @@ from datetime import datetime
 import pytest
 
 from trading_skills.black_scholes import black_scholes_price
+from trading_skills.broker import zero_dte
 from trading_skills.broker.zero_dte import (
     NY,
     _maybe_execute,
@@ -731,6 +732,73 @@ class TestDuplicateGuard:
         ib = _FakeIB([_FakeTrade(42, self.REF, "U999", "PreSubmitted")])
         res = self._run(ib, replace=False)
         assert "Duplicate" not in (res.get("error") or "")
+
+
+# --------------------------------------------------------------------------- #
+# Chain-side fetching
+# --------------------------------------------------------------------------- #
+class TestFetchChainSides:
+    """Streaming both sides at once exceeds IB's market-data line limit, so one
+    side returns without greeks and every candidate is filtered out. The sides
+    must be streamed one after the other."""
+
+    @staticmethod
+    def _instrumented():
+        state = {"in_flight": 0, "peak": 0, "rights": []}
+
+        async def fake_fetch_side(ib, symbol, expiry, strikes, right, *args, **kwargs):
+            state["in_flight"] += 1
+            state["peak"] = max(state["peak"], state["in_flight"])
+            state["rights"].append(right)
+            await asyncio.sleep(0)  # yield: concurrent sides would interleave here
+            state["in_flight"] -= 1
+            return [{"strike": strikes[0], "right": right}]
+
+        return state, fake_fetch_side
+
+    def _run(self, monkeypatch, *, need_calls, need_puts):
+        state, fake = self._instrumented()
+        monkeypatch.setattr(zero_dte, "_fetch_side", fake)
+        calls, puts = asyncio.run(
+            zero_dte._fetch_chain_sides(
+                None,
+                "SPX",
+                "20260911",
+                [7600.0],
+                "CBOE",
+                "SPXW",
+                7650.0,
+                0.001,
+                0.04,
+                False,
+                need_calls=need_calls,
+                need_puts=need_puts,
+                want_oi=False,
+            )
+        )
+        return state, calls, puts
+
+    def test_both_sides_stream_one_at_a_time(self, monkeypatch):
+        state, _, _ = self._run(monkeypatch, need_calls=True, need_puts=True)
+        assert state["peak"] == 1
+
+    def test_both_sides_land_on_the_right_legs(self, monkeypatch):
+        state, calls, puts = self._run(monkeypatch, need_calls=True, need_puts=True)
+        assert state["rights"] == ["C", "P"]
+        assert [o["right"] for o in calls] == ["C"]
+        assert [o["right"] for o in puts] == ["P"]
+
+    def test_calls_only(self, monkeypatch):
+        state, calls, puts = self._run(monkeypatch, need_calls=True, need_puts=False)
+        assert state["rights"] == ["C"]
+        assert [o["right"] for o in calls] == ["C"]
+        assert puts == []
+
+    def test_puts_only(self, monkeypatch):
+        state, calls, puts = self._run(monkeypatch, need_calls=False, need_puts=True)
+        assert state["rights"] == ["P"]
+        assert calls == []
+        assert [o["right"] for o in puts] == ["P"]
 
 
 # --------------------------------------------------------------------------- #
