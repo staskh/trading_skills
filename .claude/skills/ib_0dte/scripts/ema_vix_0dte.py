@@ -49,6 +49,7 @@ from zoneinfo import ZoneInfo
 
 from trading_skills.broker.ema_vix import run_ema_vix_strategy
 from trading_skills.broker.zero_dte import DEFAULT_BUDGET_FRAC
+from trading_skills.broker.zero_dte_proposal import proposal_id_for
 from trading_skills.utils import generated_at_str
 
 NY = ZoneInfo("America/New_York")
@@ -68,6 +69,14 @@ def _sandbox_dir() -> Path:
 def _save_result(result: dict, name: str) -> str:
     ts = datetime.now(NY).strftime("%Y-%m-%d_%H%M%S")
     path = _sandbox_dir() / f"{name}_{ts}.json"
+    # A handle the execute step can reference, so a reviewed spread is the one placed.
+    if result.get("candidates"):
+        result["proposal_id"] = proposal_id_for(
+            result.get("symbol", "?"),
+            result.get("expiry", "?"),
+            result.get("spread_type", "?"),
+            ts,
+        )
     result["saved_to"] = str(path)
     path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     return str(path)
