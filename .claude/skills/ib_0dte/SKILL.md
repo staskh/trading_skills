@@ -191,6 +191,46 @@ Guardrails before an order is sent:
 The connection is **read-only unless `--execute` is passed**, so a plain analysis run
 can never place an order. Confirm the proposal with the user before executing.
 
+### Executing a reviewed proposal (`--from-proposal`)
+
+`--execute` finds and places in one pass, so the spread placed is the spread just
+ranked. But the review workflow — dry run, read the table, then rerun with
+`--execute --pick N` — does **not** place what was reviewed: `--pick` indexes a list
+that is re-fetched and re-ranked on the second run, so a different spread can sit at
+rank N by then.
+
+Use `--from-proposal` for that workflow. Every run that produces candidates is saved
+with a `proposal_id`, and executing by that id takes the **legs from the saved
+proposal** rather than re-ranking:
+
+```bash
+# 1. Propose (read-only). Note the proposal_id in the output.
+uv run python scripts/zero_dte.py SPX --type bull_put --account U1234567
+
+# 2. Review the table, then place the spread that was reviewed.
+uv run python scripts/zero_dte.py --from-proposal SPX-20260912-bull_put-2026-09-12_142449 \
+    --account U1234567 --port 7496
+```
+
+The saved JSON path works in place of the id.
+
+Before placing, the proposal's exact legs are re-quoted and the trade is **refused**
+if the market has moved past either tolerance:
+
+| Flag | Default | Refuses when |
+|------|---------|--------------|
+| `--max-credit-drift` | `0.20` | the obtainable credit has fallen this far below the reviewed credit |
+| `--max-cushion-loss` | `0.33` | this much of the spot-to-short cushion is gone |
+
+A *better* credit never blocks. A leg that will not quote is refused rather than
+guessed at. The measured values (`proposed_credit` / `fresh_credit`,
+`proposed_cushion` / `fresh_cushion`, `credit_drift`, `cushion_loss`) are echoed in
+the result's `drift` block either way, so a refusal says exactly what moved.
+
+Iron condors are judged on the **nearer** short leg, since that is the side at risk.
+
+These defaults are starting points, not calibrated values — tune them with live data.
+
 ## Exit bracket (automatic, non-negotiable on `--execute`)
 
 Every `--execute` **atomically attaches a full OCA exit bracket** — you can never end

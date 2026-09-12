@@ -16,6 +16,12 @@ from trading_skills.broker.zero_dte import (
     find_0dte_spreads,
     get_0dte_expiries,
 )
+from trading_skills.broker.zero_dte_proposal import (
+    DEFAULT_MAX_CREDIT_DRIFT,
+    DEFAULT_MAX_CUSHION_LOSS,
+    execute_proposal,
+    proposal_id_for,
+)
 from trading_skills.broker.zero_dte_stop import verify_zdte_stops
 from trading_skills.utils import generated_at_str
 
@@ -49,6 +55,14 @@ def _save_result(result: dict, name: str) -> str:
     """
     ts = datetime.now(_NY).strftime("%Y-%m-%d_%H%M%S")
     path = _sandbox_dir() / f"{name}_{ts}.json"
+    # A handle the execute step can reference, so a reviewed spread is the one placed.
+    if result.get("candidates"):
+        result["proposal_id"] = proposal_id_for(
+            result.get("symbol", "?"),
+            result.get("expiry", "?"),
+            result.get("spread_type", "?"),
+            ts,
+        )
     result["saved_to"] = str(path)
     path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     return str(path)
@@ -232,6 +246,27 @@ def main():
         action="store_true",
         help="With --verify-stops: place a strike-level stop on any unprotected position",
     )
+    parser.add_argument(
+        "--from-proposal",
+        metavar="ID_OR_PATH",
+        help="Execute a spread from a saved proposal (proposal_id, or path to its sandbox "
+        "JSON) instead of re-ranking the chain. The reviewed legs are re-quoted and the "
+        "order is refused if the market has moved past the drift tolerances.",
+    )
+    parser.add_argument(
+        "--max-credit-drift",
+        type=float,
+        default=DEFAULT_MAX_CREDIT_DRIFT,
+        help=f"With --from-proposal: refuse once the obtainable credit falls this fraction "
+        f"below the reviewed proposal (default: {DEFAULT_MAX_CREDIT_DRIFT})",
+    )
+    parser.add_argument(
+        "--max-cushion-loss",
+        type=float,
+        default=DEFAULT_MAX_CUSHION_LOSS,
+        help=f"With --from-proposal: refuse once this fraction of the spot-to-short cushion "
+        f"is gone (default: {DEFAULT_MAX_CUSHION_LOSS})",
+    )
     parser.add_argument("--port", type=int, default=7497, help="IB port (7497=paper, 7496=live)")
 
     args = parser.parse_args()
@@ -242,6 +277,27 @@ def main():
             verify_zdte_stops(port=args.port, account=args.account, repair=args.repair)
         )
         name = "verify_stops"
+    elif args.from_proposal:
+        result = asyncio.run(
+            execute_proposal(
+                args.from_proposal,
+                port=args.port,
+                account=args.account,
+                pick=args.pick,
+                limit=args.limit,
+                limit_frac=args.limit_frac,
+                replace=args.replace,
+                max_credit_drift=args.max_credit_drift,
+                max_cushion_loss=args.max_cushion_loss,
+                stop_mult=args.stop_mult,
+                stop_buffer=args.stop_buffer,
+                stop_delta=args.stop_delta,
+                profit_target=args.profit_target,
+                time_exit=_normalize_time_exit(args.time_exit),
+                fill_timeout=args.fill_timeout,
+            )
+        )
+        name = f"{result.get('symbol', 'proposal')}_0dte_from_proposal_exec"
     else:
         if not args.symbol:
             parser.error("symbol is required (except with --verify-stops)")
