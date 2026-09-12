@@ -2662,7 +2662,7 @@ wheels = [
 
 [[package]]
 name = "trading-skills"
-version = "0.17.2"
+version = "0.18.0"
 source = { editable = "." }
 dependencies = [
     { name = "ib-async" },
