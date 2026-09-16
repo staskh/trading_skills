@@ -4,8 +4,10 @@
 import pytest
 
 from trading_skills.economic_calendar import (
+    _inject_fomc_if_missing,
     classify_impact,
     fetch_us_economic_events,
+    is_fomc_day,
     parse_events,
 )
 
@@ -74,6 +76,61 @@ class TestParseEvents:
         assert claims["previous"] is None  # &nbsp; cleaned to None
         fomc = next(e for e in events if e["event"] == "FOMC Statement")
         assert fomc["consensus"] is None  # blank cleaned to None
+
+
+class TestFomcDay:
+    def test_known_announcement_days_are_fomc(self):
+        # Sep 16 2026 is confirmed (search-verified)
+        assert is_fomc_day("2026-09-16") is True
+        assert is_fomc_day("2026-01-28") is True
+        assert is_fomc_day("2025-12-10") is True
+
+    def test_non_fomc_days_are_not(self):
+        assert is_fomc_day("2026-09-17") is False  # day after
+        assert is_fomc_day("2026-09-15") is False  # day before (1st day of meeting)
+        assert is_fomc_day("2026-06-01") is False
+
+    def test_unknown_year_returns_false(self):
+        assert is_fomc_day("2030-01-01") is False
+
+    def test_malformed_date_returns_false(self):
+        assert is_fomc_day("bad") is False
+        assert is_fomc_day("") is False
+
+
+class TestInjectFomc:
+    def test_injects_on_fomc_day_when_absent(self):
+        events = _inject_fomc_if_missing([], "2026-09-16")
+        assert len(events) == 1
+        assert events[0]["event"] == "FOMC Rate Decision"
+        assert events[0]["time_et"] == "14:00 ET"
+        assert events[0]["impact"] == "high"
+        assert events[0]["source"] == "hardcoded"
+
+    def test_prepends_before_other_events(self):
+        other = [{"event": "Retail Sales", "time_et": "08:30 ET", "impact": "high"}]
+        events = _inject_fomc_if_missing(other, "2026-09-16")
+        assert events[0]["event"] == "FOMC Rate Decision"
+        assert events[1]["event"] == "Retail Sales"
+
+    def test_no_inject_on_non_fomc_day(self):
+        events = _inject_fomc_if_missing([], "2026-09-17")
+        assert events == []
+
+    def test_no_duplicate_if_already_present(self):
+        existing = [{"event": "FOMC Statement", "time_et": "14:00 ET", "impact": "high"}]
+        events = _inject_fomc_if_missing(existing, "2026-09-16")
+        fomc_events = [
+            e for e in events if "fomc" in e["event"].lower() or "rate" in e["event"].lower()
+        ]
+        assert len(fomc_events) == 1
+
+    def test_no_duplicate_interest_rate_decision_variant(self):
+        existing = [
+            {"event": "Fed Interest Rate Decision", "time_et": "14:00 ET", "impact": "high"}
+        ]  # noqa: E501
+        events = _inject_fomc_if_missing(existing, "2026-09-16")
+        assert len(events) == 1  # not injected, already there
 
 
 @pytest.mark.manual
