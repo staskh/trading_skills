@@ -15,6 +15,7 @@ from trading_skills.black_scholes import (
     black_scholes_price,
     implied_volatility,
 )
+from trading_skills.broker.account import fetch_excess_liquidity
 from trading_skills.broker.connection import CLIENT_IDS, ib_connection
 from trading_skills.broker.zero_dte_gex import (
     annotate_candidate,
@@ -49,6 +50,84 @@ INDEX_SPECS = {
 DEFAULT_RATE = 0.045  # annualized risk-free rate for BS fallback
 
 SPREAD_TYPES = ("bear_call", "bull_put", "iron_condor")
+
+# When no --budget is given, size capital-at-risk from the account's own margin
+# cushion: budget = DEFAULT_BUDGET_FRAC x ExcessLiquidity. A defined-risk vertical
+# consumes roughly its max loss in margin, so the budget cap and the margin drawn
+# are the same number — deploying the whole cushion would leave zero buffer before
+# IB's forced liquidation, hence a fraction rather than the full figure.
+DEFAULT_BUDGET_FRAC = 0.5
+
+
+def resolve_budget(
+    explicit_budget: float | None,
+    excess_liquidity: float | None,
+    budget_frac: float = DEFAULT_BUDGET_FRAC,
+    *,
+    account: str | None = None,
+    managed: list[str] | None = None,
+) -> dict:
+    """Resolve capital-at-risk from an explicit budget or the account's excess liquidity.
+
+    Returns a dict with `budget`, `budget_source`, `excess_liquidity`, `budget_frac`
+    and `error`. `error` is non-None when no budget can be safely determined — the
+    caller must abort rather than fall back to an arbitrary default, since a wrong
+    budget silently changes position size.
+    """
+    base = {
+        "budget": None,
+        "budget_source": None,
+        "excess_liquidity": excess_liquidity,
+        "budget_frac": budget_frac,
+        "error": None,
+    }
+
+    if explicit_budget is not None:
+        return {**base, "budget": float(explicit_budget), "budget_source": "explicit"}
+
+    if not 0 < budget_frac <= 1:
+        return {**base, "error": f"budget_frac must be in (0, 1], got {budget_frac}"}
+
+    if excess_liquidity is None:
+        if not account:
+            n = len(managed or [])
+            detail = (
+                f"the login manages {n} accounts, so none was auto-selected"
+                if n > 1
+                else "no account could be resolved"
+            )
+            return {
+                **base,
+                "error": (
+                    f"Cannot size the budget from excess liquidity: {detail}. "
+                    "Pass --account <id> to size from that account's cushion, "
+                    "or --budget <amount> to set it explicitly."
+                ),
+            }
+        return {
+            **base,
+            "error": (
+                f"Could not read ExcessLiquidity for account {account}. "
+                "Pass --budget <amount> to set capital-at-risk explicitly."
+            ),
+        }
+
+    if excess_liquidity <= 0:
+        return {
+            **base,
+            "error": (
+                f"Account {account} has no margin cushion "
+                f"(excess liquidity {excess_liquidity:,.2f}). Refusing to size a new "
+                "0DTE spread — free margin first, or pass --budget to override."
+            ),
+        }
+
+    return {
+        **base,
+        "budget": round(excess_liquidity * budget_frac, 2),
+        "budget_source": "excess_liquidity",
+    }
+
 
 # Default cap on the short-leg |delta| at ENTRY, by underlying class. Indexes sell
 # only well-OTM short legs (high POP); stocks allow a bit closer. "_index"/"_stock"
@@ -408,6 +487,11 @@ def build_verticals(
     max_short_delta caps the |delta| of the short leg (a manual risk limit).
     target_delta (± delta_band) restricts the short leg to a delta band.
     rv_ratio sets the realized/implied vol for the expected-P&L EV (None -> binary EV).
+        0.85 is an UNVALIDATED PRIOR, not a fitted value: it asserts realized vol comes
+        in 15% under implied (the volatility risk premium). The direction is well
+        documented; the magnitude is a guess. At rv_ratio 1.0 EV goes to roughly zero,
+        so the ratio *is* the edge every positive EV reports — rank order between
+        candidates is far more trustworthy than the absolute numbers.
     """
     usable = sorted((o for o in options if _tradeable(o)), key=lambda o: o["strike"])
     strategy = "bear_call" if right == "C" else "bull_put"
@@ -742,35 +826,7 @@ def _resolve_quote(bid, ask, last, close, g_delta, g_iv, spot, strike, right, T,
     return mid, delta, iv, stale, no_live
 
 
-_OI_BATCH = 20  # concurrent streaming market-data lines to hold at once
 _QUOTE_BATCH = 40  # streaming lines per batch for option bid/ask + greeks
-
-
-async def _fetch_open_interest(ib: IB, qualified: list) -> dict[int, int]:
-    """Open interest by conId, via generic tick 101 (call/put OI).
-
-    Snapshot quotes (reqTickers) never carry OI — it only arrives on a STREAMING
-    subscription with the generic tick requested. Streamed in small batches and
-    cancelled immediately so we never hold many market-data lines (a live account
-    has a limited allowance shared with every other skill).
-    """
-    out: dict[int, int] = {}
-    for i in range(0, len(qualified), _OI_BATCH):
-        batch = qualified[i : i + _OI_BATCH]
-        tickers = [ib.reqMktData(c, genericTickList="101", snapshot=False) for c in batch]
-        try:
-            await asyncio.sleep(3)  # OI ticks arrive asynchronously
-            for t in tickers:
-                if t.contract is None:
-                    continue
-                right = t.contract.right
-                oi = t.callOpenInterest if right == "C" else t.putOpenInterest
-                if oi is not None and not math.isnan(oi) and oi >= 0:
-                    out[t.contract.conId] = int(oi)
-        finally:
-            for c in batch:
-                ib.cancelMktData(c)
-    return out
 
 
 async def _fetch_side(
@@ -816,17 +872,20 @@ async def _fetch_side(
 
     # reqTickersAsync (snapshot) closes the stream before bid/ask + model-greeks arrive
     # for slower strikes (NDX 0DTE, far-OTM). Stream in batches and cancel after reading
-    # so every tick type has time to land — same pattern as _fetch_open_interest.
+    # so every tick type has time to land.
+    # Open interest rides on this same subscription via generic tick 101: a separate
+    # pass would double the market-data lines held against a limited allowance.
+    generic_ticks = "101" if want_oi else ""
     tickers = []
     for i in range(0, len(qualified), _QUOTE_BATCH):
         batch = qualified[i : i + _QUOTE_BATCH]
-        batch_tickers = [ib.reqMktData(c, snapshot=False) for c in batch]
+        batch_tickers = [
+            ib.reqMktData(c, genericTickList=generic_ticks, snapshot=False) for c in batch
+        ]
         await asyncio.sleep(3)
         tickers.extend(batch_tickers)
         for c in batch:
             ib.cancelMktData(c)
-
-    oi_by_conid = await _fetch_open_interest(ib, qualified) if want_oi else {}
 
     results = []
     for t in tickers:
@@ -853,7 +912,11 @@ async def _fetch_side(
         # Size behind the strike, for the GEX profile. IBKR's open interest is the
         # PRIOR settlement's, so on a 0DTE expiry `volume` (today's prints) is the
         # only measure that sees the same-day book — see zero_dte_gex.
-        oi = oi_by_conid.get(t.contract.conId)
+        oi = None
+        if want_oi:
+            raw_oi = t.callOpenInterest if right == "C" else t.putOpenInterest
+            if raw_oi is not None and not math.isnan(raw_oi) and raw_oi >= 0:
+                oi = int(raw_oi)
         volume = t.volume if t.volume is not None and not math.isnan(t.volume) else None
 
         results.append(
@@ -875,6 +938,52 @@ async def _fetch_side(
         )
 
     return sorted(results, key=lambda x: x["strike"])
+
+
+async def _fetch_chain_sides(
+    ib: IB,
+    symbol: str,
+    expiry: str,
+    strikes: list[float],
+    exchange: str,
+    trading_class: str,
+    spot: float,
+    T: float,
+    r: float,
+    allow_stale: bool,
+    *,
+    need_calls: bool,
+    need_puts: bool,
+    want_oi: bool = False,
+) -> tuple[list[dict], list[dict]]:
+    """Quote the requested option sides, one side at a time.
+
+    Each side already streams _QUOTE_BATCH market-data lines at once; running the
+    two sides concurrently doubles that past IBKR's line limit, and the side that
+    loses the race returns without greeks — which silently drops every candidate.
+    """
+    sides = []
+    for right, wanted in (("C", need_calls), ("P", need_puts)):
+        if not wanted:
+            sides.append([])
+            continue
+        sides.append(
+            await _fetch_side(
+                ib,
+                symbol,
+                expiry,
+                strikes,
+                right,
+                exchange,
+                trading_class,
+                spot,
+                T,
+                r,
+                allow_stale,
+                want_oi=want_oi,
+            )
+        )
+    return sides[0], sides[1]
 
 
 async def get_0dte_expiries(symbol: str, port: int = 7496) -> dict:
@@ -1027,10 +1136,11 @@ def _trade_log(trade) -> list[dict]:
 async def find_0dte_spreads(
     symbol: str,
     spread_type: str = "bear_call",
-    budget: float = 1000.0,
+    budget: float | None = None,
     expiry: str | None = None,
     port: int = 7496,
     *,
+    budget_frac: float = DEFAULT_BUDGET_FRAC,
     account: str | None = None,
     execute: bool = False,
     pick: int = 1,
@@ -1058,8 +1168,13 @@ async def find_0dte_spreads(
 ) -> dict:
     """Find the best 0DTE credit spreads of `spread_type` within `budget`.
 
+    budget: total capital at risk. When None (the default), it is sized live from
+        the resolved account's ExcessLiquidity x `budget_frac`; the run aborts with
+        an error if that cushion cannot be read, rather than guessing a default.
+    budget_frac: fraction of excess liquidity to deploy when auto-sizing (0.5).
     account: the IBKR account the trade is committed to. Validated against the
-        connection's managed accounts and recorded on the result.
+        connection's managed accounts and recorded on the result. Also the account
+        whose excess liquidity funds the auto-sized budget.
     max_short_delta: cap the |delta| of the short leg(s) — a manual risk limit.
     allow_stale: when True, price legs from the prior settlement close and derive
         greeks via Black-Scholes if IBKR streams no live quotes/greeks (off-hours).
@@ -1099,6 +1214,30 @@ async def find_0dte_spreads(
                 }
             # Single-account logins have exactly one; pin the trade to it by default.
             trade_account = account or (managed[0] if len(managed) == 1 else None)
+
+            # Size capital-at-risk from the live margin cushion unless overridden.
+            # Read on this connection: a second connect collides on the client ID.
+            excess_liquidity = (
+                await fetch_excess_liquidity(ib, trade_account)
+                if budget is None and trade_account
+                else None
+            )
+            sizing = resolve_budget(
+                budget,
+                excess_liquidity,
+                budget_frac,
+                account=trade_account,
+                managed=managed,
+            )
+            if sizing["error"]:
+                return {
+                    "success": False,
+                    "error": sizing["error"],
+                    "symbol": symbol_u,
+                    "account": trade_account,
+                    "excess_liquidity": excess_liquidity,
+                }
+            budget = sizing["budget"]
 
             qualified = await ib.qualifyContractsAsync(contract)
             if not qualified or qualified[0] is None or not qualified[0].conId:
@@ -1143,47 +1282,21 @@ async def find_0dte_spreads(
             # it AND the weighting can actually use it (volume-only never touches OI).
             want_oi = gex and gex_weight in ("auto", "oi")
 
-            calls, puts = [], []
-            tasks = []
-            if need_calls:
-                tasks.append(
-                    _fetch_side(
-                        ib,
-                        symbol_u,
-                        target,
-                        strikes,
-                        "C",
-                        exchange,
-                        trading_class,
-                        spot,
-                        T,
-                        rate,
-                        allow_stale,
-                        want_oi=want_oi,
-                    )
-                )
-            if need_puts:
-                tasks.append(
-                    _fetch_side(
-                        ib,
-                        symbol_u,
-                        target,
-                        strikes,
-                        "P",
-                        exchange,
-                        trading_class,
-                        spot,
-                        T,
-                        rate,
-                        allow_stale,
-                        want_oi=want_oi,
-                    )
-                )
-            fetched = await asyncio.gather(*tasks)
-            if need_calls:
-                calls = fetched.pop(0)
-            if need_puts:
-                puts = fetched.pop(0)
+            calls, puts = await _fetch_chain_sides(
+                ib,
+                symbol_u,
+                target,
+                strikes,
+                exchange,
+                trading_class,
+                spot,
+                T,
+                rate,
+                allow_stale,
+                need_calls=need_calls,
+                need_puts=need_puts,
+                want_oi=want_oi,
+            )
 
             fetched_legs = calls + puts
             stale = any(o.get("stale") for o in fetched_legs)
@@ -1293,6 +1406,11 @@ async def find_0dte_spreads(
                 "expiry": target,
                 "dte": 0 if target == _today_ny() else None,
                 "budget": budget,
+                "budget_source": sizing["budget_source"],
+                "budget_frac": (
+                    sizing["budget_frac"] if sizing["budget_source"] == "excess_liquidity" else None
+                ),
+                "excess_liquidity": sizing["excess_liquidity"],
                 "trading_class": trading_class,
                 "max_short_delta": eff_max_delta,
                 "target_delta": target_delta,

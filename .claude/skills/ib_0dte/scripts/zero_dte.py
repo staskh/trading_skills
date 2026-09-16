@@ -11,6 +11,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from trading_skills.broker.zero_dte import (
+    DEFAULT_BUDGET_FRAC,
     SPREAD_TYPES,
     find_0dte_spreads,
     get_0dte_expiries,
@@ -72,8 +73,20 @@ def main():
     parser.add_argument(
         "--budget",
         type=float,
-        default=1000.0,
-        help="Max capital at risk in dollars (default: 1000)",
+        default=None,
+        help=(
+            "Max capital at risk in dollars. Default: sized live from the account's "
+            "excess liquidity x --budget-frac (needs --account on multi-account logins)"
+        ),
+    )
+    parser.add_argument(
+        "--budget-frac",
+        type=float,
+        default=DEFAULT_BUDGET_FRAC,
+        help=(
+            "Fraction of excess liquidity to deploy when auto-sizing the budget "
+            f"(default: {DEFAULT_BUDGET_FRAC}). Ignored when --budget is given"
+        ),
     )
     parser.add_argument("--expiry", help="Expiry YYYYMMDD (default: today ET, i.e. true 0DTE)")
     parser.add_argument("--top", type=int, default=5, help="Number of candidates to return")
@@ -105,7 +118,9 @@ def main():
         type=float,
         default=0.85,
         help="Realized/implied vol ratio for the expected-P&L EV (default 0.85). Lower "
-        "favors richer near-money credits; 1.0 ~ fair (near-zero EV).",
+        "favors richer near-money credits; 1.0 ~ fair (near-zero EV). The default is an "
+        "unvalidated prior, not a fitted value — re-run at 1.0 to see how much of a "
+        "candidate's EV is the assumption.",
     )
     parser.add_argument(
         "--allow-stale",
@@ -242,6 +257,7 @@ def main():
                     symbol,
                     spread_type=args.spread_type,
                     budget=args.budget,
+                    budget_frac=args.budget_frac,
                     expiry=args.expiry,
                     port=args.port,
                     account=args.account,

@@ -15,6 +15,34 @@ class TestMCPServerImport:
 
         assert mcp.name == "trading-skills"
 
+    def test_server_reports_package_version(self):
+        """Server advertises the installed package version to clients."""
+        from importlib.metadata import version as pkg_version
+
+        from mcp_server.server import mcp
+
+        expected = pkg_version("trading-skills")
+        assert expected
+        assert mcp.version == expected
+
+    def test_call_tool_wraps_result_as_json_content(self):
+        """Dispatch through the MCP layer, not the bare Python function.
+
+        Every other test here imports a tool function and calls it directly,
+        which skips result serialization entirely. This covers that path so a
+        change in how the SDK wraps return values cannot pass unnoticed.
+        """
+        import json
+
+        from mcp_server.server import mcp
+
+        result = asyncio.run(mcp.call_tool("get_version", {}))
+
+        assert result.is_error is False
+        assert result.content, "tool returned no content blocks"
+        payload = json.loads(result.content[0].text)
+        assert payload["version"]
+
     def test_all_tools_registered(self):
         """All expected tools are registered."""
         from mcp_server.server import mcp
@@ -245,19 +273,19 @@ class TestIBTools:
         """NDX/QQQ gate on VXN; other symbols on VIX (unit check, no IB needed)."""
         from trading_skills.broker.ema_vix import _vol_index_for
 
-        assert _vol_index_for("NDX") == ("VXN", "^VXN")
-        assert _vol_index_for("QQQ") == ("VXN", "^VXN")
-        assert _vol_index_for("SPX") == ("VIX", "^VIX")
-        assert _vol_index_for("AAPL") == ("VIX", "^VIX")
+        assert _vol_index_for("NDX") == "VXN"
+        assert _vol_index_for("QQQ") == "VXN"
+        assert _vol_index_for("SPX") == "VIX"
+        assert _vol_index_for("AAPL") == "VIX"
 
     def test_ib_0dte_ema_vix_per_index_default_threshold(self):
         """Default vol cutoff is per-index: VXN 35, VIX 20."""
         from trading_skills.broker.ema_vix import DEFAULT_THRESHOLD, _vol_index_for
 
-        assert DEFAULT_THRESHOLD[_vol_index_for("NDX")[0]] == 35.0
-        assert DEFAULT_THRESHOLD[_vol_index_for("QQQ")[0]] == 35.0
-        assert DEFAULT_THRESHOLD[_vol_index_for("SPX")[0]] == 20.0
-        assert DEFAULT_THRESHOLD[_vol_index_for("SPY")[0]] == 20.0
+        assert DEFAULT_THRESHOLD[_vol_index_for("NDX")] == 35.0
+        assert DEFAULT_THRESHOLD[_vol_index_for("QQQ")] == 35.0
+        assert DEFAULT_THRESHOLD[_vol_index_for("SPX")] == 20.0
+        assert DEFAULT_THRESHOLD[_vol_index_for("SPY")] == 20.0
 
     def test_ib_trades_history_forwards_flex_query_id_list(self):
         """A list of flex_query_ids must be forwarded unchanged so MCP clients

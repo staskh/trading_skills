@@ -13,9 +13,8 @@ Signal logic (default — bare EMA cross):
   4. EMA9 ≈ EMA21 (gap within ic_threshold%) AND ic_gate=True -> iron_condor.
 
 Two optional confirmation gates (both OFF by default):
-  rr_gate    Require both the 9:30 ET (13:30 UTC) and 10:00 ET (14:00 UTC) bars
-             to be red before taking a Bear Call (EMA-down). If not confirmed
-             -> no trade.
+  rr_gate    Require today's two most recently closed bars to be red
+             before taking a Bear Call (EMA-down). If not confirmed -> no trade.
   time_gate  Require today's 9:30 ET and 10:00 ET bars to exist (i.e. run at
              10:30 ET or later) and anchor the EMA-cross lookback to the 10:00
              ET bar. Without it, the lookback anchors to the latest available
@@ -33,13 +32,12 @@ CLI script (ema_vix_0dte.py) and the MCP server.
 
 import asyncio
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import yfinance as yf
 from ib_async import IB, Index, Stock
 
-from trading_skills.broker.zero_dte import find_0dte_spreads
+from trading_skills.broker.zero_dte import DEFAULT_BUDGET_FRAC, find_0dte_spreads
 from trading_skills.utils import generated_at_str
 
 UTC = ZoneInfo("UTC")
@@ -49,6 +47,7 @@ EMA_FAST = 9
 EMA_SLOW = 21
 BAR1_H, BAR1_M = 13, 30  # 9:30 ET
 BAR2_H, BAR2_M = 14, 0  # 10:00 ET
+BAR_SPAN = timedelta(minutes=30)  # the bar size these gates reason about
 
 # Index contracts: symbol -> (exchange, currency)
 INDEX_MAP = {
@@ -66,15 +65,13 @@ VXN_SYMBOLS = {"NDX", "NDXP", "QQQ", "MNX"}
 DEFAULT_THRESHOLD = {"VIX": 20.0, "VXN": 35.0}
 
 
-def _vol_index_for(symbol: str) -> tuple[str, str]:
-    """Return (ib_symbol, yfinance_ticker) for the vol gauge of `symbol`.
+def _vol_index_for(symbol: str) -> str:
+    """Return the IB symbol of the vol gauge for `symbol`.
 
     NDX/QQQ and friends use VXN (CBOE Nasdaq-100 Volatility Index); everything
     else uses VIX. Both trade as CBOE Index contracts.
     """
-    if symbol.upper() in VXN_SYMBOLS:
-        return "VXN", "^VXN"
-    return "VIX", "^VIX"
+    return "VXN" if symbol.upper() in VXN_SYMBOLS else "VIX"
 
 
 def _ema_series(closes: list[float], period: int) -> list[float | None]:
@@ -88,28 +85,75 @@ def _ema_series(closes: list[float], period: int) -> list[float | None]:
     return result
 
 
-def _vol_fallback(yf_ticker: str) -> float:
-    """Prior-day close of the vol index (VIX/VXN) from yfinance — fallback only."""
+def _bar_date(bar) -> date:
+    """The calendar date of a historical bar, whether it carries a date or datetime."""
+    raw = bar.date
+    return raw.date() if isinstance(raw, datetime) else raw
+
+
+async def _fetch_vol_index(ib, vol_symbol: str) -> tuple[float | None, float | None]:
+    """Return (intraday, prior_day_close) for the vol index, both from IB.
+
+    Either is None when IB gives no reading. The vol gate is the strategy's only
+    "stand down" check, so a stand-in number here would decide a live trade.
+    """
+    contract = Index(vol_symbol, "CBOE", "USD")
     try:
-        raw = yf.download(yf_ticker, period="5d", interval="1d", auto_adjust=True, progress=False)
-        if hasattr(raw.columns, "get_level_values"):
-            raw.columns = raw.columns.get_level_values(0)
-        series = raw["Close"].dropna()
-        if series.empty:
-            return 18.0
-        return float(series.iloc[-1])
+        await ib.qualifyContractsAsync(contract)
     except Exception:
-        return 18.0
+        return None, None
+
+    intraday = prior = None
+    try:
+        minute_bars = await ib.reqHistoricalDataAsync(
+            contract,
+            endDateTime="",
+            durationStr="1800 S",
+            barSizeSetting="1 min",
+            whatToShow="TRADES",
+            useRTH=False,
+            formatDate=2,
+            keepUpToDate=False,
+        )
+        if minute_bars:
+            intraday = float(minute_bars[-1].close)
+    except Exception:
+        pass
+
+    try:
+        daily_bars = await ib.reqHistoricalDataAsync(
+            contract,
+            endDateTime="",
+            durationStr="5 D",
+            barSizeSetting="1 day",
+            whatToShow="TRADES",
+            useRTH=True,
+            formatDate=2,
+            keepUpToDate=False,
+        )
+        # IB includes today's in-progress bar during RTH; the gate wants the close
+        # of the previous session, so drop anything dated today.
+        today_et = datetime.now(NY).date()
+        settled = [b for b in daily_bars if _bar_date(b) < today_et]
+        if settled:
+            prior = float(settled[-1].close)
+    except Exception:
+        pass
+
+    return intraday, prior
 
 
 async def _fetch_bars(
     symbol: str,
     vol_symbol: str,
-    vol_yf: str,
     port: int,
     client_id: int = 61,
-) -> tuple[list[dict], float, str]:
-    """Fetch 30-min RTH bars + live intraday vol index (VIX/VXN), one IB connection."""
+) -> tuple[list[dict], float | None, float | None, str]:
+    """Fetch 30-min RTH bars + both vol-index readings from IB, one connection.
+
+    Returns (bars, vix_intraday, vix_prior, vix_source). Everything comes from
+    IB: one decision must not be assembled from two books.
+    """
     ib = IB()
     try:
         await ib.connectAsync("127.0.0.1", port, clientId=client_id, readonly=True)
@@ -137,29 +181,11 @@ async def _fetch_bars(
             result.append({"dt": dt_utc, "open": b.open, "close": b.close})
         result.sort(key=lambda x: x["dt"])
 
-        # ── Live vol index (VIX/VXN): last 30 min of 1-min bars from IB ───
-        vix_val = _vol_fallback(vol_yf)
-        vix_source = "yfinance-fallback"
-        try:
-            vix_contract = Index(vol_symbol, "CBOE", "USD")
-            await ib.qualifyContractsAsync(vix_contract)
-            vix_bars = await ib.reqHistoricalDataAsync(
-                vix_contract,
-                endDateTime="",
-                durationStr="1800 S",
-                barSizeSetting="1 min",
-                whatToShow="TRADES",
-                useRTH=False,
-                formatDate=2,
-                keepUpToDate=False,
-            )
-            if vix_bars:
-                vix_val = float(vix_bars[-1].close)
-                vix_source = "ib-live"
-        except Exception:
-            pass  # yfinance fallback already set
+        # ── Vol index (VIX/VXN): intraday + prior-day close, both from IB ──
+        vix_intraday, vix_prior = await _fetch_vol_index(ib, vol_symbol)
+        vix_source = "ib" if (vix_intraday is not None or vix_prior is not None) else "unavailable"
 
-        return result, vix_val, vix_source
+        return result, vix_intraday, vix_prior, vix_source
     finally:
         ib.disconnect()
 
@@ -183,8 +209,9 @@ def _detect_signal(
     up → bull_put, down → bear_call — anchored to the latest available bar, so
     it runs at any time of day.
 
-    rr_gate=True:   an EMA-down only becomes a Bear Call if BOTH the 9:30 ET and
-                    10:00 ET bars are red (red→red); otherwise no trade.
+    rr_gate=True:   an EMA-down only becomes a Bear Call if today's two most
+                    recently CLOSED bars are both red (red→red); otherwise no
+                    trade. Reads current momentum, whenever the run happens.
     time_gate=True: require today's 9:30 ET and 10:00 ET bars to exist (run at
                     10:30 ET or later) and anchor the EMA-cross lookback to the
                     10:00 ET bar.
@@ -208,6 +235,14 @@ def _detect_signal(
         by_date[b["dt"].astimezone(NY).date()].append(b)
 
     today_bars = by_date.get(today_et, [])
+
+    # Red->red confirmation reads today's two most recently CLOSED bars, so it
+    # reflects momentum at the moment of the run. bar1/bar2 below stay pinned to
+    # 9:30/10:00 because the time gate's job is a fixed morning anchor.
+    now_utc = datetime.now(NY).astimezone(UTC)
+    closed_today = [b for b in today_bars if b["dt"] + BAR_SPAN <= now_utc]
+    rr_bars = closed_today[-2:]
+
     bar1 = next(
         (b for b in today_bars if b["dt"].hour == BAR1_H and b["dt"].minute == BAR1_M), None
     )
@@ -277,32 +312,34 @@ def _detect_signal(
     if not rr_gate:
         return "bear_call", "EMA-Dn", None, ema_gap_pct
 
-    # rr_gate on: need both morning bars present and both red.
-    if not bar1 or not bar2:
+    # rr_gate on: need two closed bars today, and both red.
+    if len(rr_bars) < 2:
         return (
             None,
             "missing-bars-rr",
             (
-                "rr_gate needs today's 9:30 ET and 10:00 ET bars — "
-                f"found bar1={'yes' if bar1 else 'no'}, bar2={'yes' if bar2 else 'no'}. "
-                "Run at 10:30 ET or later."
+                f"rr_gate needs two closed bars today — found {len(rr_bars)}. "
+                "Wait for the session to print another bar."
             ),
             ema_gap_pct,
         )
 
-    b1_red = bar1["close"] < bar1["open"]
-    b2_red = bar2["close"] < bar2["open"]
+    b1, b2 = rr_bars
+    b1_red = b1["close"] < b1["open"]
+    b2_red = b2["close"] < b2["open"]
     if b1_red and b2_red:
         return "bear_call", "EMA-Dn+RR", None, ema_gap_pct
 
     b1_str = "red" if b1_red else "green"
     b2_str = "red" if b2_red else "green"
+    b1_et = b1["dt"].astimezone(NY).strftime("%H:%M")
+    b2_et = b2["dt"].astimezone(NY).strftime("%H:%M")
     return (
         None,
         "EMA-Dn-no-RR",
         (
             f"EMA crossed down but R->R not confirmed "
-            f"(9:30 bar={b1_str}, 10:00 bar={b2_str}) — skip Bear Call"
+            f"({b1_et} bar={b1_str}, {b2_et} bar={b2_str}) — skip Bear Call"
         ),
         ema_gap_pct,
     )
@@ -311,7 +348,8 @@ def _detect_signal(
 async def run_ema_vix_strategy(
     symbol: str,
     *,
-    budget: float = 50_000.0,
+    budget: float | None = None,
+    budget_frac: float = DEFAULT_BUDGET_FRAC,
     port: int = 7496,
     vix_threshold: float | None = None,
     target_delta: float | None = None,
@@ -351,15 +389,15 @@ async def run_ema_vix_strategy(
     Returns a dict with success=False and a reason when any gate blocks the trade.
     """
     symbol = symbol.upper()
-    vol_symbol, vol_yf = _vol_index_for(symbol)
+    vol_symbol = _vol_index_for(symbol)
     # Per-index default cutoff (VXN 35 / VIX 20) unless explicitly overridden.
     if vix_threshold is None:
         vix_threshold = DEFAULT_THRESHOLD[vol_symbol]
 
     # ── 1. Fetch bars + live intraday vol index from IB (single connection) ─
     try:
-        bars, vix_intraday, vix_source = await _fetch_bars(
-            symbol, vol_symbol, vol_yf, port=port, client_id=client_id
+        bars, vix_intraday, vix_prior, vix_source = await _fetch_bars(
+            symbol, vol_symbol, port=port, client_id=client_id
         )
     except (ConnectionRefusedError, OSError, TimeoutError, asyncio.TimeoutError) as exc:
         return {
@@ -380,7 +418,32 @@ async def run_ema_vix_strategy(
     # continuity) must be below the threshold. A market recovering from a
     # high-vol close is still fragile — the prior-day gate blocks those days.
     # NDX/QQQ gate on VXN; everything else on VIX.
-    vix_prior = _vol_fallback(vol_yf)
+    if vix_intraday is None or vix_prior is None:
+        missing = [
+            name
+            for name, value in (("intraday", vix_intraday), ("prior-day", vix_prior))
+            if value is None
+        ]
+        return {
+            "success": False,
+            "symbol": symbol,
+            "strategy": "ema_vix",
+            "vol_index": vol_symbol,
+            "vix_intraday": round(vix_intraday, 2) if vix_intraday is not None else None,
+            "vix_prior": round(vix_prior, 2) if vix_prior is not None else None,
+            "vix": None,
+            "vix_source": vix_source,
+            "vix_threshold": vix_threshold,
+            "signal": "VOL-UNAVAILABLE",
+            "spread_type": None,
+            "reason": (
+                f"No {' and '.join(missing)} {vol_symbol} reading — "
+                "cannot clear the vol gate, so no trade"
+            ),
+            "generated_at": generated_at_str(),
+            "data_delay": "real-time",
+        }
+
     vix_val = max(vix_intraday, vix_prior)
     skip_vix = vix_intraday >= vix_threshold or vix_prior >= vix_threshold
     if skip_vix:
@@ -435,6 +498,7 @@ async def run_ema_vix_strategy(
         symbol,
         spread_type=spread_type,
         budget=budget,
+        budget_frac=budget_frac,
         expiry=expiry,
         port=port,
         account=account,

@@ -3,10 +3,12 @@
 
 import asyncio
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
 from trading_skills.black_scholes import black_scholes_price
+from trading_skills.broker import zero_dte
 from trading_skills.broker.zero_dte import (
     NY,
     _maybe_execute,
@@ -21,9 +23,15 @@ from trading_skills.broker.zero_dte import (
     get_0dte_expiries,
     pop_short,
     rank_candidates,
+    resolve_budget,
     resolve_entry_delta,
     resolve_underlying,
 )
+
+
+async def _no_sleep(_seconds):
+    """Collapse the tick-settling waits so tests do not sit idle."""
+    return None
 
 
 def _opt(strike, mid, delta=None, iv=None, right="C"):
@@ -733,6 +741,73 @@ class TestDuplicateGuard:
 
 
 # --------------------------------------------------------------------------- #
+# Chain-side fetching
+# --------------------------------------------------------------------------- #
+class TestFetchChainSides:
+    """Streaming both sides at once exceeds IB's market-data line limit, so one
+    side returns without greeks and every candidate is filtered out. The sides
+    must be streamed one after the other."""
+
+    @staticmethod
+    def _instrumented():
+        state = {"in_flight": 0, "peak": 0, "rights": []}
+
+        async def fake_fetch_side(ib, symbol, expiry, strikes, right, *args, **kwargs):
+            state["in_flight"] += 1
+            state["peak"] = max(state["peak"], state["in_flight"])
+            state["rights"].append(right)
+            await asyncio.sleep(0)  # yield: concurrent sides would interleave here
+            state["in_flight"] -= 1
+            return [{"strike": strikes[0], "right": right}]
+
+        return state, fake_fetch_side
+
+    def _run(self, monkeypatch, *, need_calls, need_puts):
+        state, fake = self._instrumented()
+        monkeypatch.setattr(zero_dte, "_fetch_side", fake)
+        calls, puts = asyncio.run(
+            zero_dte._fetch_chain_sides(
+                None,
+                "SPX",
+                "20260911",
+                [7600.0],
+                "CBOE",
+                "SPXW",
+                7650.0,
+                0.001,
+                0.04,
+                False,
+                need_calls=need_calls,
+                need_puts=need_puts,
+                want_oi=False,
+            )
+        )
+        return state, calls, puts
+
+    def test_both_sides_stream_one_at_a_time(self, monkeypatch):
+        state, _, _ = self._run(monkeypatch, need_calls=True, need_puts=True)
+        assert state["peak"] == 1
+
+    def test_both_sides_land_on_the_right_legs(self, monkeypatch):
+        state, calls, puts = self._run(monkeypatch, need_calls=True, need_puts=True)
+        assert state["rights"] == ["C", "P"]
+        assert [o["right"] for o in calls] == ["C"]
+        assert [o["right"] for o in puts] == ["P"]
+
+    def test_calls_only(self, monkeypatch):
+        state, calls, puts = self._run(monkeypatch, need_calls=True, need_puts=False)
+        assert state["rights"] == ["C"]
+        assert [o["right"] for o in calls] == ["C"]
+        assert puts == []
+
+    def test_puts_only(self, monkeypatch):
+        state, calls, puts = self._run(monkeypatch, need_calls=False, need_puts=True)
+        assert state["rights"] == ["P"]
+        assert calls == []
+        assert [o["right"] for o in puts] == ["P"]
+
+
+# --------------------------------------------------------------------------- #
 # Live IB integration (manual — requires TWS/Gateway on 7496)
 # --------------------------------------------------------------------------- #
 @pytest.mark.manual
@@ -757,3 +832,209 @@ class TestLiveIB:
         result = asyncio.run(find_0dte_spreads("SPX", spread_type="bear_call", account="U0000000"))
         assert result["success"] is False
         assert "not found" in result["error"]
+
+
+class TestResolveBudget:
+    """Budget sizing from the account's live margin cushion."""
+
+    def test_explicit_budget_wins(self):
+        """An explicit --budget is never overridden by the account cushion."""
+        r = resolve_budget(50_000.0, 210_000.0, 0.5, account="U1")
+        assert r["budget"] == 50_000.0
+        assert r["budget_source"] == "explicit"
+        assert r["error"] is None
+
+    def test_explicit_zero_is_respected(self):
+        """0 is a real budget, not 'unset' — must not fall through to auto-sizing."""
+        r = resolve_budget(0.0, 210_000.0, 0.5, account="U1")
+        assert r["budget"] == 0.0
+        assert r["budget_source"] == "explicit"
+
+    def test_auto_sizes_to_half_excess_liquidity(self):
+        r = resolve_budget(None, 210_000.0, account="U1")
+        assert r["budget"] == 105_000.0
+        assert r["budget_source"] == "excess_liquidity"
+        assert r["excess_liquidity"] == 210_000.0
+        assert r["error"] is None
+
+    def test_custom_fraction(self):
+        r = resolve_budget(None, 210_000.0, 0.25, account="U1")
+        assert r["budget"] == 52_500.0
+        assert r["budget_frac"] == 0.25
+
+    def test_full_cushion_allowed_explicitly(self):
+        r = resolve_budget(None, 100_000.0, 1.0, account="U1")
+        assert r["budget"] == 100_000.0
+
+    @pytest.mark.parametrize("frac", [0, -0.5, 1.5])
+    def test_invalid_fraction_errors(self, frac):
+        r = resolve_budget(None, 210_000.0, frac, account="U1")
+        assert r["budget"] is None
+        assert "budget_frac" in r["error"]
+
+    def test_no_account_on_multi_account_login_errors(self):
+        """Margin doesn't cross accounts, so we must never guess which one funds it."""
+        r = resolve_budget(None, None, account=None, managed=["U1", "U2", "U3"])
+        assert r["budget"] is None
+        assert "manages 3 accounts" in r["error"]
+        assert "--account" in r["error"]
+
+    def test_unreadable_cushion_errors_rather_than_defaulting(self):
+        r = resolve_budget(None, None, account="U1")
+        assert r["budget"] is None
+        assert "ExcessLiquidity" in r["error"]
+        assert "--budget" in r["error"]
+
+    @pytest.mark.parametrize("cushion", [0.0, -5_000.0])
+    def test_no_cushion_refuses_to_size(self, cushion):
+        """Zero/negative excess liquidity is auto-liquidation territory — refuse."""
+        r = resolve_budget(None, cushion, account="U1")
+        assert r["budget"] is None
+        assert "no margin cushion" in r["error"]
+
+
+# --------------------------------------------------------------------------- #
+# Quote + open-interest fetching
+# --------------------------------------------------------------------------- #
+class _QuoteIB:
+    """Records every market-data subscription so the passes can be counted."""
+
+    def __init__(self, oi=1234, call_oi=None, put_oi=None):
+        self.requests = []  # (conId, genericTickList)
+        self.cancelled = []
+        self.oi = oi
+        self.call_oi = call_oi if call_oi is not None else oi
+        self.put_oi = put_oi if put_oi is not None else oi
+        self.peak = 0
+        self.live = 0
+
+    async def qualifyContractsAsync(self, *contracts):
+        for i, c in enumerate(contracts, 1):
+            c.conId = i
+        return list(contracts)
+
+    def reqMktData(self, contract, genericTickList="", snapshot=False, *a, **kw):
+        self.requests.append((contract.conId, genericTickList))
+        self.live += 1
+        self.peak = max(self.peak, self.live)
+        greeks = SimpleNamespace(delta=-0.1, gamma=0.002, impliedVol=0.17, vega=1.0, theta=-1.0)
+        return SimpleNamespace(
+            contract=contract,
+            bid=1.0,
+            ask=1.1,
+            last=1.05,
+            close=1.05,
+            volume=50,
+            callOpenInterest=self.call_oi,
+            putOpenInterest=self.put_oi,
+            modelGreeks=greeks,
+        )
+
+    def cancelMktData(self, contract):
+        self.live -= 1
+        self.cancelled.append(contract.conId)
+
+
+class TestFetchSideOpenInterest:
+    """Open interest rides along with the quote rather than costing a second pass."""
+
+    def _fetch(self, ib, want_oi):
+        return asyncio.run(
+            zero_dte._fetch_side(
+                ib,
+                "SPX",
+                "20260912",
+                [7600.0, 7610.0],
+                "P",
+                "CBOE",
+                "SPXW",
+                7650.0,
+                0.001,
+                0.04,
+                False,
+                want_oi=want_oi,
+            )
+        )
+
+    def test_open_interest_needs_no_extra_subscription(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        ib = _QuoteIB()
+        legs = self._fetch(ib, want_oi=True)
+        assert len(ib.requests) == 2  # one per contract, not two per contract
+        assert [leg["open_interest"] for leg in legs] == [1234, 1234]
+
+    def test_open_interest_tick_is_requested_on_the_quote(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        ib = _QuoteIB()
+        self._fetch(ib, want_oi=True)
+        assert all("101" in generic for _, generic in ib.requests)
+
+    def test_quotes_and_greeks_still_arrive(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        legs = self._fetch(_QuoteIB(), want_oi=True)
+        assert [leg["bid"] for leg in legs] == [1.0, 1.0]
+        assert all(leg["delta"] is not None and leg["iv"] is not None for leg in legs)
+
+    def test_subscriptions_are_cancelled(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        ib = _QuoteIB()
+        self._fetch(ib, want_oi=True)
+        assert sorted(ib.cancelled) == [1, 2]
+
+    def test_without_oi_the_tick_is_not_requested(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        ib = _QuoteIB()
+        legs = self._fetch(ib, want_oi=False)
+        assert all(generic == "" for _, generic in ib.requests)
+        assert all(leg["open_interest"] is None for leg in legs)
+
+    def test_reads_the_side_matching_the_right(self, monkeypatch):
+        """Calls take callOpenInterest, puts take putOpenInterest."""
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        ib = _QuoteIB(call_oi=4200, put_oi=3100)
+        assert [leg["open_interest"] for leg in self._fetch(ib, want_oi=True)] == [3100, 3100]
+        calls = asyncio.run(
+            zero_dte._fetch_side(
+                ib,
+                "SPX",
+                "20260912",
+                [7700.0],
+                "C",
+                "CBOE",
+                "SPXW",
+                7650.0,
+                0.001,
+                0.04,
+                False,
+                want_oi=True,
+            )
+        )
+        assert [leg["open_interest"] for leg in calls] == [4200]
+
+    def test_nan_open_interest_is_omitted(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        legs = self._fetch(_QuoteIB(oi=float("nan")), want_oi=True)
+        assert all(leg["open_interest"] is None for leg in legs)
+
+    def test_never_holds_more_than_a_batch_of_lines(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        ib = _QuoteIB()
+        strikes = [7000.0 + i for i in range(100)]
+        asyncio.run(
+            zero_dte._fetch_side(
+                ib,
+                "SPX",
+                "20260912",
+                strikes,
+                "P",
+                "CBOE",
+                "SPXW",
+                7650.0,
+                0.001,
+                0.04,
+                False,
+                want_oi=True,
+            )
+        )
+        assert ib.peak <= zero_dte._QUOTE_BATCH
+        assert ib.live == 0  # everything released

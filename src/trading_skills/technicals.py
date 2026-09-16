@@ -58,6 +58,19 @@ def macd_columns(macd_df: pd.DataFrame) -> tuple[str, str, str]:
     return line, hist, signal
 
 
+def adx_columns(adx_df: pd.DataFrame) -> tuple[str, str, str]:
+    """Return the (adx, +di, -di) column labels of a pandas-ta adx() frame.
+
+    pandas-ta names them ADX_, ADXR_, DMP_, DMN_ and places ADXR between the
+    ADX and DMP columns. Selecting by name avoids depending on positional
+    order, and the ADXR_ guard keeps the ADX_ prefix match from claiming it.
+    """
+    adx = next(c for c in adx_df.columns if c.startswith("ADX_") and not c.startswith("ADXR_"))
+    dmp = next(c for c in adx_df.columns if c.startswith("DMP_"))
+    dmn = next(c for c in adx_df.columns if c.startswith("DMN_"))
+    return adx, dmp, dmn
+
+
 def detect_macd_crossover(macd_df: pd.DataFrame) -> dict | None:
     """Find the most recent MACD crossover in a pandas-ta macd() DataFrame.
 
@@ -192,9 +205,10 @@ def compute_raw_indicators(df: pd.DataFrame) -> dict:
     if "High" in df.columns and "Low" in df.columns:
         adx = ta.adx(df["High"], df["Low"], close, length=14)
         if adx is not None and len(adx) > 0:
-            adx_val = adx.iloc[-1, 0]
-            dmp_val = adx.iloc[-1, 1]
-            dmn_val = adx.iloc[-1, 2]
+            adx_col, dmp_col, dmn_col = adx_columns(adx)
+            adx_val = adx[adx_col].iloc[-1]
+            dmp_val = adx[dmp_col].iloc[-1]
+            dmn_val = adx[dmn_col].iloc[-1]
             if pd.notna(adx_val):
                 result["adx"] = float(adx_val)
             if pd.notna(dmp_val):

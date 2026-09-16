@@ -12,9 +12,8 @@ Signal logic (default — bare EMA cross):
   4. (With --ic-gate) EMA9/EMA21 gap within --ic-threshold% at ref bar → iron_condor.
 
 Two optional confirmation gates (both OFF by default; opt in per run):
-  --rr-gate    Require both the 9:30 ET (13:30 UTC) and 10:00 ET (14:00 UTC)
-               bars to be red before taking a Bear Call (EMA-down). If not
-               confirmed → no trade.
+  --rr-gate    Require today's two most recently closed bars to be red before
+               taking a Bear Call (EMA-down). If not confirmed → no trade.
   --time-gate  Require today's 9:30 ET and 10:00 ET bars to exist (i.e. run at
                10:30 ET or later) and anchor the EMA-cross lookback to the
                10:00 ET bar. Without it, the lookback anchors to the latest
@@ -48,6 +47,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from trading_skills.broker.ema_vix import run_ema_vix_strategy
+from trading_skills.broker.zero_dte import DEFAULT_BUDGET_FRAC
 from trading_skills.utils import generated_at_str
 
 NY = ZoneInfo("America/New_York")
@@ -95,7 +95,7 @@ def main():
     parser.add_argument(
         "--rr-gate",
         action="store_true",
-        help="Require red→red (9:30 + 10:00 ET bars both red) to confirm a Bear "
+        help="Require red→red (today's two most recently closed bars both red) to confirm a Bear "
         "Call on an EMA-down signal (default: off)",
     )
     parser.add_argument(
@@ -118,7 +118,24 @@ def main():
     )
 
     # Pass-through to find_0dte_spreads (same flags as zero_dte.py)
-    parser.add_argument("--budget", type=float, default=50_000.0)
+    parser.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        help=(
+            "Max capital at risk in dollars. Default: sized live from the account's "
+            "excess liquidity x --budget-frac (needs --account on multi-account logins)"
+        ),
+    )
+    parser.add_argument(
+        "--budget-frac",
+        type=float,
+        default=DEFAULT_BUDGET_FRAC,
+        help=(
+            "Fraction of excess liquidity to deploy when auto-sizing the budget "
+            f"(default: {DEFAULT_BUDGET_FRAC}). Ignored when --budget is given"
+        ),
+    )
     parser.add_argument("--expiry", default=None)
     parser.add_argument("--top", type=int, default=5)
     parser.add_argument("--min-pop", type=float, default=0.0)
@@ -156,6 +173,7 @@ def main():
         run_ema_vix_strategy(
             args.symbol,
             budget=args.budget,
+            budget_frac=args.budget_frac,
             port=args.port,
             vix_threshold=args.vix_threshold,
             target_delta=args.target_delta,
