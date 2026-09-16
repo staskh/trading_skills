@@ -557,9 +557,10 @@ class TestAnalyzePortfolio:
     @patch(f"{MODULE}.fetch_technicals")
     @patch(f"{MODULE}.fetch_earnings_date")
     def test_earnings_calendar_has_timing(self, mock_earnings, mock_technicals):
+        future_earnings = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
         mock_earnings.return_value = {
             "symbol": "AAPL",
-            "earnings_date": "2026-09-01",
+            "earnings_date": future_earnings,
             "earnings_timing": "AMC",
         }
         mock_technicals.return_value = {"symbol": "AAPL", "trend": "bullish"}
