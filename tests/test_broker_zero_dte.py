@@ -166,6 +166,56 @@ class TestEventGuidanceLive:
         assert e["source"] == "nasdaq"
         assert e["warnings"] == []
 
+    def test_already_released_events_not_warned(self):
+        # Events with a non-null `actual` have already printed — must not appear
+        # in high_impact_today or warnings, even if impact == "high".
+        released = [
+            {
+                "event": "Fed Interest Rate Decision",
+                "time_et": "14:00 ET",
+                "impact": "high",
+                "actual": "4.00%",  # already released
+                "consensus": "4.00%",
+                "previous": "3.75%",
+            },
+            {
+                "event": "Core Retail Sales",
+                "time_et": "08:30 ET",
+                "impact": "high",
+                "actual": "1.4%",  # already released
+                "consensus": "0.6%",
+                "previous": "-0.2%",
+            },
+        ]
+        e = event_guidance(_wk(9, 40), "index", live_events=released)
+        assert e["high_impact_today"] == []
+        assert e["warnings"] == []
+        assert e["near_release_window"] is False
+
+    def test_mixed_released_and_pending_only_warns_pending(self):
+        events = [
+            {
+                "event": "Fed Interest Rate Decision",
+                "time_et": "14:00 ET",
+                "impact": "high",
+                "actual": "4.00%",  # already released
+                "consensus": "4.00%",
+                "previous": "3.75%",
+            },
+            {
+                "event": "FOMC Press Conference",
+                "time_et": "14:30 ET",
+                "impact": "high",
+                "actual": None,  # still pending
+                "consensus": None,
+                "previous": None,
+            },
+        ]
+        e = event_guidance(_wk(9, 40), "index", live_events=events)
+        assert e["high_impact_today"] == ["FOMC Press Conference"]
+        assert any("FOMC Press Conference" in w for w in e["warnings"])
+        assert not any("Fed Interest Rate Decision" in w for w in e["warnings"])
+
 
 # --------------------------------------------------------------------------- #
 # Quote resolution / --allow-stale gating

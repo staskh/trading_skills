@@ -311,7 +311,9 @@ def event_guidance(now: datetime, asset_type: str, live_events: list[dict] | Non
     hm = now.hour * 60 + now.minute
 
     if live_events is not None:
-        high = [e for e in live_events if e["impact"] == "high"]
+        # Events with a non-null `actual` have already been released — skip them.
+        pending = [e for e in live_events if not e.get("actual")]
+        high = [e for e in pending if e["impact"] == "high"]
         warnings = []
         for e in high:
             when = f" at {e['time_et']}" if e["time_et"] else ""
@@ -319,7 +321,7 @@ def event_guidance(now: datetime, asset_type: str, live_events: list[dict] | Non
         # Anything (any impact) landing within the next ~30 min is imminent.
         imminent = [
             e
-            for e in live_events
+            for e in pending
             if (m := _minutes_from_et(e["time_et"])) is not None and hm <= m <= hm + 30
         ]
         for e in imminent:
