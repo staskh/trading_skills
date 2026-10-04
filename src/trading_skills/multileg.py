@@ -595,7 +595,7 @@ def build_strategy(name: str, chain: Chain, cfg: dict, is_equity: bool = True) -
             continue
         a = analyze(legs, chain)
         a["_straddle"] = straddle
-        checks = validate(name, scfg, legs, a, is_equity)
+        checks = {k: bool(v) for k, v in validate(name, scfg, legs, a, is_equity).items()}
         a.pop("_straddle")
         passed = all(checks.values())
         score = sum(checks.values())

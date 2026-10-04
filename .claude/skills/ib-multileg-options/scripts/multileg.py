@@ -58,7 +58,10 @@ def main():
         print(json.dumps(result))
         sys.exit(1)
     result["generated_at"] = generated_at_str()
-    result["data_delay"] = "real-time if subscribed, else 15min delayed"
+    if result.get("stale_quotes"):
+        result["data_delay"] = "stalled - using yesterday's data"
+    else:
+        result["data_delay"] = "real-time if subscribed, else 15min delayed"
     print(json.dumps(result, indent=2, default=float))
 
 

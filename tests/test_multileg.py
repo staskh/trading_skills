@@ -158,6 +158,11 @@ class TestBuilders:
             assert out["analysis"]["upside_pl_at_expiry"] >= -0.01
             assert out["analysis"]["pop"] >= 0.85
 
+    def test_checks_are_plain_bools(self, cfg):
+        for name in BUILDERS:
+            out = build_strategy(name, make_chain(), cfg, is_equity=False)
+            assert all(type(v) is bool for v in out.get("checks", {}).values()), name
+
     def test_dn_fly_equal_wings(self, cfg):
         out = build_strategy("dn_fly", make_chain(), cfg)
         k = [lg.opt.strike for lg in out["legs"]]

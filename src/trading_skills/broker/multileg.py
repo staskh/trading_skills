@@ -102,7 +102,7 @@ def _strike_window(strikes, spot, iv, t, max_per_right):
     return sel
 
 
-async def _quotes(ib, symbol, expiry, tclass, strikes, spot, t, r) -> list[Opt]:
+async def _quotes(ib, symbol, expiry, tclass, strikes, spot, t, r, stale: list) -> list[Opt]:
     contracts = [
         Option(symbol, expiry, k, right, "SMART", tradingClass=tclass, currency="USD")
         for k in strikes
@@ -127,6 +127,10 @@ async def _quotes(ib, symbol, expiry, tclass, strikes, spot, t, r) -> list[Opt]:
             c = tk.contract
             bid = tk.bid if tk.bid and tk.bid > 0 else None
             ask = tk.ask if tk.ask and tk.ask > 0 else None
+            if bid is None and ask is None and tk.close and tk.close > 0:
+                # Market closed: IB only returns the prior close; use it as a zero-width quote
+                bid = ask = tk.close
+                stale.append(c.conId)
             g = tk.modelGreeks
             delta = g.delta if g and g.delta is not None and not math.isnan(g.delta) else None
             iv = g.impliedVol if g and g.impliedVol and not math.isnan(g.impliedVol) else None
@@ -171,14 +175,17 @@ async def propose_trades(
             if not q or q[0] is None or not und.conId:
                 return {"success": False, "error": f"Unknown symbol: {symbol}"}
 
-            spot = await _spot(ib, und)
-            if not spot:
-                return {"success": False, "error": f"No price for {symbol}"}
-
             bars, iv_bars = await asyncio.gather(
                 _history(ib, und, "TRADES"), _history(ib, und, "OPTION_IMPLIED_VOLATILITY")
             )
             iv_series = [b.close for b in iv_bars]
+
+            spot = await _spot(ib, und)
+            spot_from_close = False
+            if not spot and bars:  # market closed / no live tick: use last daily close
+                spot, spot_from_close = bars[-1].close, True
+            if not spot:
+                return {"success": False, "error": f"No price for {symbol}"}
 
             emap = await _expiry_map(ib, und)
             if not emap:
@@ -192,14 +199,15 @@ async def propose_trades(
             t = max(dte, 1 / 24) / 365
             est_iv = iv_series[-1] if iv_series else 0.25
             strikes = _strike_window(emap[exp]["strikes"], spot, est_iv, t, max_strikes)
+            stale = []
             opts = await _quotes(
-                ib, symbol, exp, emap[exp]["trading_class"], strikes, spot, t, rate
+                ib, symbol, exp, emap[exp]["trading_class"], strikes, spot, t, rate, stale
             )
     except ConnectionError as e:
         return {"success": False, "error": str(e)}
 
     chain = Chain(opts, spot, t, rate)
-    return assemble_proposal(
+    result = assemble_proposal(
         symbol,
         chain,
         bars=bars,
@@ -214,6 +222,16 @@ async def propose_trades(
         account_value=account_value,
         include_disabled=include_disabled,
     )
+    if result.get("success"):
+        if spot_from_close:
+            result["warnings"].append("no live underlying tick; spot is the last daily close")
+        if stale:
+            result["warnings"].append(
+                f"{len(stale)} option quotes had no bid/ask (market closed?); used prior close "
+                "as mid with Black-Scholes IV/delta. Liquidity checks are not meaningful."
+            )
+        result["stale_quotes"] = len(stale)
+    return result
 
 
 def assemble_proposal(
@@ -332,6 +350,9 @@ async def mark_positions(positions: list[dict], port: int = 7496) -> dict:
                 und = underlying_contract(sym)
                 await fetch_with_timeout(ib.qualifyContractsAsync(und), timeout=15, default=[])
                 spots[sym] = await _spot(ib, und)
+                if not spots[sym]:  # market closed: fall back to last daily close
+                    bars = await _history(ib, und, "TRADES")
+                    spots[sym] = bars[-1].close if bars else None
 
             contracts, seen = [], set()
             for p in positions:
