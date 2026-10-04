@@ -70,6 +70,7 @@ CLIENT_IDS = {
     "delta_exposure": 10,
     "options_expiries": 20,
     "options_chain": 21,
+    "multileg": 22,
     "roll": 30,
     "stop_loss": 14,
     "trailing_stop": 15,

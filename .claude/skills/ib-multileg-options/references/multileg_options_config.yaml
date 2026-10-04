@@ -1,0 +1,178 @@
+# Multi-leg options strategy config. Spec: multileg_options_algorithm.md
+# Deltas are absolute values and approximate: search nearby strikes until validation passes.
+# Tags: [C] = from course PDFs, [A] = assumption to tune.
+
+universe:
+  index: [SPX, RUT, NDX]
+  etf: [SPY, QQQ, IWM, DIA]
+  stocks: [AAPL, ADBE, BA, BIIB, BKNG, CMG, COST, GOOG, GS, AMZN, HD, LMT, MA, MCD, NFLX, SHOP, TSLA, ULTA, UNH, ROKU]
+  futures: [/ES, /NQ, /ZB, /ZN, /CL, /NG, /GC, /6E, /6B, /ZS, /ZW, /ZC]   # Iron Duck only
+  liquidity:
+    min_open_interest: 100          # [C]
+    max_leg_spread_pct_mid: 5       # [A]
+    max_combo_spread_pct_mid: 10    # [A]
+    min_stock_price: 200            # [C]
+    min_stock_price_earnings: 100   # [C]
+
+regime:                             # all [A]
+  direction: {fast_ema: 20, slow_ema: 50, neutral_atr_band: 1.0}
+  ivr_high: 50
+  ivr_low: 25
+  iv_flat_band_pct: 2
+  call_rich_skew: {call_delta: 0.25, put_delta: 0.25}   # CALL_RICH if call IV > put IV
+
+strike_search:                      # [A]
+  max_attempts: 6                   # move wings ±1 strike, then shorts ±1 strike
+
+strategies:
+  # ---------- credit, no adjustments ----------
+  iron_duck:                        # [C]
+    legs:
+      - {action: sell, type: call, delta: 0.65}
+      - {action: buy,  type: call, offset_strikes: 1}       # 1 strike above short call
+      - {action: sell, type: put,  delta: 0.15}
+      - {action: buy,  type: put,  delta: 0.10}
+    dte: {index: [1, 21], futures: [7, 21], earnings: nearest_weekly_or_monthly_lt_21}
+    validate: {min_pop: 0.85, no_upside_risk: true, loss_at_be_le_credit: true, min_credit_equity: 1.00}
+    exit: {stop_loss_pct_credit: 100, hard_stop_order: false, hold_to_expiry: allowed}
+    adjustments: false
+
+  reverse_iron_duck:                # [C] layout from /GC slide; deltas [A]
+    enabled_when: CALL_RICH
+    legs:
+      - {action: sell, type: put,  delta: 0.65}
+      - {action: buy,  type: put,  offset_strikes: -1}      # 1 strike below short put
+      - {action: sell, type: call, delta: 0.15}
+      - {action: buy,  type: call, delta: 0.10}
+    dte: [7, 21]
+    validate: {min_pop: 0.85, no_downside_risk: true, loss_at_be_le_credit: true}
+    exit: {stop_loss_pct_credit: 100, hard_stop_order: false}
+    adjustments: false
+
+  bw_iron_butterfly:                # [C] layout from SPY slide; deltas [A]
+    legs:
+      - {action: sell, type: call, delta: 0.58, strike_ref: body}   # body just below spot (call slightly ITM)
+      - {action: sell, type: put,  strike: body}
+      - {action: buy,  type: call, width_rule: credit_ge_width}     # narrow call wing
+      - {action: buy,  type: put,  width_mult_of_call_wing: 2.5}    # ~10-15 delta
+    dte: [7, 21]
+    validate: {min_pop: 0.65, no_upside_risk: true}                 # [A] slide example showed ~81%
+    exit: {stop_loss_pct_credit: 50, hard_stop_order: false}        # [C]
+    adjustments: false
+
+  jade_lizard:                      # [C] layout from SPX slide
+    enabled: false                  # undefined risk; fails loss_at_be_le_credit
+    legs:
+      - {action: sell, type: call, delta: 0.65}
+      - {action: buy,  type: call, offset_strikes: 1}
+      - {action: sell, type: put,  delta: 0.15}
+    validate: {credit_gt_call_width: true}
+
+  # ---------- butterfly family (enter only when IV trend is FLAT or EXPANDING) [C] ----------
+  dn_fly:
+    legs:
+      - {action: sell, qty: 2, type: call_or_put, delta: 0.50}       # [C]
+      - {action: buy,  type: call, delta: 0.25}                      # upper wing [A]
+      - {action: buy,  type: same, mirror_distance: true}            # equal distance below [C]
+    width_check_x_straddle: [0.75, 1.5]                              # [A]
+    dte: [7, 21]                                                     # [A]; course allows any cycle
+    exit: {pt_pct_debit: [20, 30], stop_pct_debit: 75, exit_dte: 1}  # [C]
+
+  bull_fly:
+    legs:
+      - {action: sell, qty: 2, type: call, delta: 0.30}              # [C]
+      - {action: buy,  type: call, delta: 0.45}                      # inner wing [A]
+      - {action: buy,  type: call, mirror_distance: true}            # equal distance above [C]
+    dte: [7, 21]
+    exit: {pt_pct_debit: [20, 30], stop_pct_debit: 75, exit_dte: 1}
+
+  bear_fly:
+    legs:
+      - {action: sell, qty: 2, type: put, delta: 0.30}               # [C]
+      - {action: buy,  type: put, delta: 0.45}                       # inner wing [A]
+      - {action: buy,  type: put, mirror_distance: true}             # equal distance below [C]
+    dte: [7, 21]
+    exit: {pt_pct_debit: [20, 30], stop_pct_debit: 75, exit_dte: 1}
+
+  bull_bwb:                         # [A]
+    legs:
+      - {action: sell, qty: 2, type: call, delta: 0.30}
+      - {action: buy,  type: call, delta: 0.45}                      # near wing
+      - {action: buy,  type: call, far_wing_mult: [1.5, 2.0]}        # ~10 delta
+    entry_price: {max_debit_pct_near_width: 10, credit_ok: true}
+    dte: [7, 21]
+    exit: {pt_pct_max_profit: [20, 30], stop_pct_max_risk: 75, exit_dte: 1}
+
+  bear_bwb:                         # [A]
+    legs:
+      - {action: sell, qty: 2, type: put, delta: 0.30}
+      - {action: buy,  type: put, delta: 0.45}
+      - {action: buy,  type: put, far_wing_mult: [1.5, 2.0]}
+    entry_price: {max_debit_pct_near_width: 10, credit_ok: true}
+    dte: [7, 21]
+    exit: {pt_pct_max_profit: [20, 30], stop_pct_max_risk: 75, exit_dte: 1}
+
+  neutral_bwb:                      # [A]
+    legs:
+      - {action: sell, qty: 2, type: put, delta: 0.50}
+      - {action: buy,  type: put, width_units_above: 1}
+      - {action: buy,  type: put, width_units_below: [1.5, 2.0]}
+    entry_price: {small_credit_or_debit: true}
+    dte: [7, 21]
+    exit: {pt_pct_max_profit: [20, 30], stop_pct_max_risk: 75, exit_dte: 1}
+
+  big_beak:                         # [C]
+    legs:
+      - {action: buy,  type: put, delta: 0.50}
+      - {action: sell, qty: 2, type: put, delta: 0.42}
+      - {action: buy,  type: put, delta: 0.30}
+    validate: {pop: [0.65, 0.75], beak_profit_gt_loss_at_downside_be: true}
+    exit: {exit_near_downside_be: true, scale_out_pct: [20, 30, 40], exit_dte: 1}   # scale levels [A]
+
+  small_beak:                       # [C]
+    legs:
+      - {action: buy,  type: put, delta: 0.48}
+      - {action: sell, qty: 2, type: put, delta: 0.40}
+      - {action: buy,  type: put, delta: 0.30}
+    validate: {pop: [0.55, 0.65], small_credit_or_debit: true}
+    exit: {exit_near_downside_be: true, scale_out_pct: [20, 30, 40], exit_dte: 1}
+
+  flat_head:                        # [C]
+    legs:
+      - {action: buy,  type: put, delta: 0.50}
+      - {action: sell, type: put, delta: 0.43}
+      - {action: sell, type: put, delta: 0.28}
+      - {action: buy,  type: put, delta: 0.20}
+    validate: {pop: [0.70, 0.80], small_credit_or_debit: true}
+    exit: {exit_near_downside_be: true, scale_out_pct: [20, 30, 40], exit_dte: 1}
+
+  time_fly:                         # [C] preferred method
+    entry_requires_iv: EXPANDING
+    fly:
+      legs:
+        - {action: buy,  type: put, strike_rule: above_spot, approx_delta: 0.52}   # delta [A]
+        - {action: sell, qty: 2, type: put, delta: 0.30}
+        - {action: buy,  type: put, width_pts_spx: [30, 60], broken_extra_pts: [0, 20]}
+      dte: [7, 21]
+      min_dte: 3
+    adj_calendar:
+      trigger: spot_above_upper_long
+      when: end_of_day
+      legs:
+        - {action: sell, type: call, delta: 0.40, expiry: same_as_fly}
+        - {action: buy,  type: call, strike: same_or_higher, expiry_gap_dte: [1, 7]}
+      max_adds: 2
+    exit: {pt_pct_max_risk: [5, 10], exit_near_downside_be: true, exit_dte: 1, loss_review_pct: 15}
+
+  fly_adjustments:                  # [C] session 2; applies to dn/dir/bwb/woodpeckers
+    rally_low_prob_return: [sell_short_put_vertical, roll_all_strikes_up]
+    out_of_range: {add_fly: {short_delta: 0.30, type: calls_if_up_puts_if_down}, max_adds: 1}   # max_adds [A]
+    low_prob_return_def: {dist_wing_widths_gt: 1, dte_remaining_pct_le: 40}                    # [A]
+
+risk:
+  fly_max_pct_per_position: 5       # [C]
+  fly_max_total_pct: 30             # [C]
+  iron_duck_max_total_pct: 30       # [C]
+  global_max_pct: 50                # [A]
+  max_positions_per_underlying_expiry: 3   # [A]
+  kill_switch: {vix_intraday_gap_pct: 20, daily_loss_pct: 2}   # [A]
