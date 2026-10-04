@@ -280,6 +280,7 @@ class TestClientIds:
             "delta_exposure",
             "options_expiries",
             "options_chain",
+            "multileg",
             "roll",
             "stop_loss",
             "trailing_stop",
