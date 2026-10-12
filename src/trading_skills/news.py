@@ -16,7 +16,7 @@ def get_news(symbol: str, limit: int = 10) -> dict:
         return {"error": f"Failed to fetch news: {e}"}
 
     if not news:
-        return {"symbol": symbol.upper(), "articles": [], "message": "No news found"}
+        return {"symbol": symbol.upper(), "count": 0, "articles": [], "message": "No news found"}
 
     articles = []
     for item in news[:limit]:
