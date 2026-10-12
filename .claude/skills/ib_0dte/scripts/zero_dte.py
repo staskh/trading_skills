@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from trading_skills.broker.zero_dte import (
     DEFAULT_BUDGET_FRAC,
+    DEFAULT_MAX_WIDTH,
     SPREAD_TYPES,
     find_0dte_spreads,
     get_0dte_expiries,
@@ -97,7 +98,10 @@ def main():
         help="Minimum probability of profit filter, 0-1 (default: 0)",
     )
     parser.add_argument(
-        "--max-width", type=float, default=None, help="Max strike width in dollars (optional)"
+        "--max-width",
+        type=float,
+        default=DEFAULT_MAX_WIDTH,
+        help=f"Max strike width in points (default: {DEFAULT_MAX_WIDTH:g}; 0 = no cap)",
     )
     parser.add_argument(
         "--delta",
