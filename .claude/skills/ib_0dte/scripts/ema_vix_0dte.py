@@ -84,7 +84,7 @@ def main():
         type=float,
         default=None,
         help="Skip trade if vol index >= this value. Default is per-index: "
-        "VXN 35 for NDX/QQQ, VIX 20 otherwise.",
+        "VXN 30 for NDX/QQQ, VIX 20 otherwise.",
     )
     parser.add_argument(
         "--target-delta",
