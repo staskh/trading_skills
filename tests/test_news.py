@@ -1,6 +1,8 @@
 # ABOUTME: Tests for news sentiment module using real Yahoo Finance data.
 # ABOUTME: Validates news article retrieval and field structure.
 
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from trading_skills.news import get_news
 
@@ -34,3 +36,10 @@ class TestGetNews:
         """Symbol with no news returns empty articles list."""
         result = get_news("INVALIDXYZ123")
         assert "articles" in result or "error" in result
+
+    def test_empty_news_has_same_shape(self):
+        """No news must still report count, so callers see one response shape."""
+        with patch("trading_skills.news.yf.Ticker", return_value=SimpleNamespace(news=[])):
+            result = get_news("AAPL")
+        assert result["count"] == 0
+        assert result["articles"] == []

@@ -58,6 +58,10 @@ SPREAD_TYPES = ("bear_call", "bull_put", "iron_condor")
 # IB's forced liquidation, hence a fraction rather than the full figure.
 DEFAULT_BUDGET_FRAC = 0.5
 
+# Default cap on spread width, in points of the underlying. Pass 0 / None to
+# remove the cap.
+DEFAULT_MAX_WIDTH = 150.0
+
 
 def resolve_budget(
     explicit_budget: float | None,
@@ -1151,7 +1155,7 @@ async def find_0dte_spreads(
     replace: bool = False,
     top: int = 5,
     min_pop: float = 0.0,
-    max_width: float | None = None,
+    max_width: float | None = DEFAULT_MAX_WIDTH,
     max_short_delta: float | None = None,
     target_delta: float | None = None,
     rv_ratio: float = 0.85,
@@ -1177,6 +1181,8 @@ async def find_0dte_spreads(
     account: the IBKR account the trade is committed to. Validated against the
         connection's managed accounts and recorded on the result. Also the account
         whose excess liquidity funds the auto-sized budget.
+    max_width: cap on strike width in points (default DEFAULT_MAX_WIDTH, 150);
+        0 or None removes the cap.
     max_short_delta: cap the |delta| of the short leg(s) — a manual risk limit.
     allow_stale: when True, price legs from the prior settlement close and derive
         greeks via Black-Scholes if IBKR streams no live quotes/greeks (off-hours).
@@ -1198,6 +1204,8 @@ async def find_0dte_spreads(
     """
     if spread_type not in SPREAD_TYPES:
         return {"success": False, "error": f"Unknown spread type: {spread_type}"}
+    if max_width is not None and max_width <= 0:
+        max_width = None
 
     contract, sec_type, asset_type = resolve_underlying(symbol)
     symbol_u = symbol.upper()
@@ -1415,6 +1423,7 @@ async def find_0dte_spreads(
                 "excess_liquidity": sizing["excess_liquidity"],
                 "trading_class": trading_class,
                 "max_short_delta": eff_max_delta,
+                "max_width": max_width,
                 "target_delta": target_delta,
                 "ev_model": ("expected_pnl" if rv_ratio else "binary"),
                 "rv_ratio": rv_ratio,

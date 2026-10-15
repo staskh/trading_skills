@@ -7,7 +7,7 @@ dependencies: ["trading-skills"]
 # IB 0DTE Credit Spread Finder & Executor
 
 **Default execution route: `ema_vix_0dte.py`** — the EMA9/EMA21 + VIX/VXN regime
-strategy. It reads the 30-min IB bars, checks the vol index (VXN ≥ 30 for NDX/QQQ,
+strategy. It reads the 12-min IB bars, checks the vol index (VXN ≥ 30 for NDX/QQQ,
 VIX ≥ 20 otherwise), and auto-selects `bull_put` or `bear_call` from a bare EMA cross (or
 skips entirely) before delegating to the spread finder. Optional `--rr-gate` and
 `--time-gate` add confirmation. Use this unless the user explicitly requests a
@@ -35,7 +35,7 @@ Index options require the appropriate **index-options market-data entitlement**
 
 ### EMA + VIX/VXN Strategy (recommended — fully automatic signal)
 
-The script checks the vol index, reads the 30-min bars, determines bull_put vs
+The script checks the vol index, reads the 12-min bars, determines bull_put vs
 bear_call from the EMA9/EMA21 cross, then calls the spread finder automatically.
 By **default it runs a bare EMA cross with no bar-timing or red→red gate**, so it
 can be run at any time of day. Opt into the confirmation gates per run.
@@ -84,9 +84,14 @@ Optional confirmation gates (both **off** by default):
   (`"EMA-Dn-no-RR"`). The confirmation tracks momentum at the moment of the run, so
   it means the same thing at 10:30 as at 15:00. A bar still in progress cannot
   confirm anything and is not counted.
-- `--time-gate` — require today's 9:30 + 10:00 ET bars (run at 10:30 ET or later)
-  and anchor the EMA-cross lookback to the 10:00 ET bar. Without it the lookback
-  anchors to the latest available bar.
+- `--time-gate` — require today's bars from 9:30 through 10:30 ET (run at 10:30 ET
+  or later) and anchor the EMA-cross lookback to the last bar closing by 10:30 ET
+  (the 10:18 bar at 12 min). Without it the lookback anchors to the latest closed bar.
+
+**Bars:** EMAs and gates run on **12-min** RTH bars by default (`--bar-minutes N` to
+change). IB has no native 12-min size, so they are built from 3-min bars aligned to
+the 9:30 ET open (the session's last bar, 15:54–16:00, is a 6-min stub). Only closed
+bars are used — the in-progress bar is ignored, so the signal cannot flip mid-bar.
 
 Additional flags:
 - `--vix-threshold N` — override the vol-index cutoff (default: per-index — VXN 30, VIX 20)
@@ -138,7 +143,7 @@ Stop and exit defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero
 - `--expiry YYYYMMDD` — override the expiry (default: today ET, i.e. true 0DTE)
 - `--top` — number of candidates to return (default: 5)
 - `--min-pop` — minimum probability of profit, 0–1 (default: 0, no filter)
-- `--max-width` — cap the strike width in dollars (optional)
+- `--max-width` — cap the strike width in points (default: `150`; `0` = no cap). Echoed as `max_width` in the output.
 - `--delta` — cap the `|delta|` of the short leg(s) at entry. Applies to both verticals and (both short legs of) iron condors. **Defaults by class: 0.12 for indexes, 0.20 for stocks** (`ENTRY_MAX_DELTA` in `zero_dte.py`); pass a value here to override. The effective cap is echoed as `max_short_delta` in the output.
 - `--gex` — compute the **dealer gamma-exposure profile** (net GEX, gamma flip, call/put walls), annotate each candidate against the walls, and gate `entry_quality` on the regime. See **Gamma exposure (GEX)** below. Costs an extra chain fetch (it pulls both option sides).
 - `--gex-weight` — size measure behind each strike: `volume` (today's prints), `oi` (prior settlement's open interest), or `auto` (default: volume once it has printed, else OI).
