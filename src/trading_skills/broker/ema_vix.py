@@ -463,7 +463,7 @@ async def run_ema_vix_strategy(
     """
     symbol = symbol.upper()
     vol_symbol = _vol_index_for(symbol)
-    # Per-index default cutoff (VXN 35 / VIX 20) unless explicitly overridden.
+    # Per-index default cutoff (VXN 30 / VIX 20) unless explicitly overridden.
     if vix_threshold is None:
         vix_threshold = DEFAULT_THRESHOLD[vol_symbol]
 

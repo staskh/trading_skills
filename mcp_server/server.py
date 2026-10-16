@@ -920,7 +920,7 @@ async def ib_0dte_ema_vix(
         symbol: Underlying (e.g. NDX, SPX, RUT, QQQ, SPY)
         budget: Max capital at risk in dollars (default 50000)
         port: IB port (7496 for live, 7497 for paper)
-        vix_threshold: Skip if vol index >= this. Default is per-index: VXN 35 for
+        vix_threshold: Skip if vol index >= this. Default is per-index: VXN 30 for
             NDX/QQQ, VIX 20 otherwise.
         target_delta: Short-leg delta target (default 0.12)
         rr_gate: Require red→red (today's two most recently closed bars both red) to

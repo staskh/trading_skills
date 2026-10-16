@@ -279,11 +279,11 @@ class TestIBTools:
         assert _vol_index_for("AAPL") == "VIX"
 
     def test_ib_0dte_ema_vix_per_index_default_threshold(self):
-        """Default vol cutoff is per-index: VXN 35, VIX 20."""
+        """Default vol cutoff is per-index: VXN 30, VIX 20."""
         from trading_skills.broker.ema_vix import DEFAULT_THRESHOLD, _vol_index_for
 
-        assert DEFAULT_THRESHOLD[_vol_index_for("NDX")] == 35.0
-        assert DEFAULT_THRESHOLD[_vol_index_for("QQQ")] == 35.0
+        assert DEFAULT_THRESHOLD[_vol_index_for("NDX")] == 30.0
+        assert DEFAULT_THRESHOLD[_vol_index_for("QQQ")] == 30.0
         assert DEFAULT_THRESHOLD[_vol_index_for("SPX")] == 20.0
         assert DEFAULT_THRESHOLD[_vol_index_for("SPY")] == 20.0
 
