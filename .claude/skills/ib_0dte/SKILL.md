@@ -1,13 +1,13 @@
 ---
 name: ib_0dte
-description: Find and place the best 0DTE (zero-days-to-expiration) credit spreads from Interactive Brokers. Default execution route is the EMA9/EMA21 + VIX/VXN regime strategy (ema_vix_0dte.py), which auto-selects bull_put or bear_call from a bare EMA cross and skips the trade when the vol index is elevated (VXN ≥ 35 for NDX/QQQ, VIX ≥ 20 otherwise). Optional --rr-gate and --time-gate add red→red and bar-timing confirmation. Supports cash-settled indices (SPX, NDX, RUT, VIX) and any optionable stock/ETF. Manual spread type override is available via zero_dte.py. Requires TWS or IB Gateway running locally.
+description: Find and place the best 0DTE (zero-days-to-expiration) credit spreads from Interactive Brokers. Default execution route is the EMA9/EMA21 + VIX/VXN regime strategy (ema_vix_0dte.py), which auto-selects bull_put or bear_call from a bare EMA cross and skips the trade when the vol index is elevated (VXN ≥ 30 for NDX/QQQ, VIX ≥ 20 otherwise). Optional --rr-gate and --time-gate add red→red and bar-timing confirmation. Supports cash-settled indices (SPX, NDX, RUT, VIX) and any optionable stock/ETF. Manual spread type override is available via zero_dte.py. Requires TWS or IB Gateway running locally.
 dependencies: ["trading-skills"]
 ---
 
 # IB 0DTE Credit Spread Finder & Executor
 
 **Default execution route: `ema_vix_0dte.py`** — the EMA9/EMA21 + VIX/VXN regime
-strategy. It reads the 12-min IB bars, checks the vol index (VXN ≥ 35 for NDX/QQQ,
+strategy. It reads the 12-min IB bars, checks the vol index (VXN ≥ 30 for NDX/QQQ,
 VIX ≥ 20 otherwise), and auto-selects `bull_put` or `bear_call` from a bare EMA cross (or
 skips entirely) before delegating to the spread finder. Optional `--rr-gate` and
 `--time-gate` add confirmation. Use this unless the user explicitly requests a
@@ -62,7 +62,7 @@ uv run python scripts/ema_vix_0dte.py SPX --account U790497 --port 7496 --execut
 
 **Vol index:** NDX/QQQ are gated on **VXN** (CBOE Nasdaq-100 Volatility Index —
 the correct vol gauge for a Nasdaq-100 trade); all other symbols on **VIX**. The
-default cutoff is **per-index — VXN 35, VIX 20** (VXN typically prints several
+default cutoff is **per-index — VXN 30, VIX 20** (VXN typically prints several
 points above VIX for the same regime). The index used is echoed as `vol_index` in
 the output; the `vix_*` fields hold that index's readings.
 
@@ -74,7 +74,7 @@ guessing (`signal: "VOL-UNAVAILABLE"`).
 
 Signal logic (default — exits early with `success: false` and a reason on skip):
 1. **No vol reading** (intraday or prior-day missing) → no trade (`signal: "VOL-UNAVAILABLE"`)
-2. **Vol index ≥ cutoff** (VXN ≥ 35 for NDX/QQQ, else VIX ≥ 20, either reading) → no trade (`signal: "VIX-SKIP"`)
+2. **Vol index ≥ cutoff** (VXN ≥ 30 for NDX/QQQ, else VIX ≥ 20, either reading) → no trade (`signal: "VIX-SKIP"`)
 3. **EMA9 last crossed above EMA21** → `bull_put` (`signal: "EMA-Up"`)
 4. **EMA9 last crossed below EMA21** → `bear_call` (`signal: "EMA-Dn"`)
 
@@ -94,7 +94,7 @@ the 9:30 ET open (the session's last bar, 15:54–16:00, is a 6-min stub). Only 
 bars are used — the in-progress bar is ignored, so the signal cannot flip mid-bar.
 
 Additional flags:
-- `--vix-threshold N` — override the vol-index cutoff (default: per-index — VXN 35, VIX 20)
+- `--vix-threshold N` — override the vol-index cutoff (default: per-index — VXN 30, VIX 20)
 - `--target-delta 0.12` — short-leg delta target (default: 0.12, ≈1.5% OTM at VIX<20)
 - All other `zero_dte.py` flags (`--max-width`, `--gex`, `--stop-mult`, etc.) pass through
 

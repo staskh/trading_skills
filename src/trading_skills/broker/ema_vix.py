@@ -85,7 +85,7 @@ VXN_SYMBOLS = {"NDX", "NDXP", "QQQ", "MNX"}
 
 # Default vol-gate cutoffs per index. VXN typically prints several points above
 # VIX for the same regime, so it gets a higher default cutoff.
-DEFAULT_THRESHOLD = {"VIX": 20.0, "VXN": 35.0}
+DEFAULT_THRESHOLD = {"VIX": 20.0, "VXN": 30.0}
 
 
 def _vol_index_for(symbol: str) -> str:
