@@ -694,6 +694,7 @@ class TestComputeAtmIv:
 
     def test_always_computes_from_price_not_yahoo(self):
         """IV must be computed from bid/ask mid, never from Yahoo's impliedVolatility."""
+        # Prices are sized for a 1-year expiry; keep T fixed as the calendar moves.
         calls = _make_chain(
             strikes=[95.0, 100.0, 105.0],
             bids=[16.3, 13.7, 11.5],

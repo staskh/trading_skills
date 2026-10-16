@@ -2,7 +2,8 @@
 # ABOUTME: Covers all-IB vol sourcing and the gate refusing to trade without a reading.
 
 import asyncio
-from datetime import UTC, date, datetime, timedelta
+import inspect
+from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -253,3 +254,168 @@ class TestRrGateUsesRecentBars:
         spread, signal, _, _ = ema_vix._detect_signal(bars, rr_gate=False)
         assert spread == "bear_call"
         assert signal == "EMA-Dn"
+
+
+class TestEmaUsesClosedBarsOnly:
+    """The in-progress bar's close is only the last tick; it must not drive the EMA."""
+
+    def test_in_progress_spike_cannot_flip_the_cross(self):
+        # A huge in-progress print would push EMA9 back above EMA21 if counted.
+        bars = _falling_bars([(100.0, 99.0), (99.0, 98.0), (98.0, 500.0)])
+        spread, signal, _, _ = ema_vix._detect_signal(bars)
+        assert spread == "bear_call"
+        assert signal == "EMA-Dn"
+
+    def test_ema_gap_ignores_the_in_progress_bar(self):
+        closed = _falling_bars([(100.0, 99.0), (99.0, 98.0), (98.0, 97.0)])[:-1]
+        live = closed + [{**closed[-1], "dt": closed[-1]["dt"] + BAR, "close": 500.0}]
+        _, _, _, gap_closed = ema_vix._detect_signal(closed)
+        _, _, _, gap_live = ema_vix._detect_signal(live)
+        assert gap_live == gap_closed
+
+    def test_only_an_in_progress_bar_is_no_bars(self):
+        now = datetime.now(NY).astimezone(UTC)
+        spread, signal, reason, _ = ema_vix._detect_signal(
+            [{"dt": now, "open": 100.0, "close": 99.0}]
+        )
+        assert spread is None
+        assert signal == "no-bars"
+        assert "closed" in reason
+
+
+# --------------------------------------------------------------------------- #
+# Bar size (default 12 min, aggregated from IB 3-min bars)
+# --------------------------------------------------------------------------- #
+def _session_bars(day, minutes, count, *, start=time(9, 30)):
+    """`count` consecutive `minutes` bars from `start` ET on `day`; close = open + 0.5."""
+    first = datetime.combine(day, start, tzinfo=NY)
+    return [
+        {
+            "dt": (first + timedelta(minutes=minutes * i)).astimezone(UTC),
+            "open": float(i),
+            "close": i + 0.5,
+        }
+        for i in range(count)
+    ]
+
+
+def _frozen_now(when):
+    """Patch the module clock so `datetime.now()` returns `when`."""
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return when.astimezone(tz)
+
+    return patch(f"{MODULE}.datetime", _Frozen)
+
+
+class TestBarSize:
+    def test_default_is_12_minutes(self):
+        assert ema_vix.DEFAULT_BAR_MINUTES == 12
+        assert inspect.signature(run_ema_vix_strategy).parameters["bar_minutes"].default == 12
+
+    def test_base_size_is_largest_native_divisor(self):
+        assert ema_vix._base_bar_minutes(12) == 3
+        assert ema_vix._base_bar_minutes(30) == 30
+        assert ema_vix._base_bar_minutes(7) == 1
+
+    def test_aggregates_3min_into_12min_aligned_to_open(self):
+        bars = ema_vix._aggregate_bars(_session_bars(date(2026, 10, 9), 3, 20), 12)
+        starts = [b["dt"].astimezone(NY).strftime("%H:%M") for b in bars]
+        assert starts == ["09:30", "09:42", "09:54", "10:06", "10:18"]
+        assert bars[0]["open"] == 0.0  # first 3-min bar's open
+        assert bars[0]["close"] == 3.5  # fourth 3-min bar's close
+
+    def test_alignment_holds_in_standard_time(self):
+        """9:30 ET is 14:30 UTC in winter; buckets must follow ET, not a fixed UTC hour."""
+        bars = ema_vix._aggregate_bars(_session_bars(date(2026, 12, 1), 3, 8), 12)
+        assert [b["dt"].astimezone(NY).strftime("%H:%M") for b in bars] == ["09:30", "09:42"]
+
+    def test_last_bar_of_session_ends_at_the_close(self):
+        bar = _session_bars(date(2026, 10, 9), 12, 1, start=time(15, 54))[0]
+        assert ema_vix._bar_end(bar, 12).astimezone(NY).time() == time(16, 0)
+
+    def test_fetch_requests_3min_bars_and_aggregates(self):
+        requested = []
+        raw = [
+            SimpleNamespace(date=b["dt"], open=b["open"], close=b["close"])
+            for b in _session_bars(date(2026, 10, 9), 3, 8)
+        ]
+
+        class _IB:
+            async def connectAsync(self, *a, **k):
+                pass
+
+            async def qualifyContractsAsync(self, *contracts):
+                return list(contracts)
+
+            async def reqHistoricalDataAsync(self, contract, **kwargs):
+                requested.append(kwargs["barSizeSetting"])
+                return raw
+
+            def disconnect(self):
+                pass
+
+        async def no_vol(*a, **k):
+            return 15.0, 15.0
+
+        with patch(f"{MODULE}.IB", _IB), patch(f"{MODULE}._fetch_vol_index", no_vol):
+            bars, *_ = asyncio.run(ema_vix._fetch_bars("NDX", "VXN", port=7496))
+        assert requested == ["3 mins"]
+        assert len(bars) == 2
+
+    def test_runner_passes_bar_size_to_the_fetch(self):
+        seen = {}
+
+        async def fake_fetch_bars(*args, **kwargs):
+            seen.update(kwargs)
+            return _bars(), 25.0, 25.0, "ib"  # vol gate stops it before IB
+
+        with patch(f"{MODULE}._fetch_bars", side_effect=fake_fetch_bars):
+            asyncio.run(run_ema_vix_strategy("SPX", budget=1000, port=7496))
+        assert seen["bar_minutes"] == 12
+
+
+class TestTimeGateWith12MinBars:
+    """The gate anchors to the last bar closing by 10:30 ET: the 10:18 bar at 12 min."""
+
+    DAY = date(2026, 10, 9)
+
+    def _bars(self):
+        # A rising prior session, then a falling morning so the EMAs cross down.
+        prior = _session_bars(self.DAY - timedelta(days=1), 12, 30)
+        for i, b in enumerate(prior):
+            b["open"], b["close"] = 100.0 + i, 100.5 + i
+        today = _session_bars(self.DAY, 12, 8)  # 9:30 ... 10:54
+        for i, b in enumerate(today):
+            b["open"], b["close"] = 120.0 - 3 * i, 117.0 - 3 * i
+        return prior + today
+
+    def test_anchors_to_the_10_18_bar(self):
+        bars = self._bars()
+        anchor = datetime.combine(self.DAY, time(10, 18), tzinfo=NY)
+        through_anchor = [b for b in bars if b["dt"] <= anchor]
+        now = datetime.combine(self.DAY, time(11, 15), tzinfo=NY)
+        with _frozen_now(now):
+            _, _, _, gated = ema_vix._detect_signal(bars, time_gate=True)
+            _, _, _, at_anchor = ema_vix._detect_signal(through_anchor)
+        assert gated is not None
+        assert gated == at_anchor
+
+    def test_before_10_30_is_missing_bars(self):
+        now = datetime.combine(self.DAY, time(10, 25), tzinfo=NY)
+        with _frozen_now(now):
+            spread, signal, reason, _ = ema_vix._detect_signal(self._bars(), time_gate=True)
+        assert spread is None
+        assert signal == "missing-bars"
+        assert "10:30" in reason
+
+
+class TestDefaultMaxWidth:
+    def test_default_is_150_points(self):
+        from trading_skills.broker.zero_dte import DEFAULT_MAX_WIDTH, find_0dte_spreads
+
+        assert DEFAULT_MAX_WIDTH == 150.0
+        for fn in (find_0dte_spreads, run_ema_vix_strategy):
+            assert inspect.signature(fn).parameters["max_width"].default == 150.0
