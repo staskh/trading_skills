@@ -26,8 +26,8 @@ Iron condor gate (opt in with --ic-gate):
   --ic-threshold  Gap threshold in percent for EMA-flat detection (default: 0.15).
 
 Position sizing uses the existing zero_dte library (budget / max_loss_per_contract).
-Strike targeting defaults to --target-delta 0.12, which approximates 1.5% OTM
-at VIX 15-19. Override with --target-delta if needed.
+Strike targeting defaults to short-leg delta 0.11 for bear calls and 0.07 for
+bull puts. Override with --target-delta (applies to both sides) if needed.
 
 The strategy logic lives in trading_skills.broker.ema_vix (also used by the MCP
 server); this script only handles CLI args and sandbox output.
@@ -90,7 +90,7 @@ def main():
         "--target-delta",
         type=float,
         default=None,
-        help="Short-leg delta target (default: 0.12, ~1.5%% OTM at VIX<20)",
+        help="Short-leg delta target, both sides (default: 0.11 bear call / 0.07 bull put)",
     )
     parser.add_argument(
         "--rr-gate",

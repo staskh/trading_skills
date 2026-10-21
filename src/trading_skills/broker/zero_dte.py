@@ -163,6 +163,19 @@ def resolve_entry_delta(symbol: str, asset_type: str, explicit: float | None) ->
     return ENTRY_MAX_DELTA.get(symbol.upper(), ENTRY_MAX_DELTA[fallback])
 
 
+# Default short-leg delta TARGET (± delta_band) per side: bear calls sell ~0.11,
+# bull puts sit further out at ~0.07. Explicit --target-delta applies to both sides;
+# --target-delta 0 disables the band (strikes then bounded only by the entry cap).
+DEFAULT_TARGET_DELTA = {"C": 0.11, "P": 0.07}
+
+
+def resolve_target_delta(right: str, explicit: float | None) -> float | None:
+    """Effective short-leg delta target for one side (None = no target band)."""
+    if explicit is None:
+        return DEFAULT_TARGET_DELTA[right]
+    return explicit or None
+
+
 def _today_ny() -> str:
     """Today's date in IB expiry format (YYYYMMDD), New York calendar."""
     return datetime.now(NY).strftime("%Y%m%d")
@@ -643,6 +656,7 @@ def build_iron_condors(
     max_width: float | None = None,
     max_short_delta: float | None = None,
     target_delta: float | None = None,
+    put_target_delta: float | None = None,
     delta_band: float = 0.05,
     rv_ratio: float | None = 0.85,
     max_legs_out: int = 12,
@@ -652,7 +666,8 @@ def build_iron_condors(
 
     Sizing is by the condor's true max loss (only one wing can be breached at
     expiration): max_loss = max(call_width, put_width) - combined_credit.
-    max_short_delta / target_delta / rv_ratio flow into both sides.
+    max_short_delta / target_delta / rv_ratio flow into both sides;
+    put_target_delta, when given, overrides target_delta on the put side.
     """
     # Size single-side verticals against the full budget first; the pairing below
     # re-sizes contracts against the combined condor risk. The filters flow into
@@ -667,6 +682,8 @@ def build_iron_condors(
         max_legs_out=max_legs_out,
     )
     call_side = build_verticals(calls, "C", spot, budget, T, r, **side_kwargs)
+    if put_target_delta is not None:
+        side_kwargs["target_delta"] = put_target_delta
     put_side = build_verticals(puts, "P", spot, budget, T, r, **side_kwargs)
     if not call_side or not put_side:
         return []
@@ -1330,20 +1347,39 @@ async def find_0dte_spreads(
 
             # Entry short-delta cap: explicit --delta wins, else per-class preset.
             eff_max_delta = resolve_entry_delta(symbol_u, asset_type, max_short_delta)
+            # Short-leg delta target: explicit --target-delta wins, else per-side default.
+            call_target = resolve_target_delta("C", target_delta)
+            put_target = resolve_target_delta("P", target_delta)
 
             build_kwargs = dict(
                 min_pop=min_pop,
                 max_width=max_width,
                 max_short_delta=eff_max_delta,
-                target_delta=target_delta,
                 rv_ratio=rv_ratio,
             )
             if spread_type == "bear_call":
-                candidates = build_verticals(calls, "C", spot, budget, T, rate, **build_kwargs)
+                eff_target = call_target
+                candidates = build_verticals(
+                    calls, "C", spot, budget, T, rate, target_delta=call_target, **build_kwargs
+                )
             elif spread_type == "bull_put":
-                candidates = build_verticals(puts, "P", spot, budget, T, rate, **build_kwargs)
+                eff_target = put_target
+                candidates = build_verticals(
+                    puts, "P", spot, budget, T, rate, target_delta=put_target, **build_kwargs
+                )
             else:
-                candidates = build_iron_condors(calls, puts, spot, budget, T, rate, **build_kwargs)
+                eff_target = {"call": call_target, "put": put_target}
+                candidates = build_iron_condors(
+                    calls,
+                    puts,
+                    spot,
+                    budget,
+                    T,
+                    rate,
+                    target_delta=call_target,
+                    put_target_delta=put_target,
+                    **build_kwargs,
+                )
 
             ranked = rank_candidates(candidates, top)
 
@@ -1424,7 +1460,7 @@ async def find_0dte_spreads(
                 "trading_class": trading_class,
                 "max_short_delta": eff_max_delta,
                 "max_width": max_width,
-                "target_delta": target_delta,
+                "target_delta": eff_target,
                 "ev_model": ("expected_pnl" if rv_ratio else "binary"),
                 "rv_ratio": rv_ratio,
                 "data_quality_warning": data_quality_warning,
@@ -1510,6 +1546,29 @@ async def _maybe_execute(
     if candidate["max_loss_total"] > budget + 1e-6:
         return {"ok": False, "error": "Chosen spread's max loss exceeds budget"}
 
+    # A buffered level stop (e.g. NDX short call - 50) can sit at or through spot when
+    # the short strike is close; the stop would fire the moment the entry fills.
+    for plan in stop_plan(
+        candidate,
+        spot,
+        T,
+        rate,
+        mult=stop_cfg["mult"],
+        buffer_pts=stop_cfg["buffer"],
+        put_buffer_pts=stop_cfg.get("put_buffer"),
+        target_delta=stop_cfg["delta"],
+    ):
+        breached = spot >= plan["trigger"] if plan["is_more"] else spot <= plan["trigger"]
+        if breached:
+            return {
+                "ok": False,
+                "error": (
+                    f"Stop trigger {plan['trigger']} ({plan['binding']}) is already "
+                    f"breached at spot {spot}; entry would stop out immediately. "
+                    "Pick a further-OTM candidate or pass a smaller --stop-buffer."
+                ),
+            }
+
     order_ref = f"ZDTE_{spread_type}_{symbol_u}_{target}"
 
     # Duplicate guard: refuse (or replace) if a live order with this ref already rests.
@@ -1584,6 +1643,7 @@ async def _maybe_execute(
         rate,
         mult=stop_cfg["mult"],
         buffer_pts=stop_cfg["buffer"],
+        put_buffer_pts=stop_cfg.get("put_buffer"),
         target_delta=stop_cfg["delta"],
     )
     stop_ref = f"ZDTE_STOP_{spread_type}_{symbol_u}_{target}"

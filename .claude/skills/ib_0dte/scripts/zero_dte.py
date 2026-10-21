@@ -115,7 +115,8 @@ def main():
         type=float,
         default=None,
         help="Sell the short leg(s) around this delta (+/- 0.05), e.g. 0.15 — direct "
-        "control over strike selection (still bounded by --delta).",
+        "control over strike selection (still bounded by --delta). Applies to both sides. "
+        "Default: 0.11 bear call / 0.07 bull put; 0 disables the target band.",
     )
     parser.add_argument(
         "--rv-ratio",
@@ -198,8 +199,9 @@ def main():
         "--stop-buffer",
         type=float,
         default=None,
-        help="Points before the short strike to trigger the level stop "
-        "(default: per-symbol preset, else 0 = at the strike)",
+        help="Points before the short strike to trigger the level stop, both sides "
+        "(default: per-symbol preset — NDX: short call - 50 / short put - 50 — else 0 = "
+        "at the strike)",
     )
     parser.add_argument(
         "--stop-delta",

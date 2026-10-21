@@ -154,6 +154,45 @@ class TestStopPlan:
         assert plans[0]["side"] == "C"
         assert plans[0]["is_more"] is True
 
+    def _bull_put(self):
+        return {
+            "strategy": "bull_put",
+            "width": 5,
+            "net_credit": 0.60,
+            "contracts": 3,
+            "legs": [
+                {"action": "sell", "right": "P", "strike": 95, "iv": 20.0},
+                {"action": "buy", "right": "P", "strike": 90, "iv": 21.0},
+            ],
+        }
+
+    def test_short_minus_buffer_on_both_verticals(self):
+        kw = dict(mult=0, buffer_pts=3, put_buffer_pts=-3, target_delta=None)
+        call = stop_plan(self._bear_call(), 100, 0.01, 0.045, **kw)[0]
+        put = stop_plan(self._bull_put(), 100, 0.01, 0.045, **kw)[0]
+        assert call["trigger"] == 102  # short call 105 - 3
+        assert put["trigger"] == 92  # short put 95 - 3 (past the strike)
+
+    def test_condor_put_side_uses_put_buffer(self):
+        plans = stop_plan(
+            self._iron_condor(),
+            100,
+            0.01,
+            0.045,
+            mult=0,
+            buffer_pts=3,
+            put_buffer_pts=-3,
+            target_delta=None,
+        )
+        assert next(p for p in plans if p["side"] == "call")["trigger"] == 102
+        assert next(p for p in plans if p["side"] == "put")["trigger"] == 92
+
+    def test_put_buffer_defaults_to_buffer(self):
+        plan = stop_plan(
+            self._bull_put(), 100, 0.01, 0.045, mult=0, buffer_pts=3, target_delta=None
+        )
+        assert plan[0]["trigger"] == 98  # 95 + 3: shared buffer when no put override
+
     def test_condor_returns_two_bracketing_sides(self):
         plans = stop_plan(
             self._iron_condor(), 100, 0.01, 0.045, mult=2.0, buffer_pts=0, target_delta=None
@@ -180,10 +219,21 @@ class TestResolveStopCfg:
         assert cfg["buffer"] == 10.0
         assert cfg["delta"] == 0.3  # still from preset
 
+    def test_ndx_level_stop_is_short_minus_50_both_sides(self):
+        cfg = resolve_stop_cfg("NDX", None, None, None, 20.0)
+        assert cfg["buffer"] == 50.0  # 50 pts before the short call
+        assert cfg["put_buffer"] == -50.0  # 50 pts past the short put
+
+    def test_explicit_buffer_sets_both_sides(self):
+        cfg = resolve_stop_cfg("NDX", None, 10.0, None, 20.0)
+        assert cfg["buffer"] == 10.0
+        assert cfg["put_buffer"] == 10.0
+
     def test_unlisted_symbol_uses_default(self):
         cfg = resolve_stop_cfg("AAPL", None, None, None, 20.0)
         assert cfg["mult"] == 2.0
         assert cfg["delta"] is None
+        assert cfg["buffer"] == 0.0 and cfg["put_buffer"] == 0.0
         assert cfg["preset_symbol"] == "_default"
 
 

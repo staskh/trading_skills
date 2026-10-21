@@ -571,7 +571,7 @@ async def run_ema_vix_strategy(
         }
 
     # ── 4. Delegate to find_0dte_spreads ──────────────────────────────────
-    eff_target_delta = target_delta if target_delta is not None else 0.12
+    # target_delta None → per-side default in find_0dte_spreads (0.11 call / 0.07 put).
     result = await find_0dte_spreads(
         symbol,
         spread_type=spread_type,
@@ -589,7 +589,7 @@ async def run_ema_vix_strategy(
         min_pop=min_pop,
         max_width=max_width,
         max_short_delta=delta,
-        target_delta=eff_target_delta,
+        target_delta=target_delta,
         rv_ratio=rv_ratio,
         allow_stale=allow_stale,
         fetch_events=not no_events,

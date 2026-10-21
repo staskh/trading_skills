@@ -922,7 +922,7 @@ async def ib_0dte_ema_vix(
         port: IB port (7496 for live, 7497 for paper)
         vix_threshold: Skip if vol index >= this. Default is per-index: VXN 30 for
             NDX/QQQ, VIX 20 otherwise.
-        target_delta: Short-leg delta target (default 0.12)
+        target_delta: Short-leg delta target (default 0.11 bear call / 0.07 bull put)
         rr_gate: Require red→red (today's two most recently closed bars both red) to
             confirm a Bear Call
         time_gate: Require today's bars from 9:30 through 10:30 ET (run at 10:30 ET+) and

@@ -25,6 +25,7 @@ from trading_skills.broker.zero_dte import (
     rank_candidates,
     resolve_budget,
     resolve_entry_delta,
+    resolve_target_delta,
     resolve_underlying,
 )
 
@@ -335,6 +336,20 @@ class TestResolveEntryDelta:
         assert resolve_entry_delta("NDX", "index", 0.25) == 0.25
 
 
+class TestResolveTargetDelta:
+    def test_per_side_defaults(self):
+        assert resolve_target_delta("C", None) == 0.11  # bear call
+        assert resolve_target_delta("P", None) == 0.07  # bull put
+
+    def test_explicit_applies_to_both_sides(self):
+        assert resolve_target_delta("C", 0.15) == 0.15
+        assert resolve_target_delta("P", 0.15) == 0.15
+
+    def test_zero_disables_band(self):
+        assert resolve_target_delta("C", 0) is None
+        assert resolve_target_delta("P", 0.0) is None
+
+
 # --------------------------------------------------------------------------- #
 # Probability of profit
 # --------------------------------------------------------------------------- #
@@ -576,6 +591,23 @@ class TestBuildIronCondors:
             assert c["short_call_delta"] <= 0.20
             assert c["short_put_delta"] <= 0.20
 
+    def test_put_target_delta_overrides_put_side(self):
+        # deltas 0.30/0.15/0.07 per side; call target 0.30, put target 0.15 (+/-0.05)
+        out = build_iron_condors(
+            self._calls(),
+            self._puts(),
+            spot=100,
+            budget=1000,
+            T=0.01,
+            r=0.045,
+            target_delta=0.30,
+            put_target_delta=0.15,
+        )
+        assert out
+        for c in out:
+            assert abs(c["short_call_delta"] - 0.30) <= 0.05
+            assert abs(c["short_put_delta"] - 0.15) <= 0.05
+
     def test_short_strikes_do_not_cross(self):
         out = self._condors()
         for c in out:
@@ -689,6 +721,67 @@ class TestExecuteGuards:
         assert "exceeds budget" in res["error"]
 
 
+class TestStopBreachGuard:
+    def _cand(self, strategy, short_k, long_k):
+        right = "C" if strategy == "bear_call" else "P"
+        return {
+            "strategy": strategy,
+            "max_loss_total": 500.0,
+            "net_credit": 0.85,
+            "contracts": 1,
+            "legs": [
+                {"action": "sell", "right": right, "strike": short_k, "iv": 20.0},
+                {"action": "buy", "right": right, "strike": long_k, "iv": 20.0},
+            ],
+        }
+
+    def _run(self, cand, ib=None):
+        return asyncio.run(
+            _maybe_execute(
+                ib,
+                [cand],
+                1,
+                "U123",
+                1000,
+                None,
+                None,
+                "NDX",
+                "20260710",
+                "SMART",
+                "NDXP",
+                cand["strategy"],
+                spot=20000,
+                T=0.01,
+                rate=0.045,
+                underlying_conid=1,
+                underlying_exch="SMART",
+                stop_cfg={
+                    "mult": 0,
+                    "buffer": 50.0,
+                    "put_buffer": -50.0,
+                    "delta": None,
+                    "fill_timeout": 1,
+                },
+            )
+        )
+
+    def test_call_within_buffer_is_refused(self):
+        # short call 20040 - 50 = 19990 trigger, already below spot 20000
+        res = self._run(self._cand("bear_call", 20040, 20140))
+        assert res["ok"] is False
+        assert "already breached" in res["error"]
+
+    def test_call_beyond_buffer_passes_guard(self):
+        # short call 20100 - 50 = 20050 trigger, above spot -> reaches order placement
+        res = self._run(self._cand("bear_call", 20100, 20200), ib=_FakeIB([]))
+        assert "already breached" not in (res.get("error") or "")
+
+    def test_put_stop_past_strike_passes_guard(self):
+        # short put 19980 - 50 = 19930 trigger, below spot -> not breached
+        res = self._run(self._cand("bull_put", 19980, 19880), ib=_FakeIB([]))
+        assert "already breached" not in (res.get("error") or "")
+
+
 # --------------------------------------------------------------------------- #
 # Duplicate-order guard (offline, with a fake IB)
 # --------------------------------------------------------------------------- #
@@ -733,10 +826,14 @@ class TestDuplicateGuard:
 
     def _cand(self):
         return {
+            "strategy": "bear_call",
             "max_loss_total": 500.0,
             "net_credit": 0.85,
             "contracts": 5,
-            "legs": [{"action": "sell", "strike": 100, "right": "C"}],
+            "legs": [
+                {"action": "sell", "strike": 105, "right": "C", "iv": 20.0},
+                {"action": "buy", "strike": 110, "right": "C", "iv": 20.0},
+            ],
         }
 
     def _run(self, ib, replace):

@@ -95,7 +95,7 @@ bars are used — the in-progress bar is ignored, so the signal cannot flip mid-
 
 Additional flags:
 - `--vix-threshold N` — override the vol-index cutoff (default: per-index — VXN 30, VIX 20)
-- `--target-delta 0.12` — short-leg delta target (default: 0.12, ≈1.5% OTM at VIX<20)
+- `--target-delta N` — short-leg delta target for both sides (default: **0.11 bear call / 0.07 bull put**)
 - All other `zero_dte.py` flags (`--max-width`, `--gex`, `--stop-mult`, etc.) pass through
 
 ### Manual spread finder (explicit type)
@@ -131,7 +131,7 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--limit-frac` — walk between the combo NBBO's marketable side and its mid: `combo_ask + frac × (net_credit − combo_ask)`. `0` = fully marketable (same as default), `0.5` = midpoint of combo NBBO, `1.0` = mid credit (rarely fills on multi-leg BAG combos). Computed at execution time, so it stays anchored to the fresh pull's combo quote. Ignored if `--limit` is set. (Note: IB **paper** often won't fill multi-leg 0DTE index combos at any marketable price — a paper-sim limitation, not a pricing issue.)
 - `--replace` — if a live order for this symbol/expiry/type already rests, cancel and re-place it (default: refuse as a duplicate).
 - `--stop-mult` — premium-cap stop: close when the spread reaches this multiple of the credit (default: `2.0` = lose ~1× credit). `0` disables the premium cap.
-- `--stop-buffer` — points before the short strike to trigger the level stop (default: `0` = at the strike).
+- `--stop-buffer` — points before the short strike to trigger the level stop, applied to both sides (default: per-symbol preset — **NDX: short call − 50 and short put − 50**; others `0` = at the strike).
 - `--stop-delta` — also stop when the short-leg delta reaches this level (optional, e.g. `0.30`).
 - `--profit-target` — buy back after capturing this fraction of the credit, e.g. `0.5` = 50% (`0` disables). Default: per-symbol preset, else `0.50`.
 - `--time-exit` — flatten remaining spreads at this ET time, e.g. `15:30` (`none` disables). Default: per-symbol preset, else `15:30`.
@@ -139,7 +139,7 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--verify-stops` — check that every open 0DTE spread has a resting protective stop, then exit (no symbol required). Add `--repair` to place a strike-level stop on any unprotected position.
 - `--repair` — with `--verify-stops`, auto-place a strike-level stop on unprotected positions.
 
-Stop and exit defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero_dte_stop.py`) — each maps `mult`, `buffer`, `delta`, `target` (profit-take), and `time_exit`. E.g. NDX uses `mult 3.0` + `0.30` delta backstop, `50%` target, `15:30` exit; SPX `mult 2.5`; unlisted symbols `mult 2.0`. Any explicit flag overrides the preset. Entry short-delta caps are separate (`ENTRY_MAX_DELTA`: 0.12 index / 0.20 stock). These are starting points; tune them with live data.
+Stop and exit defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero_dte_stop.py`) — each maps `mult`, `buffer`, optional `put_buffer` (put-side override; negative = past the strike), `delta`, `target` (profit-take), and `time_exit`. E.g. NDX uses `mult 3.0` + `0.30` delta backstop, level stop at short strike − 50 on both sides (50 pts before the short call, 50 pts past the short put), `50%` target, `15:30` exit; SPX `mult 2.5`; unlisted symbols `mult 2.0`. Any explicit flag overrides the preset. Entry short-delta caps are separate (`ENTRY_MAX_DELTA`: 0.12 index / 0.20 stock). These are starting points; tune them with live data.
 - `--expiry YYYYMMDD` — override the expiry (default: today ET, i.e. true 0DTE)
 - `--top` — number of candidates to return (default: 5)
 - `--min-pop` — minimum probability of profit, 0–1 (default: 0, no filter)
@@ -227,7 +227,10 @@ the time exit mainly flattens positions still hovering near breakeven into the c
 
 The stop trigger is **level-anchored on the underlying** (robust to option-price noise),
 taking whichever of these fires first:
-- **Short strike** (± `--stop-buffer`) — the "thesis broken" level.
+- **Short strike** (± `--stop-buffer`) — the "thesis broken" level. NDX preset: short
+  strike − 50 on both sides. On a bull put that is *past* the strike, so the 0.30 delta
+  and premium-cap stops normally fire first. `--execute` refuses an entry whose stop
+  trigger is already breached at spot (e.g. a short call within 50 pts of NDX).
 - **Premium cap** (`--stop-mult`) — the underlying level where the loss reaches
   `mult × credit`, computed via Black-Scholes at entry.
 - **Short delta** (`--stop-delta`, optional).
@@ -293,7 +296,9 @@ To see how much of a candidate's EV is the assumption, re-run with
 Treat it as a tunable, and tune it against your own fills — the paper-test report
 (`scripts/report.py`) exists for exactly that.
 - **`--target-delta`** — pin the short leg(s) to a delta (± 0.05) for direct strike
-  control, e.g. `--target-delta 0.15`. Still bounded by `--delta`.
+  control, e.g. `--target-delta 0.15`. Still bounded by `--delta`. Default: **0.11 for
+  bear calls, 0.07 for bull puts** (iron condors use both, per side; `DEFAULT_TARGET_DELTA`
+  in `zero_dte.py`). `--target-delta 0` disables the band. Echoed as `target_delta`.
 - Candidates are ranked by **total EV**, ties broken toward higher POP.
 
 ## Output
