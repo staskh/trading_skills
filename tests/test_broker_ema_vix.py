@@ -365,6 +365,45 @@ class TestBarSize:
         assert requested == ["3 mins"]
         assert len(bars) == 2
 
+    def test_sizes_too_coarse_to_warm_up_the_emas_are_rejected(self):
+        """One 390-min bar per session cannot fill EMA21 from the fetched window."""
+        with pytest.raises(ValueError, match="bar_minutes"):
+            asyncio.run(ema_vix._fetch_bars("NDX", "VXN", port=7496, bar_minutes=390))
+
+    def test_bar_still_forming_when_history_was_requested_is_dropped(self):
+        """A 10:18 bar fetched at 10:29:59 is provisional even if the run ends after 10:30."""
+        day = date(2026, 10, 9)
+        raw = [
+            SimpleNamespace(date=b["dt"], open=b["open"], close=b["close"])
+            for b in _session_bars(day, 3, 20)  # 9:30 ... 10:27
+        ]
+
+        class _IB:
+            async def connectAsync(self, *a, **k):
+                pass
+
+            async def qualifyContractsAsync(self, *contracts):
+                return list(contracts)
+
+            async def reqHistoricalDataAsync(self, contract, **kwargs):
+                return raw
+
+            def disconnect(self):
+                pass
+
+        async def no_vol(*a, **k):
+            return 15.0, 15.0
+
+        fetched_at = datetime.combine(day, time(10, 29, 59), tzinfo=NY)
+        with (
+            _frozen_now(fetched_at),
+            patch(f"{MODULE}.IB", _IB),
+            patch(f"{MODULE}._fetch_vol_index", no_vol),
+        ):
+            bars, *_ = asyncio.run(ema_vix._fetch_bars("NDX", "VXN", port=7496))
+        starts = [b["dt"].astimezone(NY).strftime("%H:%M") for b in bars]
+        assert starts == ["09:30", "09:42", "09:54", "10:06"]
+
     def test_runner_passes_bar_size_to_the_fetch(self):
         seen = {}
 
@@ -402,6 +441,16 @@ class TestTimeGateWith12MinBars:
             _, _, _, at_anchor = ema_vix._detect_signal(through_anchor)
         assert gated is not None
         assert gated == at_anchor
+
+    def test_missing_10_18_bar_does_not_fall_back_to_an_earlier_bar(self):
+        anchor = datetime.combine(self.DAY, time(10, 18), tzinfo=NY).astimezone(UTC)
+        bars = [b for b in self._bars() if b["dt"] != anchor]
+        now = datetime.combine(self.DAY, time(11, 15), tzinfo=NY)
+        with _frozen_now(now):
+            spread, signal, reason, _ = ema_vix._detect_signal(bars, time_gate=True)
+        assert spread is None
+        assert signal == "missing-bars"
+        assert "10:18" in reason
 
     def test_before_10_30_is_missing_bars(self):
         now = datetime.combine(self.DAY, time(10, 25), tzinfo=NY)

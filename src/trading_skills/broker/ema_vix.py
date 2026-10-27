@@ -11,7 +11,7 @@ to the 9:30 ET open.
 
 Signal logic (default — bare EMA cross):
   1. Vol index >= threshold -> skip, no trade. NDX/QQQ are gated on VXN
-     (Nasdaq-100 vol, default cutoff 35); all other symbols on VIX (default 20).
+     (Nasdaq-100 vol, default cutoff 30); all other symbols on VIX (default 20).
   2. EMA9 last crossed ABOVE EMA21 -> bull_put.
   3. EMA9 last crossed BELOW EMA21 -> bear_call.
   4. EMA9 ≈ EMA21 (gap within ic_threshold%) AND ic_gate=True -> iron_condor.
@@ -35,6 +35,7 @@ CLI script (ema_vix_0dte.py) and the MCP server.
 """
 
 import asyncio
+import math
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -57,6 +58,10 @@ DEFAULT_BAR_MINUTES = 12  # bar size the EMAs and gates run on
 SESSION_OPEN = time(9, 30)  # ET
 SESSION_CLOSE = time(16, 0)  # ET
 GATE_ANCHOR = time(10, 30)  # ET — time_gate anchors to the last bar closing by here
+SESSION_MINUTES = 390  # 9:30-16:00 ET
+# Fewest bars the fetched window must hold: EMA21 warm-up plus as many again
+# to find a crossover in.
+MIN_HISTORY_BARS = 2 * EMA_SLOW
 
 # IB's native intraday bar sizes (minutes) -> barSizeSetting. Any other size is
 # built by aggregating the largest native size that divides it evenly.
@@ -132,6 +137,34 @@ def _aggregate_bars(bars: list[dict], bar_minutes: int) -> list[dict]:
         else:
             buckets[start]["close"] = b["close"]
     return [buckets[k] for k in sorted(buckets)]
+
+
+def _history_duration(bar_minutes: int) -> str:
+    """IB duration string for the symbol history, sized for the EMA warm-up.
+
+    Raises ValueError when `bar_minutes` is so coarse that the window IB serves
+    for its native source size holds fewer than MIN_HISTORY_BARS bars.
+    """
+    # IB caps how much fine-grained history one request returns; 5 sessions of
+    # small bars is still well over the EMA21 warm-up.
+    sessions = 10 if _base_bar_minutes(bar_minutes) >= 30 else 5
+    bars = sessions * math.ceil(SESSION_MINUTES / bar_minutes)
+    if bars < MIN_HISTORY_BARS:
+        raise ValueError(
+            f"bar_minutes={bar_minutes} yields only {bars} bars over {sessions} sessions; "
+            f"the EMAs need at least {MIN_HISTORY_BARS}"
+        )
+    return f"{sessions} D"
+
+
+def _gate_anchor_start(day: date, bar_minutes: int) -> datetime | None:
+    """Start (UTC) of the last bar on `day` that closes by 10:30 ET, or None if none does."""
+    opened = datetime.combine(day, SESSION_OPEN, tzinfo=NY)
+    gate = datetime.combine(day, GATE_ANCHOR, tzinfo=NY)
+    full_bars = int((gate - opened).total_seconds() // 60) // bar_minutes
+    if full_bars == 0:
+        return None
+    return (opened + timedelta(minutes=(full_bars - 1) * bar_minutes)).astimezone(UTC)
 
 
 def _bar_end(bar: dict, bar_minutes: int) -> datetime:
@@ -215,9 +248,7 @@ async def _fetch_bars(
     from two books.
     """
     base = _base_bar_minutes(bar_minutes)
-    # IB caps how much fine-grained history one request returns; 5 sessions of
-    # small bars is still well over the EMA21 warm-up.
-    duration = "10 D" if base >= 30 else "5 D"
+    duration = _history_duration(bar_minutes)
     ib = IB()
     try:
         await ib.connectAsync("127.0.0.1", port, clientId=client_id, readonly=True)
@@ -229,6 +260,10 @@ async def _fetch_bars(
         else:
             contract = Stock(symbol.upper(), "SMART", "USD")
         await ib.qualifyContractsAsync(contract)
+        # Closed-ness is judged against when the history was requested, not when
+        # the run later decides: a bar still forming in this snapshot stays
+        # provisional however long the vol-index requests below take.
+        requested_at = datetime.now(UTC)
         bars = await ib.reqHistoricalDataAsync(
             contract,
             endDateTime="",
@@ -246,6 +281,7 @@ async def _fetch_bars(
         result.sort(key=lambda x: x["dt"])
         if base != bar_minutes:
             result = _aggregate_bars(result, bar_minutes)
+        result = [b for b in result if _bar_end(b, bar_minutes) <= requested_at]
 
         # ── Vol index (VIX/VXN): intraday + prior-day close, both from IB ──
         vix_intraday, vix_prior = await _fetch_vol_index(ib, vol_symbol)
@@ -319,7 +355,9 @@ def _detect_signal(
 
     anchor_utc = datetime.combine(today_et, GATE_ANCHOR, tzinfo=NY).astimezone(UTC)
     opening = next((b for b in today_bars if b["dt"].astimezone(NY).time() == SESSION_OPEN), None)
-    anchor = next((b for b in reversed(today_bars) if _bar_end(b, bar_minutes) <= anchor_utc), None)
+    anchor_start = _gate_anchor_start(today_et, bar_minutes)
+    anchor = next((b for b in today_bars if b["dt"] == anchor_start), None)
+    anchor_label = anchor_start.astimezone(NY).strftime("%H:%M") if anchor_start else "none"
 
     # Time gate: only enforced when opted in.
     if time_gate and (now_utc < anchor_utc or not opening or not anchor):
@@ -328,7 +366,8 @@ def _detect_signal(
             "missing-bars",
             (
                 f"Need today's {bar_minutes}-min bars from 9:30 through 10:30 ET — "
-                f"found opening bar={'yes' if opening else 'no'}. "
+                f"found opening bar={'yes' if opening else 'no'}, "
+                f"{anchor_label} anchor bar={'yes' if anchor else 'no'}. "
                 "Run at 10:30 ET or later."
             ),
             None,
