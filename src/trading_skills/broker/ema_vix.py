@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 # ABOUTME: EMA9/EMA21 + VIX/VXN regime 0DTE strategy — signal detection + runner.
-# ABOUTME: Auto-selects bull_put or bear_call from 30-min bars, then delegates
+# ABOUTME: Auto-selects bull_put or bear_call from 12-min bars, then delegates
 # ABOUTME: spread selection and execution to find_0dte_spreads.
 """
 EMA + VIX/VXN 0DTE strategy.
 
+Bars: EMAs and gates run on closed RTH bars of `bar_minutes` (default 12).
+IB has no native 12-min size, so those are aggregated from 3-min bars, aligned
+to the 9:30 ET open.
+
 Signal logic (default — bare EMA cross):
   1. Vol index >= threshold -> skip, no trade. NDX/QQQ are gated on VXN
-     (Nasdaq-100 vol, default cutoff 35); all other symbols on VIX (default 20).
+     (Nasdaq-100 vol, default cutoff 30); all other symbols on VIX (default 20).
   2. EMA9 last crossed ABOVE EMA21 -> bull_put.
   3. EMA9 last crossed BELOW EMA21 -> bear_call.
   4. EMA9 ≈ EMA21 (gap within ic_threshold%) AND ic_gate=True -> iron_condor.
@@ -15,10 +19,10 @@ Signal logic (default — bare EMA cross):
 Two optional confirmation gates (both OFF by default):
   rr_gate    Require today's two most recently closed bars to be red
              before taking a Bear Call (EMA-down). If not confirmed -> no trade.
-  time_gate  Require today's 9:30 ET and 10:00 ET bars to exist (i.e. run at
-             10:30 ET or later) and anchor the EMA-cross lookback to the 10:00
-             ET bar. Without it, the lookback anchors to the latest available
-             bar, so the strategy can run at any time of day.
+  time_gate  Require today's bars from 9:30 through 10:30 ET (i.e. run at
+             10:30 ET or later) and anchor the EMA-cross lookback to the last
+             bar closing by 10:30 ET. Without it, the lookback anchors to the
+             latest closed bar, so the strategy can run at any time of day.
 
 Iron condor gate (off by default):
   ic_gate       Enable iron condor when EMAs are flat (neutral regime).
@@ -31,13 +35,18 @@ CLI script (ema_vix_0dte.py) and the MCP server.
 """
 
 import asyncio
+import math
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from ib_async import IB, Index, Stock
 
-from trading_skills.broker.zero_dte import DEFAULT_BUDGET_FRAC, find_0dte_spreads
+from trading_skills.broker.zero_dte import (
+    DEFAULT_BUDGET_FRAC,
+    DEFAULT_MAX_WIDTH,
+    find_0dte_spreads,
+)
 from trading_skills.utils import generated_at_str
 
 UTC = ZoneInfo("UTC")
@@ -45,9 +54,28 @@ NY = ZoneInfo("America/New_York")
 
 EMA_FAST = 9
 EMA_SLOW = 21
-BAR1_H, BAR1_M = 13, 30  # 9:30 ET
-BAR2_H, BAR2_M = 14, 0  # 10:00 ET
-BAR_SPAN = timedelta(minutes=30)  # the bar size these gates reason about
+DEFAULT_BAR_MINUTES = 12  # bar size the EMAs and gates run on
+SESSION_OPEN = time(9, 30)  # ET
+SESSION_CLOSE = time(16, 0)  # ET
+GATE_ANCHOR = time(10, 30)  # ET — time_gate anchors to the last bar closing by here
+SESSION_MINUTES = 390  # 9:30-16:00 ET
+# Fewest bars the fetched window must hold: EMA21 warm-up plus as many again
+# to find a crossover in.
+MIN_HISTORY_BARS = 2 * EMA_SLOW
+
+# IB's native intraday bar sizes (minutes) -> barSizeSetting. Any other size is
+# built by aggregating the largest native size that divides it evenly.
+IB_BAR_SIZES = {
+    1: "1 min",
+    2: "2 mins",
+    3: "3 mins",
+    5: "5 mins",
+    10: "10 mins",
+    15: "15 mins",
+    20: "20 mins",
+    30: "30 mins",
+    60: "1 hour",
+}
 
 # Index contracts: symbol -> (exchange, currency)
 INDEX_MAP = {
@@ -62,7 +90,7 @@ VXN_SYMBOLS = {"NDX", "NDXP", "QQQ", "MNX"}
 
 # Default vol-gate cutoffs per index. VXN typically prints several points above
 # VIX for the same regime, so it gets a higher default cutoff.
-DEFAULT_THRESHOLD = {"VIX": 20.0, "VXN": 35.0}
+DEFAULT_THRESHOLD = {"VIX": 20.0, "VXN": 30.0}
 
 
 def _vol_index_for(symbol: str) -> str:
@@ -83,6 +111,68 @@ def _ema_series(closes: list[float], period: int) -> list[float | None]:
     for c in closes[period:]:
         result.append(result[-1] * (1 - mult) + c * mult)  # type: ignore[operator]
     return result
+
+
+def _base_bar_minutes(bar_minutes: int) -> int:
+    """Largest native IB bar size that evenly divides `bar_minutes`."""
+    if bar_minutes <= 0:
+        raise ValueError(f"bar_minutes must be positive, got {bar_minutes}")
+    return max(m for m in IB_BAR_SIZES if bar_minutes % m == 0)
+
+
+def _aggregate_bars(bars: list[dict], bar_minutes: int) -> list[dict]:
+    """Roll native bars up into `bar_minutes` bars aligned to the 9:30 ET open.
+
+    Buckets restart each session, so the last bar of the day is a short one
+    when the session length is not a multiple of the size (12-min: 15:54-16:00).
+    """
+    buckets: dict[datetime, dict] = {}
+    for b in bars:
+        et = b["dt"].astimezone(NY)
+        opened = datetime.combine(et.date(), SESSION_OPEN, tzinfo=NY)
+        k = int((et - opened).total_seconds() // 60) // bar_minutes
+        start = (opened + timedelta(minutes=k * bar_minutes)).astimezone(UTC)
+        if start not in buckets:
+            buckets[start] = {"dt": start, "open": b["open"], "close": b["close"]}
+        else:
+            buckets[start]["close"] = b["close"]
+    return [buckets[k] for k in sorted(buckets)]
+
+
+def _history_duration(bar_minutes: int) -> str:
+    """IB duration string for the symbol history, sized for the EMA warm-up.
+
+    Raises ValueError when `bar_minutes` is so coarse that the window IB serves
+    for its native source size holds fewer than MIN_HISTORY_BARS bars.
+    """
+    # IB caps how much fine-grained history one request returns; 5 sessions of
+    # small bars is still well over the EMA21 warm-up.
+    sessions = 10 if _base_bar_minutes(bar_minutes) >= 30 else 5
+    bars = sessions * math.ceil(SESSION_MINUTES / bar_minutes)
+    if bars < MIN_HISTORY_BARS:
+        raise ValueError(
+            f"bar_minutes={bar_minutes} yields only {bars} bars over {sessions} sessions; "
+            f"the EMAs need at least {MIN_HISTORY_BARS}"
+        )
+    return f"{sessions} D"
+
+
+def _gate_anchor_start(day: date, bar_minutes: int) -> datetime | None:
+    """Start (UTC) of the last bar on `day` that closes by 10:30 ET, or None if none does."""
+    opened = datetime.combine(day, SESSION_OPEN, tzinfo=NY)
+    gate = datetime.combine(day, GATE_ANCHOR, tzinfo=NY)
+    full_bars = int((gate - opened).total_seconds() // 60) // bar_minutes
+    if full_bars == 0:
+        return None
+    return (opened + timedelta(minutes=(full_bars - 1) * bar_minutes)).astimezone(UTC)
+
+
+def _bar_end(bar: dict, bar_minutes: int) -> datetime:
+    """When `bar` stops changing: its nominal end, capped at the 16:00 ET close."""
+    end = bar["dt"] + timedelta(minutes=bar_minutes)
+    close = datetime.combine(bar["dt"].astimezone(NY).date(), SESSION_CLOSE, tzinfo=NY)
+    close = close.astimezone(UTC)
+    return min(end, close) if bar["dt"] < close else end
 
 
 def _bar_date(bar) -> date:
@@ -148,28 +238,37 @@ async def _fetch_bars(
     vol_symbol: str,
     port: int,
     client_id: int = 61,
+    bar_minutes: int = DEFAULT_BAR_MINUTES,
 ) -> tuple[list[dict], float | None, float | None, str]:
-    """Fetch 30-min RTH bars + both vol-index readings from IB, one connection.
+    """Fetch `bar_minutes` RTH bars + both vol-index readings from IB, one connection.
 
-    Returns (bars, vix_intraday, vix_prior, vix_source). Everything comes from
-    IB: one decision must not be assembled from two books.
+    Sizes IB doesn't serve natively (e.g. 12 min) are aggregated from the largest
+    native size that divides them. Returns (bars, vix_intraday, vix_prior,
+    vix_source). Everything comes from IB: one decision must not be assembled
+    from two books.
     """
+    base = _base_bar_minutes(bar_minutes)
+    duration = _history_duration(bar_minutes)
     ib = IB()
     try:
         await ib.connectAsync("127.0.0.1", port, clientId=client_id, readonly=True)
 
-        # ── Symbol bars (10 trading days, 30-min RTH) ─────────────────────
+        # ── Symbol bars (RTH, aggregated to bar_minutes) ──────────────────
         if symbol.upper() in INDEX_MAP:
             exch, ccy = INDEX_MAP[symbol.upper()]
             contract = Index(symbol.upper(), exch, ccy)
         else:
             contract = Stock(symbol.upper(), "SMART", "USD")
         await ib.qualifyContractsAsync(contract)
+        # Closed-ness is judged against when the history was requested, not when
+        # the run later decides: a bar still forming in this snapshot stays
+        # provisional however long the vol-index requests below take.
+        requested_at = datetime.now(UTC)
         bars = await ib.reqHistoricalDataAsync(
             contract,
             endDateTime="",
-            durationStr="10 D",
-            barSizeSetting="30 mins",
+            durationStr=duration,
+            barSizeSetting=IB_BAR_SIZES[base],
             whatToShow="TRADES",
             useRTH=True,
             formatDate=2,
@@ -180,6 +279,9 @@ async def _fetch_bars(
             dt_utc = b.date.astimezone(UTC) if hasattr(b.date, "astimezone") else b.date
             result.append({"dt": dt_utc, "open": b.open, "close": b.close})
         result.sort(key=lambda x: x["dt"])
+        if base != bar_minutes:
+            result = _aggregate_bars(result, bar_minutes)
+        result = [b for b in result if _bar_end(b, bar_minutes) <= requested_at]
 
         # ── Vol index (VIX/VXN): intraday + prior-day close, both from IB ──
         vix_intraday, vix_prior = await _fetch_vol_index(ib, vol_symbol)
@@ -196,6 +298,7 @@ def _detect_signal(
     time_gate: bool = False,
     ic_gate: bool = False,
     ic_threshold: float = 0.15,
+    bar_minutes: int = DEFAULT_BAR_MINUTES,
 ) -> tuple[str | None, str, str | None, float | None]:
     """
     Returns (spread_type, signal_name, reason_skipped, ema_gap_pct).
@@ -206,15 +309,16 @@ def _detect_signal(
     ema_gap_pct:  (EMA9 - EMA21) / EMA21 * 100 at the ref bar, or None
 
     Defaults (all gates off): a bare EMA9/EMA21 cross picks the direction —
-    up → bull_put, down → bear_call — anchored to the latest available bar, so
+    up → bull_put, down → bear_call — anchored to the latest closed bar, so
     it runs at any time of day.
 
     rr_gate=True:   an EMA-down only becomes a Bear Call if today's two most
                     recently CLOSED bars are both red (red→red); otherwise no
                     trade. Reads current momentum, whenever the run happens.
-    time_gate=True: require today's 9:30 ET and 10:00 ET bars to exist (run at
-                    10:30 ET or later) and anchor the EMA-cross lookback to the
-                    10:00 ET bar.
+    time_gate=True: require today's bars from the 9:30 ET open through 10:30 ET
+                    (run at 10:30 ET or later) and anchor the EMA-cross lookback
+                    to the last bar closing by 10:30 ET (10:00 bar at 30 min,
+                    10:18 bar at 12 min).
     ic_gate=True:   when EMA9 and EMA21 are within ic_threshold% of each other
                     (neutral/flat regime), select iron_condor instead of a
                     directional spread. Without this flag the last-cross direction
@@ -222,6 +326,14 @@ def _detect_signal(
     """
     if not bars:
         return None, "no-bars", "No bars received from IB", None
+
+    # IB returns the in-progress bar too; its "close" is just the last tick, so an
+    # EMA built on it repaints until the bar ends. Every gate below reads closed
+    # bars only, so the signal cannot flip within a bar.
+    now_utc = datetime.now(NY).astimezone(UTC)
+    bars = [b for b in bars if _bar_end(b, bar_minutes) <= now_utc]
+    if not bars:
+        return None, "no-bars", "No closed bars received from IB", None
 
     closes = [b["close"] for b in bars]
     ema9_s = _ema_series(closes, EMA_FAST)
@@ -236,37 +348,36 @@ def _detect_signal(
 
     today_bars = by_date.get(today_et, [])
 
-    # Red->red confirmation reads today's two most recently CLOSED bars, so it
-    # reflects momentum at the moment of the run. bar1/bar2 below stay pinned to
-    # 9:30/10:00 because the time gate's job is a fixed morning anchor.
-    now_utc = datetime.now(NY).astimezone(UTC)
-    closed_today = [b for b in today_bars if b["dt"] + BAR_SPAN <= now_utc]
-    rr_bars = closed_today[-2:]
+    # Red->red confirmation reads today's two most recently closed bars, so it
+    # reflects momentum at the moment of the run. The time gate below stays
+    # pinned to the open because its job is a fixed morning anchor.
+    rr_bars = today_bars[-2:]
 
-    bar1 = next(
-        (b for b in today_bars if b["dt"].hour == BAR1_H and b["dt"].minute == BAR1_M), None
-    )
-    bar2 = next(
-        (b for b in today_bars if b["dt"].hour == BAR2_H and b["dt"].minute == BAR2_M), None
-    )
+    anchor_utc = datetime.combine(today_et, GATE_ANCHOR, tzinfo=NY).astimezone(UTC)
+    opening = next((b for b in today_bars if b["dt"].astimezone(NY).time() == SESSION_OPEN), None)
+    anchor_start = _gate_anchor_start(today_et, bar_minutes)
+    anchor = next((b for b in today_bars if b["dt"] == anchor_start), None)
+    anchor_label = anchor_start.astimezone(NY).strftime("%H:%M") if anchor_start else "none"
 
     # Time gate: only enforced when opted in.
-    if time_gate and (not bar1 or not bar2):
+    if time_gate and (now_utc < anchor_utc or not opening or not anchor):
         return (
             None,
             "missing-bars",
             (
-                f"Need 9:30 ET and 10:00 ET bars — found bar1={'yes' if bar1 else 'no'}, "
-                f"bar2={'yes' if bar2 else 'no'}. Run at 10:30 ET or later."
+                f"Need today's {bar_minutes}-min bars from 9:30 through 10:30 ET — "
+                f"found opening bar={'yes' if opening else 'no'}, "
+                f"{anchor_label} anchor bar={'yes' if anchor else 'no'}. "
+                "Run at 10:30 ET or later."
             ),
             None,
         )
 
     # Reference bar for the EMA-cross lookback:
-    #   time_gate on  → the 10:00 ET bar (fixed morning anchor)
-    #   time_gate off → the latest bar available today, else the latest overall
-    if time_gate and bar2:
-        ref_bar = bar2
+    #   time_gate on  → the last bar closing by 10:30 ET (fixed morning anchor)
+    #   time_gate off → the latest closed bar today, else the latest closed overall
+    if time_gate:
+        ref_bar = anchor
     elif today_bars:
         ref_bar = today_bars[-1]
     else:
@@ -355,6 +466,7 @@ async def run_ema_vix_strategy(
     target_delta: float | None = None,
     rr_gate: bool = False,
     time_gate: bool = False,
+    bar_minutes: int = DEFAULT_BAR_MINUTES,
     expiry: str | None = None,
     account: str | None = None,
     execute: bool = False,
@@ -364,7 +476,7 @@ async def run_ema_vix_strategy(
     replace: bool = False,
     top: int = 5,
     min_pop: float = 0.0,
-    max_width: float | None = None,
+    max_width: float | None = DEFAULT_MAX_WIDTH,
     delta: float | None = None,
     rv_ratio: float = 0.85,
     allow_stale: bool = False,
@@ -383,21 +495,21 @@ async def run_ema_vix_strategy(
 ) -> dict:
     """Run the EMA9/EMA21 + VIX/VXN regime strategy and return the result dict.
 
-    Reads 30-min bars + the live vol index from IB, applies the vol gate, detects
-    the EMA signal (auto-selecting bull_put / bear_call), then delegates to
+    Reads `bar_minutes` bars (default 12) + the live vol index from IB, applies the
+    vol gate, detects the EMA signal (auto-selecting bull_put / bear_call), then delegates to
     find_0dte_spreads for strike selection, ranking, and (if execute) placement.
     Returns a dict with success=False and a reason when any gate blocks the trade.
     """
     symbol = symbol.upper()
     vol_symbol = _vol_index_for(symbol)
-    # Per-index default cutoff (VXN 35 / VIX 20) unless explicitly overridden.
+    # Per-index default cutoff (VXN 30 / VIX 20) unless explicitly overridden.
     if vix_threshold is None:
         vix_threshold = DEFAULT_THRESHOLD[vol_symbol]
 
     # ── 1. Fetch bars + live intraday vol index from IB (single connection) ─
     try:
         bars, vix_intraday, vix_prior, vix_source = await _fetch_bars(
-            symbol, vol_symbol, port=port, client_id=client_id
+            symbol, vol_symbol, port=port, client_id=client_id, bar_minutes=bar_minutes
         )
     except (ConnectionRefusedError, OSError, TimeoutError, asyncio.TimeoutError) as exc:
         return {
@@ -471,7 +583,12 @@ async def run_ema_vix_strategy(
 
     # ── 3. Detect EMA signal ──────────────────────────────────────────────
     spread_type, signal_name, skip_reason, ema_gap_pct = _detect_signal(
-        bars, rr_gate=rr_gate, time_gate=time_gate, ic_gate=ic_gate, ic_threshold=ic_threshold
+        bars,
+        rr_gate=rr_gate,
+        time_gate=time_gate,
+        ic_gate=ic_gate,
+        ic_threshold=ic_threshold,
+        bar_minutes=bar_minutes,
     )
 
     if spread_type is None:
@@ -493,7 +610,7 @@ async def run_ema_vix_strategy(
         }
 
     # ── 4. Delegate to find_0dte_spreads ──────────────────────────────────
-    eff_target_delta = target_delta if target_delta is not None else 0.12
+    # target_delta None → per-side default in find_0dte_spreads (0.11 call / 0.07 put).
     result = await find_0dte_spreads(
         symbol,
         spread_type=spread_type,
@@ -511,7 +628,7 @@ async def run_ema_vix_strategy(
         min_pop=min_pop,
         max_width=max_width,
         max_short_delta=delta,
-        target_delta=eff_target_delta,
+        target_delta=target_delta,
         rv_ratio=rv_ratio,
         allow_stale=allow_stale,
         fetch_events=not no_events,
@@ -529,6 +646,7 @@ async def run_ema_vix_strategy(
     result["strategy"] = "ema_vix"
     result["signal"] = signal_name
     result["ema_gap_pct"] = ema_gap_pct
+    result["bar_minutes"] = bar_minutes
     result["vol_index"] = vol_symbol
     result["vix_intraday"] = round(vix_intraday, 2)
     result["vix_prior"] = round(vix_prior, 2)

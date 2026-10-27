@@ -21,11 +21,21 @@ DEFAULT_STOP_MULT = 2.0
 # Per-symbol stop presets — starting points, tune with live data. Keys are symbols;
 # "_default" applies to anything unlisted. Any CLI flag the user passes overrides these.
 # mult = premium-cap multiple, buffer = points before the short strike, delta = short-delta stop.
+# put_buffer (optional) overrides buffer on the put side; negative = past the strike.
 STOP_PRESETS = {
     # Wide, high-beta index → lean looser on the premium cap and add a delta backstop
     # so a cheap far-OTM spread doesn't stop out on noise.
     # target = fraction of credit to capture; time_exit = ET flatten time.
-    "NDX": {"mult": 3.0, "buffer": 0.0, "delta": 0.3, "target": 0.50, "time_exit": "15:30"},
+    # Level stop at short strike - 50 on both sides: 50 pts before the short call,
+    # 50 pts past the short put.
+    "NDX": {
+        "mult": 3.0,
+        "buffer": 50.0,
+        "put_buffer": -50.0,
+        "delta": 0.3,
+        "target": 0.50,
+        "time_exit": "15:30",
+    },
     "SPX": {"mult": 2.5, "buffer": 0.0, "delta": 0.3, "target": 0.50, "time_exit": "15:30"},
     "RUT": {"mult": 2.0, "buffer": 0.0, "delta": 0.3, "target": 0.50, "time_exit": "15:30"},
     "XSP": {"mult": 2.0, "buffer": 0.0, "delta": 0.3, "target": 0.50, "time_exit": "15:30"},
@@ -39,17 +49,25 @@ STOP_PRESETS = {
 }
 
 
+def preset_put_buffer(preset: dict) -> float:
+    """Put-side level-stop buffer for a preset (falls back to the shared buffer)."""
+    return preset.get("put_buffer", preset["buffer"])
+
+
 def resolve_stop_cfg(symbol, mult, buffer, delta, fill_timeout, target=None, time_exit=None):
     """Merge explicit args over the per-symbol preset over the global default.
 
     Any of mult/buffer/delta/target/time_exit that is None falls back to the preset
     for `symbol` (then to `_default`). fill_timeout is passed through unchanged.
     A `target` of 0 disables the profit-take; a `time_exit` of "" disables the timer.
+    An explicit `buffer` sets both sides; otherwise put_buffer comes from the preset.
     """
     preset = STOP_PRESETS.get(symbol.upper(), STOP_PRESETS["_default"])
     return {
         "mult": preset["mult"] if mult is None else mult,
         "buffer": preset["buffer"] if buffer is None else buffer,
+        # An explicit buffer applies to both sides; else the preset's put override.
+        "put_buffer": preset_put_buffer(preset) if buffer is None else buffer,
         "delta": preset["delta"] if delta is None else delta,
         "target": preset["target"] if target is None else target,
         "time_exit": preset["time_exit"] if time_exit is None else time_exit,
@@ -145,8 +163,23 @@ def _short_iv(leg: dict) -> float:
     return iv / 100.0 if iv else 0.20
 
 
-def stop_plan(candidate: dict, spot: float, T: float, r: float, *, mult, buffer_pts, target_delta):
-    """Build the stop trigger plan(s) for a candidate. Verticals → 1 side; condor → 2."""
+def stop_plan(
+    candidate: dict,
+    spot: float,
+    T: float,
+    r: float,
+    *,
+    mult,
+    buffer_pts,
+    target_delta,
+    put_buffer_pts=None,
+):
+    """Build the stop trigger plan(s) for a candidate. Verticals → 1 side; condor → 2.
+
+    buffer_pts applies to the call side and, unless put_buffer_pts is given, the put side.
+    """
+    if put_buffer_pts is None:
+        put_buffer_pts = buffer_pts
     legs = candidate["legs"]
     if candidate["strategy"] == "iron_condor":
         # legs = [put short, put long, call short, call long]
@@ -175,7 +208,7 @@ def stop_plan(candidate: dict, spot: float, T: float, r: float, *, mult, buffer_
             r,
             _short_iv(put_short),
             mult=mult,
-            buffer_pts=buffer_pts,
+            buffer_pts=put_buffer_pts,
             target_delta=target_delta,
         )
         return [{"side": "call", **call_side}, {"side": "put", **put_side}]
@@ -192,7 +225,7 @@ def stop_plan(candidate: dict, spot: float, T: float, r: float, *, mult, buffer_
         r,
         _short_iv(short_leg),
         mult=mult,
-        buffer_pts=buffer_pts,
+        buffer_pts=buffer_pts if right == "C" else put_buffer_pts,
         target_delta=target_delta,
     )
     return [{"side": right, **plan}]
@@ -635,9 +668,18 @@ async def _repair_stop(ib, cand, symbol, account, today, index_specs, resolve_un
     if not qualified or not qualified[0].conId:
         return {"ok": False, "error": f"Could not qualify underlying {symbol}"}
     underlying_exch = index_specs.get(symbol.upper(), "SMART")
-    buf = STOP_PRESETS.get(symbol.upper(), STOP_PRESETS["_default"])["buffer"]
+    preset = STOP_PRESETS.get(symbol.upper(), STOP_PRESETS["_default"])
     # Strike-level only (mult=0, no delta) so no spot/IV lookup is required.
-    plans = stop_plan(cand, 0.0, 0.0, 0.045, mult=0, buffer_pts=buf, target_delta=None)
+    plans = stop_plan(
+        cand,
+        0.0,
+        0.0,
+        0.045,
+        mult=0,
+        buffer_pts=preset["buffer"],
+        put_buffer_pts=preset_put_buffer(preset),
+        target_delta=None,
+    )
     combo = _closing_combo_from_conids(symbol, "SMART", cand["_close_conids"])
     order_ref = f"ZDTE_STOP_{cand['strategy']}_{symbol}_{today}"
     return await _place_conditional_closes(

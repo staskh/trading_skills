@@ -26,8 +26,8 @@ Iron condor gate (opt in with --ic-gate):
   --ic-threshold  Gap threshold in percent for EMA-flat detection (default: 0.15).
 
 Position sizing uses the existing zero_dte library (budget / max_loss_per_contract).
-Strike targeting defaults to --target-delta 0.12, which approximates 1.5% OTM
-at VIX 15-19. Override with --target-delta if needed.
+Strike targeting defaults to short-leg delta 0.11 for bear calls and 0.07 for
+bull puts. Override with --target-delta (applies to both sides) if needed.
 
 The strategy logic lives in trading_skills.broker.ema_vix (also used by the MCP
 server); this script only handles CLI args and sandbox output.
@@ -46,8 +46,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from trading_skills.broker.ema_vix import run_ema_vix_strategy
-from trading_skills.broker.zero_dte import DEFAULT_BUDGET_FRAC
+from trading_skills.broker.ema_vix import DEFAULT_BAR_MINUTES, run_ema_vix_strategy
+from trading_skills.broker.zero_dte import DEFAULT_BUDGET_FRAC, DEFAULT_MAX_WIDTH
 from trading_skills.utils import generated_at_str
 
 NY = ZoneInfo("America/New_York")
@@ -84,13 +84,13 @@ def main():
         type=float,
         default=None,
         help="Skip trade if vol index >= this value. Default is per-index: "
-        "VXN 35 for NDX/QQQ, VIX 20 otherwise.",
+        "VXN 30 for NDX/QQQ, VIX 20 otherwise.",
     )
     parser.add_argument(
         "--target-delta",
         type=float,
         default=None,
-        help="Short-leg delta target (default: 0.12, ~1.5%% OTM at VIX<20)",
+        help="Short-leg delta target, both sides (default: 0.11 bear call / 0.07 bull put)",
     )
     parser.add_argument(
         "--rr-gate",
@@ -101,8 +101,15 @@ def main():
     parser.add_argument(
         "--time-gate",
         action="store_true",
-        help="Require today's 9:30 + 10:00 ET bars (run at 10:30 ET or later) and "
-        "anchor the EMA-cross lookback to the 10:00 ET bar (default: off)",
+        help="Require today's bars from 9:30 through 10:30 ET (run at 10:30 ET or later) "
+        "and anchor the EMA-cross lookback to the last bar closing by 10:30 ET (default: off)",
+    )
+    parser.add_argument(
+        "--bar-minutes",
+        type=int,
+        default=DEFAULT_BAR_MINUTES,
+        help=f"Bar size in minutes for the EMAs and gates (default: {DEFAULT_BAR_MINUTES}). "
+        "Sizes IB doesn't serve natively are aggregated from smaller bars",
     )
     parser.add_argument(
         "--ic-gate",
@@ -139,7 +146,12 @@ def main():
     parser.add_argument("--expiry", default=None)
     parser.add_argument("--top", type=int, default=5)
     parser.add_argument("--min-pop", type=float, default=0.0)
-    parser.add_argument("--max-width", type=float, default=None)
+    parser.add_argument(
+        "--max-width",
+        type=float,
+        default=DEFAULT_MAX_WIDTH,
+        help=f"Max strike width in points (default: {DEFAULT_MAX_WIDTH:g}; 0 = no cap)",
+    )
     parser.add_argument("--delta", type=float, default=None)
     parser.add_argument("--rv-ratio", type=float, default=0.85)
     parser.add_argument("--allow-stale", action="store_true")
@@ -179,6 +191,7 @@ def main():
             target_delta=args.target_delta,
             rr_gate=args.rr_gate,
             time_gate=args.time_gate,
+            bar_minutes=args.bar_minutes,
             ic_gate=args.ic_gate,
             ic_threshold=args.ic_threshold,
             expiry=args.expiry,

@@ -97,7 +97,7 @@ Always apply these flags when running `zero_dte.py` unless the user explicitly o
 | `--port` | `7496` | Live trading account; never use 7497 (paper) |
 | `--account` | required | Multi-account login; also the account whose excess liquidity funds the budget |
 | `--budget` | *(omit)* | Auto-sizes to 50% of the account's excess liquidity. Pass a value only to override |
-| `--max-width` (NDX only) | `100` | NDX bid/ask per leg is ~$1.50–$2 wide; narrow spreads have negative combo_ask_credit and are unfillable at market |
+| `--max-width` | *(omit)* | Defaults to `150` points in code. NDX bid/ask per leg is ~$1.50–$2 wide; narrow spreads have negative combo_ask_credit and are unfillable at market |
 
 Always run sequentially (not in parallel) when scanning multiple symbols — concurrent connections share client ID 50 and collide.
 

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from trading_skills.broker.zero_dte import (
     DEFAULT_BUDGET_FRAC,
+    DEFAULT_MAX_WIDTH,
     SPREAD_TYPES,
     find_0dte_spreads,
     get_0dte_expiries,
@@ -97,7 +98,10 @@ def main():
         help="Minimum probability of profit filter, 0-1 (default: 0)",
     )
     parser.add_argument(
-        "--max-width", type=float, default=None, help="Max strike width in dollars (optional)"
+        "--max-width",
+        type=float,
+        default=DEFAULT_MAX_WIDTH,
+        help=f"Max strike width in points (default: {DEFAULT_MAX_WIDTH:g}; 0 = no cap)",
     )
     parser.add_argument(
         "--delta",
@@ -111,7 +115,8 @@ def main():
         type=float,
         default=None,
         help="Sell the short leg(s) around this delta (+/- 0.05), e.g. 0.15 — direct "
-        "control over strike selection (still bounded by --delta).",
+        "control over strike selection (still bounded by --delta). Applies to both sides. "
+        "Default: 0.11 bear call / 0.07 bull put; 0 disables the target band.",
     )
     parser.add_argument(
         "--rv-ratio",
@@ -194,8 +199,9 @@ def main():
         "--stop-buffer",
         type=float,
         default=None,
-        help="Points before the short strike to trigger the level stop "
-        "(default: per-symbol preset, else 0 = at the strike)",
+        help="Points before the short strike to trigger the level stop, both sides "
+        "(default: per-symbol preset — NDX: short call - 50 / short put - 50 — else 0 = "
+        "at the strike)",
     )
     parser.add_argument(
         "--stop-delta",

@@ -58,6 +58,10 @@ SPREAD_TYPES = ("bear_call", "bull_put", "iron_condor")
 # IB's forced liquidation, hence a fraction rather than the full figure.
 DEFAULT_BUDGET_FRAC = 0.5
 
+# Default cap on spread width, in points of the underlying. Pass 0 / None to
+# remove the cap.
+DEFAULT_MAX_WIDTH = 150.0
+
 
 def resolve_budget(
     explicit_budget: float | None,
@@ -157,6 +161,19 @@ def resolve_entry_delta(symbol: str, asset_type: str, explicit: float | None) ->
         return explicit
     fallback = "_index" if asset_type == "index" else "_stock"
     return ENTRY_MAX_DELTA.get(symbol.upper(), ENTRY_MAX_DELTA[fallback])
+
+
+# Default short-leg delta TARGET (± delta_band) per side: bear calls sell ~0.11,
+# bull puts sit further out at ~0.07. Explicit --target-delta applies to both sides;
+# --target-delta 0 disables the band (strikes then bounded only by the entry cap).
+DEFAULT_TARGET_DELTA = {"C": 0.11, "P": 0.07}
+
+
+def resolve_target_delta(right: str, explicit: float | None) -> float | None:
+    """Effective short-leg delta target for one side (None = no target band)."""
+    if explicit is None:
+        return DEFAULT_TARGET_DELTA[right]
+    return explicit or None
 
 
 def _today_ny() -> str:
@@ -639,6 +656,7 @@ def build_iron_condors(
     max_width: float | None = None,
     max_short_delta: float | None = None,
     target_delta: float | None = None,
+    put_target_delta: float | None = None,
     delta_band: float = 0.05,
     rv_ratio: float | None = 0.85,
     max_legs_out: int = 12,
@@ -648,7 +666,8 @@ def build_iron_condors(
 
     Sizing is by the condor's true max loss (only one wing can be breached at
     expiration): max_loss = max(call_width, put_width) - combined_credit.
-    max_short_delta / target_delta / rv_ratio flow into both sides.
+    max_short_delta / target_delta / rv_ratio flow into both sides;
+    put_target_delta, when given, overrides target_delta on the put side.
     """
     # Size single-side verticals against the full budget first; the pairing below
     # re-sizes contracts against the combined condor risk. The filters flow into
@@ -663,6 +682,8 @@ def build_iron_condors(
         max_legs_out=max_legs_out,
     )
     call_side = build_verticals(calls, "C", spot, budget, T, r, **side_kwargs)
+    if put_target_delta is not None:
+        side_kwargs["target_delta"] = put_target_delta
     put_side = build_verticals(puts, "P", spot, budget, T, r, **side_kwargs)
     if not call_side or not put_side:
         return []
@@ -1151,7 +1172,7 @@ async def find_0dte_spreads(
     replace: bool = False,
     top: int = 5,
     min_pop: float = 0.0,
-    max_width: float | None = None,
+    max_width: float | None = DEFAULT_MAX_WIDTH,
     max_short_delta: float | None = None,
     target_delta: float | None = None,
     rv_ratio: float = 0.85,
@@ -1177,6 +1198,8 @@ async def find_0dte_spreads(
     account: the IBKR account the trade is committed to. Validated against the
         connection's managed accounts and recorded on the result. Also the account
         whose excess liquidity funds the auto-sized budget.
+    max_width: cap on strike width in points (default DEFAULT_MAX_WIDTH, 150);
+        0 or None removes the cap.
     max_short_delta: cap the |delta| of the short leg(s) — a manual risk limit.
     allow_stale: when True, price legs from the prior settlement close and derive
         greeks via Black-Scholes if IBKR streams no live quotes/greeks (off-hours).
@@ -1198,6 +1221,8 @@ async def find_0dte_spreads(
     """
     if spread_type not in SPREAD_TYPES:
         return {"success": False, "error": f"Unknown spread type: {spread_type}"}
+    if max_width is not None and max_width <= 0:
+        max_width = None
 
     contract, sec_type, asset_type = resolve_underlying(symbol)
     symbol_u = symbol.upper()
@@ -1322,20 +1347,39 @@ async def find_0dte_spreads(
 
             # Entry short-delta cap: explicit --delta wins, else per-class preset.
             eff_max_delta = resolve_entry_delta(symbol_u, asset_type, max_short_delta)
+            # Short-leg delta target: explicit --target-delta wins, else per-side default.
+            call_target = resolve_target_delta("C", target_delta)
+            put_target = resolve_target_delta("P", target_delta)
 
             build_kwargs = dict(
                 min_pop=min_pop,
                 max_width=max_width,
                 max_short_delta=eff_max_delta,
-                target_delta=target_delta,
                 rv_ratio=rv_ratio,
             )
             if spread_type == "bear_call":
-                candidates = build_verticals(calls, "C", spot, budget, T, rate, **build_kwargs)
+                eff_target = call_target
+                candidates = build_verticals(
+                    calls, "C", spot, budget, T, rate, target_delta=call_target, **build_kwargs
+                )
             elif spread_type == "bull_put":
-                candidates = build_verticals(puts, "P", spot, budget, T, rate, **build_kwargs)
+                eff_target = put_target
+                candidates = build_verticals(
+                    puts, "P", spot, budget, T, rate, target_delta=put_target, **build_kwargs
+                )
             else:
-                candidates = build_iron_condors(calls, puts, spot, budget, T, rate, **build_kwargs)
+                eff_target = {"call": call_target, "put": put_target}
+                candidates = build_iron_condors(
+                    calls,
+                    puts,
+                    spot,
+                    budget,
+                    T,
+                    rate,
+                    target_delta=call_target,
+                    put_target_delta=put_target,
+                    **build_kwargs,
+                )
 
             ranked = rank_candidates(candidates, top)
 
@@ -1415,7 +1459,8 @@ async def find_0dte_spreads(
                 "excess_liquidity": sizing["excess_liquidity"],
                 "trading_class": trading_class,
                 "max_short_delta": eff_max_delta,
-                "target_delta": target_delta,
+                "max_width": max_width,
+                "target_delta": eff_target,
                 "ev_model": ("expected_pnl" if rv_ratio else "binary"),
                 "rv_ratio": rv_ratio,
                 "data_quality_warning": data_quality_warning,
@@ -1501,6 +1546,29 @@ async def _maybe_execute(
     if candidate["max_loss_total"] > budget + 1e-6:
         return {"ok": False, "error": "Chosen spread's max loss exceeds budget"}
 
+    # A buffered level stop (e.g. NDX short call - 50) can sit at or through spot when
+    # the short strike is close; the stop would fire the moment the entry fills.
+    for plan in stop_plan(
+        candidate,
+        spot,
+        T,
+        rate,
+        mult=stop_cfg["mult"],
+        buffer_pts=stop_cfg["buffer"],
+        put_buffer_pts=stop_cfg.get("put_buffer"),
+        target_delta=stop_cfg["delta"],
+    ):
+        breached = spot >= plan["trigger"] if plan["is_more"] else spot <= plan["trigger"]
+        if breached:
+            return {
+                "ok": False,
+                "error": (
+                    f"Stop trigger {plan['trigger']} ({plan['binding']}) is already "
+                    f"breached at spot {spot}; entry would stop out immediately. "
+                    "Pick a further-OTM candidate or pass a smaller --stop-buffer."
+                ),
+            }
+
     order_ref = f"ZDTE_{spread_type}_{symbol_u}_{target}"
 
     # Duplicate guard: refuse (or replace) if a live order with this ref already rests.
@@ -1575,6 +1643,7 @@ async def _maybe_execute(
         rate,
         mult=stop_cfg["mult"],
         buffer_pts=stop_cfg["buffer"],
+        put_buffer_pts=stop_cfg.get("put_buffer"),
         target_delta=stop_cfg["delta"],
     )
     stop_ref = f"ZDTE_STOP_{spread_type}_{symbol_u}_{target}"

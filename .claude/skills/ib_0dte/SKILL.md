@@ -1,13 +1,13 @@
 ---
 name: ib_0dte
-description: Find and place the best 0DTE (zero-days-to-expiration) credit spreads from Interactive Brokers. Default execution route is the EMA9/EMA21 + VIX/VXN regime strategy (ema_vix_0dte.py), which auto-selects bull_put or bear_call from a bare EMA cross and skips the trade when the vol index is elevated (VXN ≥ 35 for NDX/QQQ, VIX ≥ 20 otherwise). Optional --rr-gate and --time-gate add red→red and bar-timing confirmation. Supports cash-settled indices (SPX, NDX, RUT, VIX) and any optionable stock/ETF. Manual spread type override is available via zero_dte.py. Requires TWS or IB Gateway running locally.
+description: Find and place the best 0DTE (zero-days-to-expiration) credit spreads from Interactive Brokers. Default execution route is the EMA9/EMA21 + VIX/VXN regime strategy (ema_vix_0dte.py), which auto-selects bull_put or bear_call from a bare EMA cross and skips the trade when the vol index is elevated (VXN ≥ 30 for NDX/QQQ, VIX ≥ 20 otherwise). Optional --rr-gate and --time-gate add red→red and bar-timing confirmation. Supports cash-settled indices (SPX, NDX, RUT, VIX) and any optionable stock/ETF. Manual spread type override is available via zero_dte.py. Requires TWS or IB Gateway running locally.
 dependencies: ["trading-skills"]
 ---
 
 # IB 0DTE Credit Spread Finder & Executor
 
 **Default execution route: `ema_vix_0dte.py`** — the EMA9/EMA21 + VIX/VXN regime
-strategy. It reads the 30-min IB bars, checks the vol index (VXN ≥ 35 for NDX/QQQ,
+strategy. It reads the 12-min IB bars, checks the vol index (VXN ≥ 30 for NDX/QQQ,
 VIX ≥ 20 otherwise), and auto-selects `bull_put` or `bear_call` from a bare EMA cross (or
 skips entirely) before delegating to the spread finder. Optional `--rr-gate` and
 `--time-gate` add confirmation. Use this unless the user explicitly requests a
@@ -35,7 +35,7 @@ Index options require the appropriate **index-options market-data entitlement**
 
 ### EMA + VIX/VXN Strategy (recommended — fully automatic signal)
 
-The script checks the vol index, reads the 30-min bars, determines bull_put vs
+The script checks the vol index, reads the 12-min bars, determines bull_put vs
 bear_call from the EMA9/EMA21 cross, then calls the spread finder automatically.
 By **default it runs a bare EMA cross with no bar-timing or red→red gate**, so it
 can be run at any time of day. Opt into the confirmation gates per run.
@@ -62,7 +62,7 @@ uv run python scripts/ema_vix_0dte.py SPX --account U790497 --port 7496 --execut
 
 **Vol index:** NDX/QQQ are gated on **VXN** (CBOE Nasdaq-100 Volatility Index —
 the correct vol gauge for a Nasdaq-100 trade); all other symbols on **VIX**. The
-default cutoff is **per-index — VXN 35, VIX 20** (VXN typically prints several
+default cutoff is **per-index — VXN 30, VIX 20** (VXN typically prints several
 points above VIX for the same regime). The index used is echoed as `vol_index` in
 the output; the `vix_*` fields hold that index's readings.
 
@@ -74,7 +74,7 @@ guessing (`signal: "VOL-UNAVAILABLE"`).
 
 Signal logic (default — exits early with `success: false` and a reason on skip):
 1. **No vol reading** (intraday or prior-day missing) → no trade (`signal: "VOL-UNAVAILABLE"`)
-2. **Vol index ≥ cutoff** (VXN ≥ 35 for NDX/QQQ, else VIX ≥ 20, either reading) → no trade (`signal: "VIX-SKIP"`)
+2. **Vol index ≥ cutoff** (VXN ≥ 30 for NDX/QQQ, else VIX ≥ 20, either reading) → no trade (`signal: "VIX-SKIP"`)
 3. **EMA9 last crossed above EMA21** → `bull_put` (`signal: "EMA-Up"`)
 4. **EMA9 last crossed below EMA21** → `bear_call` (`signal: "EMA-Dn"`)
 
@@ -84,13 +84,18 @@ Optional confirmation gates (both **off** by default):
   (`"EMA-Dn-no-RR"`). The confirmation tracks momentum at the moment of the run, so
   it means the same thing at 10:30 as at 15:00. A bar still in progress cannot
   confirm anything and is not counted.
-- `--time-gate` — require today's 9:30 + 10:00 ET bars (run at 10:30 ET or later)
-  and anchor the EMA-cross lookback to the 10:00 ET bar. Without it the lookback
-  anchors to the latest available bar.
+- `--time-gate` — require today's bars from 9:30 through 10:30 ET (run at 10:30 ET
+  or later) and anchor the EMA-cross lookback to the last bar closing by 10:30 ET
+  (the 10:18 bar at 12 min). Without it the lookback anchors to the latest closed bar.
+
+**Bars:** EMAs and gates run on **12-min** RTH bars by default (`--bar-minutes N` to
+change). IB has no native 12-min size, so they are built from 3-min bars aligned to
+the 9:30 ET open (the session's last bar, 15:54–16:00, is a 6-min stub). Only closed
+bars are used — the in-progress bar is ignored, so the signal cannot flip mid-bar.
 
 Additional flags:
-- `--vix-threshold N` — override the vol-index cutoff (default: per-index — VXN 35, VIX 20)
-- `--target-delta 0.12` — short-leg delta target (default: 0.12, ≈1.5% OTM at VIX<20)
+- `--vix-threshold N` — override the vol-index cutoff (default: per-index — VXN 30, VIX 20)
+- `--target-delta N` — short-leg delta target for both sides (default: **0.11 bear call / 0.07 bull put**)
 - All other `zero_dte.py` flags (`--max-width`, `--gex`, `--stop-mult`, etc.) pass through
 
 ### Manual spread finder (explicit type)
@@ -126,7 +131,7 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--limit-frac` — walk between the combo NBBO's marketable side and its mid: `combo_ask + frac × (net_credit − combo_ask)`. `0` = fully marketable (same as default), `0.5` = midpoint of combo NBBO, `1.0` = mid credit (rarely fills on multi-leg BAG combos). Computed at execution time, so it stays anchored to the fresh pull's combo quote. Ignored if `--limit` is set. (Note: IB **paper** often won't fill multi-leg 0DTE index combos at any marketable price — a paper-sim limitation, not a pricing issue.)
 - `--replace` — if a live order for this symbol/expiry/type already rests, cancel and re-place it (default: refuse as a duplicate).
 - `--stop-mult` — premium-cap stop: close when the spread reaches this multiple of the credit (default: `2.0` = lose ~1× credit). `0` disables the premium cap.
-- `--stop-buffer` — points before the short strike to trigger the level stop (default: `0` = at the strike).
+- `--stop-buffer` — points before the short strike to trigger the level stop, applied to both sides (default: per-symbol preset — **NDX: short call − 50 and short put − 50**; others `0` = at the strike).
 - `--stop-delta` — also stop when the short-leg delta reaches this level (optional, e.g. `0.30`).
 - `--profit-target` — buy back after capturing this fraction of the credit, e.g. `0.5` = 50% (`0` disables). Default: per-symbol preset, else `0.50`.
 - `--time-exit` — flatten remaining spreads at this ET time, e.g. `15:30` (`none` disables). Default: per-symbol preset, else `15:30`.
@@ -134,11 +139,11 @@ uv run python scripts/zero_dte.py SYMBOL --budget 2000 \
 - `--verify-stops` — check that every open 0DTE spread has a resting protective stop, then exit (no symbol required). Add `--repair` to place a strike-level stop on any unprotected position.
 - `--repair` — with `--verify-stops`, auto-place a strike-level stop on unprotected positions.
 
-Stop and exit defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero_dte_stop.py`) — each maps `mult`, `buffer`, `delta`, `target` (profit-take), and `time_exit`. E.g. NDX uses `mult 3.0` + `0.30` delta backstop, `50%` target, `15:30` exit; SPX `mult 2.5`; unlisted symbols `mult 2.0`. Any explicit flag overrides the preset. Entry short-delta caps are separate (`ENTRY_MAX_DELTA`: 0.12 index / 0.20 stock). These are starting points; tune them with live data.
+Stop and exit defaults come from **per-symbol presets** (`STOP_PRESETS` in `zero_dte_stop.py`) — each maps `mult`, `buffer`, optional `put_buffer` (put-side override; negative = past the strike), `delta`, `target` (profit-take), and `time_exit`. E.g. NDX uses `mult 3.0` + `0.30` delta backstop, level stop at short strike − 50 on both sides (50 pts before the short call, 50 pts past the short put), `50%` target, `15:30` exit; SPX `mult 2.5`; unlisted symbols `mult 2.0`. Any explicit flag overrides the preset. Entry short-delta caps are separate (`ENTRY_MAX_DELTA`: 0.12 index / 0.20 stock). These are starting points; tune them with live data.
 - `--expiry YYYYMMDD` — override the expiry (default: today ET, i.e. true 0DTE)
 - `--top` — number of candidates to return (default: 5)
 - `--min-pop` — minimum probability of profit, 0–1 (default: 0, no filter)
-- `--max-width` — cap the strike width in dollars (optional)
+- `--max-width` — cap the strike width in points (default: `150`; `0` = no cap). Echoed as `max_width` in the output.
 - `--delta` — cap the `|delta|` of the short leg(s) at entry. Applies to both verticals and (both short legs of) iron condors. **Defaults by class: 0.12 for indexes, 0.20 for stocks** (`ENTRY_MAX_DELTA` in `zero_dte.py`); pass a value here to override. The effective cap is echoed as `max_short_delta` in the output.
 - `--gex` — compute the **dealer gamma-exposure profile** (net GEX, gamma flip, call/put walls), annotate each candidate against the walls, and gate `entry_quality` on the regime. See **Gamma exposure (GEX)** below. Costs an extra chain fetch (it pulls both option sides).
 - `--gex-weight` — size measure behind each strike: `volume` (today's prints), `oi` (prior settlement's open interest), or `auto` (default: volume once it has printed, else OI).
@@ -222,7 +227,10 @@ the time exit mainly flattens positions still hovering near breakeven into the c
 
 The stop trigger is **level-anchored on the underlying** (robust to option-price noise),
 taking whichever of these fires first:
-- **Short strike** (± `--stop-buffer`) — the "thesis broken" level.
+- **Short strike** (± `--stop-buffer`) — the "thesis broken" level. NDX preset: short
+  strike − 50 on both sides. On a bull put that is *past* the strike, so the 0.30 delta
+  and premium-cap stops normally fire first. `--execute` refuses an entry whose stop
+  trigger is already breached at spot (e.g. a short call within 50 pts of NDX).
 - **Premium cap** (`--stop-mult`) — the underlying level where the loss reaches
   `mult × credit`, computed via Black-Scholes at entry.
 - **Short delta** (`--stop-delta`, optional).
@@ -288,7 +296,9 @@ To see how much of a candidate's EV is the assumption, re-run with
 Treat it as a tunable, and tune it against your own fills — the paper-test report
 (`scripts/report.py`) exists for exactly that.
 - **`--target-delta`** — pin the short leg(s) to a delta (± 0.05) for direct strike
-  control, e.g. `--target-delta 0.15`. Still bounded by `--delta`.
+  control, e.g. `--target-delta 0.15`. Still bounded by `--delta`. Default: **0.11 for
+  bear calls, 0.07 for bull puts** (iron condors use both, per side; `DEFAULT_TARGET_DELTA`
+  in `zero_dte.py`). `--target-delta 0` disables the band. Echoed as `target_delta`.
 - Candidates are ranked by **total EV**, ties broken toward higher POP.
 
 ## Output
