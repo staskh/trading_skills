@@ -425,6 +425,15 @@ Every run includes a `timing` block, computed from the current ET clock:
     `events_today` (each with `event`, `time_et`, `impact`, `actual`/`consensus`/`previous`),
     `high_impact_today` (FOMC/CPI/PPI/NFP/PCE/GDP/retail/ISM + Fed-chair remarks), and
     `warnings` for high-impact and imminent (within ~30 min) releases.
+    Nasdaq's `date` parameter is off by one day (date=D serves D-1's rows), so the
+    feed label is never trusted: contents are verified against the target day
+    (weekday of weekly releases, no actuals on future releases) and echoed as
+    `calendar_date` / `calendar_verified`. **If `calendar_verified` is false, do not
+    present the events as today's.** If both feeds contradict the day, it falls back
+    to `source: "static"`.
+  - **Clock guard:** the run aborts (`success: false`) if the local clock disagrees with
+    IB's server time by more than 120 s or lands on a different ET date — every
+    date (expiry, calendar, timing window) comes from the local clock.
   - `source: "static"` (fallback when the calendar can't be reached, or `--no-events`):
     recurring intraday-window warnings plus a `verify_before_trading` checklist.
 - Timing is holiday/early-close aware via the NYSE calendar (half-days shift the close

@@ -29,7 +29,7 @@ from trading_skills.broker.zero_dte_stop import (
     resolve_stop_cfg,
     stop_plan,
 )
-from trading_skills.economic_calendar import fetch_us_economic_events
+from trading_skills.economic_calendar import fetch_us_economic_calendar
 from trading_skills.utils import fetch_with_timeout
 
 NY = ZoneInfo("America/New_York")
@@ -181,6 +181,26 @@ def _today_ny() -> str:
     return datetime.now(NY).strftime("%Y%m%d")
 
 
+# Max tolerated drift between this machine's clock and IB's server clock. Every
+# date (0DTE expiry, calendar day, timing window) is derived from the local clock,
+# so an unsynced PC would silently trade the wrong day.
+CLOCK_MAX_SKEW_S = 120
+
+
+def clock_skew_error(local: datetime, server: datetime | None) -> str | None:
+    """Error text if the local clock disagrees with IB's server clock, else None."""
+    if server is None:
+        return None  # no server reading; nothing to compare against
+    skew = (local - server).total_seconds()
+    if local.astimezone(NY).date() != server.astimezone(NY).date() or abs(skew) > CLOCK_MAX_SKEW_S:
+        return (
+            f"System clock is off: local {local.astimezone(NY):%Y-%m-%d %H:%M:%S} ET vs "
+            f"IB server {server.astimezone(NY):%Y-%m-%d %H:%M:%S} ET "
+            f"(skew {skew:+.0f}s). Sync Windows time (admin: w32tm /resync) and re-run."
+        )
+    return None
+
+
 def _time_to_expiry_years(expiry: str) -> float:
     """Years from now until 16:00 ET on the expiry date (floored to ~1 minute)."""
     try:
@@ -318,7 +338,13 @@ def _minutes_from_et(time_et: str | None) -> int | None:
     return None
 
 
-def event_guidance(now: datetime, asset_type: str, live_events: list[dict] | None = None) -> dict:
+def event_guidance(
+    now: datetime,
+    asset_type: str,
+    live_events: list[dict] | None = None,
+    calendar_verified: bool = True,
+    calendar_date: str | None = None,
+) -> dict:
     """Event-risk guidance for the day.
 
     With `live_events` (from fetch_us_economic_events) it reports the real scheduled
@@ -343,8 +369,15 @@ def event_guidance(now: datetime, asset_type: str, live_events: list[dict] | Non
         ]
         for e in imminent:
             warnings.append(f"Imminent: {e['event']} at {e['time_et']} — hold off entering.")
+        if not calendar_verified:
+            warnings.append(
+                "Calendar day could not be verified against the feed — "
+                "confirm today's economic calendar manually."
+            )
         return {
             "source": "nasdaq",
+            "calendar_date": calendar_date or now.strftime("%Y-%m-%d"),
+            "calendar_verified": calendar_verified,
             "near_release_window": bool(imminent),
             "high_impact_today": [e["event"] for e in high],
             "events_today": live_events,
@@ -384,11 +417,15 @@ def build_timing(
     asset_type: str,
     session: dict | None = None,
     live_events: list[dict] | None = None,
+    calendar_verified: bool = True,
+    calendar_date: str | None = None,
 ) -> dict:
     """Combined intraday-timing + event-risk guidance for the output."""
     timing = assess_timing(now, spread_type, session)
     timing["now_et"] = now.strftime("%H:%M ET")
-    timing["events"] = event_guidance(now, asset_type, live_events)
+    timing["events"] = event_guidance(
+        now, asset_type, live_events, calendar_verified, calendar_date
+    )
     return timing
 
 
@@ -1232,6 +1269,11 @@ async def find_0dte_spreads(
         async with ib_connection(port, CLIENT_IDS["zero_dte"], readonly=not execute) as ib:
             ib.reqMarketDataType(4)  # delayed-frozen fallback outside RTH
 
+            server_now = await fetch_with_timeout(ib.reqCurrentTimeAsync(), timeout=5)
+            clock_error = clock_skew_error(datetime.now(NY), server_now)
+            if clock_error:
+                return {"success": False, "error": clock_error, "symbol": symbol_u}
+
             managed = ib.managedAccounts()
             if account and managed and account not in managed:
                 return {
@@ -1397,12 +1439,20 @@ async def find_0dte_spreads(
             now_et = datetime.now(NY)
             session = market_session(now_et)
             live_events = None
+            cal_verified = True
+            cal_date = f"{target[:4]}-{target[4:6]}-{target[6:]}"
             if fetch_events:
-                cal_date = f"{target[:4]}-{target[4:6]}-{target[6:]}"
-                live_events = await fetch_with_timeout(
-                    asyncio.to_thread(fetch_us_economic_events, cal_date), timeout=12, default=None
+                cal = await fetch_with_timeout(
+                    asyncio.to_thread(fetch_us_economic_calendar, cal_date, now_et),
+                    timeout=25,
+                    default=None,
                 )
-            timing = build_timing(now_et, spread_type, asset_type, session, live_events)
+                if cal is not None:
+                    live_events = cal["events"]
+                    cal_verified = cal["verified"]
+            timing = build_timing(
+                now_et, spread_type, asset_type, session, live_events, cal_verified, cal_date
+            )
             if gex_guide:
                 apply_gex_gate(timing, gex_guide)  # negative gamma downgrades the window
 
