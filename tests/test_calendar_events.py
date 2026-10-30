@@ -44,6 +44,7 @@ class TestReport:
     def test_day_reports_events_or_unavailable(self):
         day = run_events("--date", "2026-10-29")["days"][0]
         assert "verified" in day
+        assert "times_verified" in day
         if day["events"] is None:
             assert "manually" in day["note"]
         else:

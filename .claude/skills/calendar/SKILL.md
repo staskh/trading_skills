@@ -31,6 +31,7 @@ uv run python scripts/events.py [--date YYYY-MM-DD] [--days N] [--impact all|hig
 - `days` - one entry per weekday:
   - `date`, `weekday`
   - `verified` - true when the day's contents matched the requested weekday; false means use with care
+  - `times_verified` - true when Nasdaq's times were converted to ET using a clock measured from fixed-time releases (claims/NFP/CPI 8:30, ISM/JOLTS/Michigan 10:00) on that day or a nearby Thursday in the same daylight/standard period; false means times assume Nasdaq's usual UTC−4 clock — confirm them
   - `feed_date` - the Nasdaq `date` parameter whose rows were used
   - `events` - list of `{event, time_et, impact, actual, consensus, previous, source}`, high-impact first. `source` is `"nasdaq"` or `"forexfactory"` (gap-filled; no `actual`, ForexFactory's own impact rating). `null` when no source can serve the day (`note` says to verify manually — never read null as a quiet day)
   - `forexfactory` (with `--forexfactory`) - `{available, events, cross_check}` or `{available: false, note}`

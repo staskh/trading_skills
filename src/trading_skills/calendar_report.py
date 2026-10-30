@@ -73,6 +73,7 @@ def build_calendar_report(
             "date": day_str,
             "weekday": day.strftime("%a"),
             "verified": cal["verified"] if cal else False,
+            "times_verified": cal["times_verified"] if cal else False,
             "feed_date": cal["feed_date"] if cal else None,
         }
         ff = _forexfactory_day(week, day_str, nasdaq) if forexfactory else None
