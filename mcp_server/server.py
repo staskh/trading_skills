@@ -115,6 +115,10 @@ def price_history(
 def news_sentiment(symbol: str, limit: int = 10) -> dict:
     """Get recent news headlines for a stock.
 
+    Falls back from yfinance to Yahoo's RSS feed (source='yahoo-rss'), whose items
+    are tagged to the ticker and may include market-wide stories. An 'error' means
+    a source failed; only message='No news found' means there is no news.
+
     Args:
         symbol: Ticker symbol
         limit: Number of articles to return (default 10)
