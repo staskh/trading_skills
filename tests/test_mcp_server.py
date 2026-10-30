@@ -55,6 +55,7 @@ class TestMCPServerImport:
             "fundamentals",
             "piotroski_score",
             "earnings_calendar",
+            "economic_calendar",
             "technical_indicators",
             "price_correlation",
             "risk_assessment",
@@ -106,6 +107,37 @@ class TestMarketDataTools:
         if "data" in result:
             assert len(result["data"]) > 0
             assert "open" in result["data"][0]
+
+
+class TestEconomicCalendarTool:
+    """economic_calendar reports scheduled US releases per weekday."""
+
+    def test_reports_requested_weekdays(self):
+        from mcp_server.server import economic_calendar
+
+        result = economic_calendar(date="2026-10-30", days=2)
+        assert result["source"] == "nasdaq"
+        assert result["generated_at"].endswith(" ET")
+        assert [d["date"] for d in result["days"]] == ["2026-10-30", "2026-11-02"]
+
+    def test_forexfactory_section_only_on_request(self):
+        from mcp_server.server import economic_calendar
+
+        plain = economic_calendar(date="2026-01-05")["days"][0]
+        checked = economic_calendar(date="2026-01-05", forexfactory=True)["days"][0]
+        assert "forexfactory" not in plain
+        assert checked["forexfactory"]["available"] is False
+
+    def test_malformed_date_is_an_error(self):
+        from mcp_server.server import economic_calendar
+
+        result = economic_calendar(date="10/30/2026")
+        assert "YYYY-MM-DD" in result["error"]
+
+    def test_days_must_be_positive(self):
+        from mcp_server.server import economic_calendar
+
+        assert "days" in economic_calendar(days=0)["error"]
 
 
 class TestTechnicalTools:

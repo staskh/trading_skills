@@ -223,7 +223,7 @@ The MCP server exposes skills as tools for Claude Desktop:
 
 | Category | Tools |
 |----------|-------|
-| **Market Data** | `stock_quote`, `price_history`, `news_sentiment`, `insider_trading`, `fundamentals`, `piotroski_score`, `earnings_calendar` |
+| **Market Data** | `stock_quote`, `price_history`, `news_sentiment`, `insider_trading`, `fundamentals`, `piotroski_score`, `earnings_calendar`, `economic_calendar` |
 | **Technical** | `technical_indicators`, `price_correlation`, `risk_assessment` |
 | **Options** | `option_expiries`, `option_chain`, `option_greeks` |
 | **Spreads** | `spread_vertical`, `spread_diagonal`, `spread_straddle`, `spread_strangle`, `spread_iron_condor` |
