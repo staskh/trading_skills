@@ -37,7 +37,7 @@ uv run ruff format src/ tests/
 
 Use available skills to fetch real-time data and perform analysis:
 
-**Market Data**: `stock-quote`, `option-chain`, `price-history`, `fundamentals`, `news-sentiment`, `earnings-calendar`
+**Market Data**: `stock-quote`, `option-chain`, `price-history`, `fundamentals`, `news-sentiment`, `earnings-calendar`, `calendar`
 
 **Analysis**: `technical-analysis`, `greeks`, `spread-analysis`, `risk-assessment`
 

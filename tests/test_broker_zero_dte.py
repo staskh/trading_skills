@@ -2,6 +2,7 @@
 # ABOUTME: Pure scoring/construction tests run offline; IB-backed tests are manual.
 
 import asyncio
+import inspect
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -1212,3 +1213,10 @@ class TestClockSkew:
     def test_wrong_day_errors(self):
         err = zero_dte.clock_skew_error(self._t(9, 42, day=28), self._t(9, 42))
         assert err and "2026-10-28" in err
+
+
+class TestEventGateUsesNasdaqOnly:
+    """The live 0DTE event gate must not depend on the rate-limited ForexFactory feed."""
+
+    def test_forexfactory_is_not_used(self):
+        assert "forexfactory" not in inspect.getsource(zero_dte).lower()

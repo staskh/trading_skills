@@ -37,6 +37,7 @@ from trading_skills.broker.stop_loss import get_stop_loss_data
 from trading_skills.broker.trades import get_trades
 from trading_skills.broker.trailing_stop import get_trailing_stop_data
 from trading_skills.broker.zero_dte import DEFAULT_MAX_WIDTH
+from trading_skills.calendar_report import build_calendar_report
 from trading_skills.correlation import compute_correlation
 from trading_skills.earnings import get_earnings_info, get_multiple_earnings
 from trading_skills.fundamentals import get_fundamentals
@@ -178,6 +179,31 @@ def earnings_calendar(symbols: str) -> dict:
     if len(symbol_list) == 1:
         return get_earnings_info(symbol_list[0])
     return get_multiple_earnings(symbol_list)
+
+
+@mcp.tool()
+def economic_calendar(
+    date: str | None = None,
+    days: int = 1,
+    impact: str = "all",
+    forexfactory: bool = False,
+) -> dict:
+    """Get scheduled US economic releases (CPI, NFP, FOMC, GDP, PCE, ISM...) per weekday, in ET.
+
+    Events carry impact, actual, consensus and previous. A day with events=null could
+    not be served or verified: verify it manually, never read it as a quiet day.
+
+    Args:
+        date: First day, YYYY-MM-DD (default: today ET); a weekend rolls to Monday
+        days: Number of weekdays to report (default 1)
+        impact: 'all' or 'high' (default 'all')
+        forexfactory: Cross-check against ForexFactory and fill Nasdaq's gaps
+            (current Sun-Sat week only; filled events are tagged source='forexfactory')
+    """
+    try:
+        return build_calendar_report(date, days, impact, forexfactory)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
 
 # ============================================================================
