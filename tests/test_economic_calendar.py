@@ -1,7 +1,7 @@
 # ABOUTME: Tests for the live US economic-calendar module.
 # ABOUTME: Parsing/classification run offline; the live Nasdaq fetch is marked manual.
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -9,6 +9,7 @@ import pytest
 
 from trading_skills.calendar_nasdaq import (
     _inject_fomc_if_missing,
+    align_times,
     classify_impact,
     fetch_us_economic_calendar,
     fetch_us_economic_events,
@@ -266,3 +267,165 @@ class TestLiveFetch:
         # Live Nasdaq endpoint; a weekday should return some US events.
         result = fetch_us_economic_events("2026-07-10")
         assert result is None or isinstance(result, list)
+
+
+def _times(events):
+    return {e["event"]: e["time_et"] for e in events}
+
+
+class TestAlignTimes:
+    """Nasdaq's `gmt` column is a fixed UTC-4 clock, so standard-time releases read an hour late.
+
+    Observed 2026-10-30: Initial Jobless Claims for Thu 2026-11-05 (EST) showed 09:30,
+    Nonfarm Payrolls for 2026-11-06 showed 09:30; both release at 08:30 ET.
+    """
+
+    def test_standard_time_day_is_shifted_back_an_hour(self):
+        events = parse_events(
+            [
+                _row("09:30", "Initial Jobless Claims"),
+                _row("09:30", "Continuing Jobless Claims"),
+                _row("11:30", "Natural Gas Storage"),
+            ]
+        )
+        aligned, verified = align_times(events, "2026-11-05")
+        assert _times(aligned) == {
+            "Initial Jobless Claims": "08:30 ET",
+            "Continuing Jobless Claims": "08:30 ET",
+            "Natural Gas Storage": "10:30 ET",
+        }
+        assert verified is True
+
+    def test_daylight_time_day_is_unchanged(self):
+        events = parse_events(_FEED["2026-10-30"])  # Thu 2026-10-29, claims at 08:30
+        aligned, verified = align_times(events, "2026-10-29")
+        assert _times(aligned) == _times(events)
+        assert verified is True
+
+    def test_feed_on_the_standard_time_clock_is_shifted_forward(self):
+        # Should Nasdaq move its clock to UTC-5 after Nov 1, summer-date releases
+        # would read an hour early; the anchors measure that too.
+        events = parse_events([_row("07:30", "Initial Jobless Claims"), _row("07:30", "GDP")])
+        aligned, verified = align_times(events, "2026-10-29")
+        assert _times(aligned) == {"Initial Jobless Claims": "08:30 ET", "GDP": "08:30 ET"}
+        assert verified is True
+
+    def test_majority_of_anchors_decides(self):
+        events = parse_events(
+            [
+                _row("09:30", "Nonfarm Payrolls"),
+                _row("09:30", "Unemployment Rate"),
+                _row("11:00", "Michigan Consumer Sentiment"),
+                _row("08:30", "Retail Sales"),  # an outlier row
+            ]
+        )
+        aligned, _ = align_times(events, "2026-11-06")
+        assert _times(aligned)["Nonfarm Payrolls"] == "08:30 ET"
+        assert _times(aligned)["Michigan Consumer Sentiment"] == "10:00 ET"
+
+    def test_no_anchor_uses_the_reference_clock(self):
+        utc_minus_5 = timezone(timedelta(hours=-5))
+        events = parse_events([_row("08:55", "Redbook")])
+        aligned, verified = align_times(events, "2026-11-03", reference=utc_minus_5)
+        assert _times(aligned) == {"Redbook": "08:55 ET"}
+        assert verified is True
+
+    def test_no_anchor_on_a_standard_time_day_assumes_utc_minus_4(self):
+        events = parse_events([_row("09:55", "Redbook")])
+        aligned, verified = align_times(events, "2026-11-03")
+        assert _times(aligned) == {"Redbook": "08:55 ET"}
+        assert verified is False
+
+    def test_no_anchor_on_a_daylight_time_day_is_unchanged(self):
+        events = parse_events([_row("08:55", "Redbook")])
+        aligned, verified = align_times(events, "2026-10-27")
+        assert _times(aligned) == {"Redbook": "08:55 ET"}
+        assert verified is False
+
+    def test_events_without_a_time_are_kept(self):
+        events = parse_events([_row("", "Some Survey"), _row("09:30", "Initial Jobless Claims")])
+        aligned, _ = align_times(events, "2026-11-05")
+        assert _times(aligned)["Some Survey"] is None
+
+    def test_anchor_names_match_exactly(self):
+        # "Atlanta Fed GDPNow" is a model update with no fixed time, not the GDP release.
+        events = parse_events([_row("11:30", "Atlanta Fed GDPNow")])
+        _, verified = align_times(events, "2026-11-04")
+        assert verified is False
+
+
+class TestFetchCalendarTimes:
+    @patch("trading_skills.calendar_nasdaq._fetch_rows")
+    def test_standard_time_day_is_served_in_et(self, mock_rows):
+        mock_rows.side_effect = lambda d, t: {
+            "2026-11-06": [
+                _row("09:30", "Initial Jobless Claims"),
+                _row("11:30", "Natural Gas Storage"),
+            ]
+        }.get(d)
+        cal = fetch_us_economic_calendar("2026-11-05")
+        assert _times(cal["events"]) == {
+            "Initial Jobless Claims": "08:30 ET",
+            "Natural Gas Storage": "10:30 ET",
+        }
+        assert cal["times_verified"] is True
+
+    @patch("trading_skills.calendar_nasdaq._fetch_rows")
+    def test_printed_release_is_not_mistaken_for_a_future_one(self, mock_rows):
+        # 08:45 ET on Thu 2026-11-05: claims (08:30 ET, listed 09:30) already printed.
+        mock_rows.side_effect = lambda d, t: {
+            "2026-11-06": [_row("09:30", "Initial Jobless Claims", "201K")]
+        }.get(d)
+        now = datetime(2026, 11, 5, 8, 45, tzinfo=NY)
+        cal = fetch_us_economic_calendar("2026-11-05", now=now)
+        assert cal is not None
+        assert cal["verified"] is True
+
+    @patch("trading_skills.calendar_nasdaq._fetch_rows")
+    def test_fomc_decision_stays_at_two_pm(self, mock_rows):
+        mock_rows.side_effect = lambda d, t: {
+            "2026-12-10": [_row("11:30", "Crude Oil Inventories")]
+        }.get(d)
+        cal = fetch_us_economic_calendar("2026-12-09")
+        assert _times(cal["events"])["Crude Oil Inventories"] == "10:30 ET"
+        fomc = [e for e in cal["events"] if e["event"] == "FOMC Rate Decision"]
+        assert fomc and fomc[0]["time_et"] == "14:00 ET"
+
+    @patch("trading_skills.calendar_nasdaq._fetch_rows")
+    def test_day_without_anchors_is_measured_on_a_nearby_thursday(self, mock_rows):
+        # Tue 2026-11-03 holds only Redbook. Thu 2026-11-05 (same standard-time
+        # period) lists claims at 08:30, so the feed's clock is already ET-correct
+        # there and Redbook's 08:55 must not be shifted.
+        mock_rows.side_effect = lambda d, t: {
+            "2026-11-04": [_row("08:55", "Redbook")],
+            "2026-11-06": [_row("08:30", "Initial Jobless Claims")],
+        }.get(d)
+        cal = fetch_us_economic_calendar("2026-11-03")
+        assert _times(cal["events"]) == {"Redbook": "08:55 ET"}
+        assert cal["times_verified"] is True
+
+    @patch("trading_skills.calendar_nasdaq._fetch_rows")
+    def test_reference_thursday_stays_in_the_same_clock_period(self, mock_rows):
+        # Mon 2026-11-02 is standard time. Thu 2026-10-29 (daylight time) implies a
+        # UTC-5 clock, Thu 2026-11-05 (standard time) a UTC-4 clock; only the
+        # latter applies to Monday.
+        mock_rows.side_effect = lambda d, t: {
+            "2026-11-03": [_row("10:45", "S&P Global Manufacturing PMI")],
+            "2026-10-30": [_row("07:30", "Initial Jobless Claims")],
+            "2026-11-06": [_row("09:30", "Initial Jobless Claims")],
+        }.get(d)
+        cal = fetch_us_economic_calendar("2026-11-02")
+        assert _times(cal["events"]) == {"S&P Global Manufacturing PMI": "09:45 ET"}
+        assert cal["times_verified"] is True
+
+    @patch("trading_skills.calendar_nasdaq._fetch_rows")
+    def test_unmeasurable_clock_marks_times_unverified(self, mock_rows):
+        mock_rows.side_effect = lambda d, t: {"2026-11-04": [_row("09:55", "Redbook")]}.get(d)
+        cal = fetch_us_economic_calendar("2026-11-03")
+        assert _times(cal["events"]) == {"Redbook": "08:55 ET"}
+        assert cal["times_verified"] is False
+
+    @patch("trading_skills.calendar_nasdaq._fetch_rows", return_value=None)
+    def test_fomc_only_day_has_exact_times(self, _):
+        cal = fetch_us_economic_calendar("2026-12-09")
+        assert cal["times_verified"] is True
