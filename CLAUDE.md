@@ -78,6 +78,8 @@ Create the branch before writing any code: `git checkout -b feat/issue-N-descrip
 
 Version is in `pyproject.toml`. Bump it as the **final commit before opening a PR** — separate from the implementation commit. No need to run tests for the version bump commit.
 
+Once a merged PR passes CI on `main`, `.github/workflows/release.yml` tags `v<version>`, creates the GitHub release and publishes to PyPI. A merge that leaves the version unchanged releases nothing.
+
 ## Before Creating a PR
 
 You MUST complete all of the following steps before opening a pull request:
