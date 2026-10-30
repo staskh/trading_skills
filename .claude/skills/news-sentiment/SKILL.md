@@ -6,7 +6,7 @@ dependencies: ["trading-skills"]
 
 # News Sentiment
 
-Fetch recent news from Yahoo Finance.
+Fetch recent news from Yahoo Finance: yfinance's ticker news first, then Yahoo's per-ticker RSS feed when that comes back empty or fails.
 
 ## Instructions
 
@@ -24,10 +24,14 @@ uv run python scripts/news.py SYMBOL [--limit LIMIT]
 ## Output
 
 Returns JSON with:
-- `articles` - Array of recent news with title, publisher, date, link
-- `summary` - Brief summary of overall sentiment
+- `articles` - Array of recent news with title, publisher, date (`YYYY-MM-DD HH:MM ET`), link, type
+- `count` - Number of articles returned
+- `source` - `"yfinance"` or `"yahoo-rss"`
+- `note` - With `yahoo-rss`: items are tagged to the ticker, not necessarily about it, and arrive newest first. `publisher` is the link's host (often `finance.yahoo.com`), since the feed carries no publisher
+- `message: "No news found"` - both sources answered with no articles
+- `error` - no articles and at least one source failed; never read this as "no news"
 
-Present key headlines and note any significant news that could impact the stock.
+Present key headlines and note any significant news that could impact the stock. Judge the sentiment from the headlines yourself. With `yahoo-rss`, skip market-wide stories that are not about the company when assessing its sentiment.
 
 ## Dependencies
 
