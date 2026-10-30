@@ -54,6 +54,18 @@ def black_scholes_vega(
     return S * math.exp(-q * T) * norm.pdf(d1) * math.sqrt(T)
 
 
+def black_scholes_gamma(S: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Calculate gamma (second derivative of price w.r.t. spot).
+
+    Gamma is identical for a call and a put at the same strike, so no option_type.
+    """
+    if T <= 0 or sigma <= 0 or S <= 0:
+        return 0.0
+
+    d1, _ = _d1_d2(S, K, T, r, sigma)
+    return norm.pdf(d1) / (S * sigma * math.sqrt(T))
+
+
 def black_scholes_delta(
     S: float, K: float, T: float, r: float, sigma: float, option_type: str, q: float = 0.0
 ) -> float:

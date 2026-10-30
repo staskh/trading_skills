@@ -55,6 +55,7 @@ class TestMCPServerImport:
             "fundamentals",
             "piotroski_score",
             "earnings_calendar",
+            "economic_calendar",
             "technical_indicators",
             "price_correlation",
             "risk_assessment",
@@ -78,6 +79,7 @@ class TestMCPServerImport:
             "ib_delta_exposure",
             "ib_collar",
             "ib_trailing_stop",
+            "ib_0dte_ema_vix",
             "get_version",
         ]
         for tool_name in expected_tools:
@@ -105,6 +107,37 @@ class TestMarketDataTools:
         if "data" in result:
             assert len(result["data"]) > 0
             assert "open" in result["data"][0]
+
+
+class TestEconomicCalendarTool:
+    """economic_calendar reports scheduled US releases per weekday."""
+
+    def test_reports_requested_weekdays(self):
+        from mcp_server.server import economic_calendar
+
+        result = economic_calendar(date="2026-10-30", days=2)
+        assert result["source"] == "nasdaq"
+        assert result["generated_at"].endswith(" ET")
+        assert [d["date"] for d in result["days"]] == ["2026-10-30", "2026-11-02"]
+
+    def test_forexfactory_section_only_on_request(self):
+        from mcp_server.server import economic_calendar
+
+        plain = economic_calendar(date="2026-01-05")["days"][0]
+        checked = economic_calendar(date="2026-01-05", forexfactory=True)["days"][0]
+        assert "forexfactory" not in plain
+        assert checked["forexfactory"]["available"] is False
+
+    def test_malformed_date_is_an_error(self):
+        from mcp_server.server import economic_calendar
+
+        result = economic_calendar(date="10/30/2026")
+        assert "YYYY-MM-DD" in result["error"]
+
+    def test_days_must_be_positive(self):
+        from mcp_server.server import economic_calendar
+
+        assert "days" in economic_calendar(days=0)["error"]
 
 
 class TestTechnicalTools:
@@ -257,6 +290,34 @@ class TestIBTools:
 
         result = asyncio.run(ib_collar("AAPL", port=7497))
         assert "error" in result
+
+    def test_ib_0dte_ema_vix_handles_no_connection(self):
+        """ib_0dte_ema_vix returns a graceful failure when IB not connected."""
+        import asyncio
+
+        from mcp_server.server import ib_0dte_ema_vix
+
+        result = asyncio.run(ib_0dte_ema_vix("NDX", port=7497))
+        # No TWS on the test port → strategy fails to fetch bars; must not raise.
+        assert result.get("success") is False or "error" in result
+
+    def test_ib_0dte_ema_vix_uses_vxn_for_ndx(self):
+        """NDX/QQQ gate on VXN; other symbols on VIX (unit check, no IB needed)."""
+        from trading_skills.broker.ema_vix import _vol_index_for
+
+        assert _vol_index_for("NDX") == "VXN"
+        assert _vol_index_for("QQQ") == "VXN"
+        assert _vol_index_for("SPX") == "VIX"
+        assert _vol_index_for("AAPL") == "VIX"
+
+    def test_ib_0dte_ema_vix_per_index_default_threshold(self):
+        """Default vol cutoff is per-index: VXN 30, VIX 20."""
+        from trading_skills.broker.ema_vix import DEFAULT_THRESHOLD, _vol_index_for
+
+        assert DEFAULT_THRESHOLD[_vol_index_for("NDX")] == 30.0
+        assert DEFAULT_THRESHOLD[_vol_index_for("QQQ")] == 30.0
+        assert DEFAULT_THRESHOLD[_vol_index_for("SPX")] == 20.0
+        assert DEFAULT_THRESHOLD[_vol_index_for("SPY")] == 20.0
 
     def test_ib_trades_history_forwards_flex_query_id_list(self):
         """A list of flex_query_ids must be forwarded unchanged so MCP clients

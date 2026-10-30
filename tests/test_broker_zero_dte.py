@@ -1,0 +1,1222 @@
+# ABOUTME: Tests for the 0DTE credit-spread finder.
+# ABOUTME: Pure scoring/construction tests run offline; IB-backed tests are manual.
+
+import asyncio
+import inspect
+from datetime import datetime
+from types import SimpleNamespace
+
+import pytest
+
+from trading_skills.black_scholes import black_scholes_price
+from trading_skills.broker import zero_dte
+from trading_skills.broker.zero_dte import (
+    NY,
+    _maybe_execute,
+    _quote_source,
+    _resolve_quote,
+    assess_timing,
+    build_iron_condors,
+    build_verticals,
+    event_guidance,
+    expected_pnl_pc,
+    find_0dte_spreads,
+    get_0dte_expiries,
+    pop_short,
+    rank_candidates,
+    resolve_budget,
+    resolve_entry_delta,
+    resolve_target_delta,
+    resolve_underlying,
+)
+
+
+async def _no_sleep(_seconds):
+    """Collapse the tick-settling waits so tests do not sit idle."""
+    return None
+
+
+def _opt(strike, mid, delta=None, iv=None, right="C"):
+    """Build a minimal option-quote dict as the fetch layer produces."""
+    return {
+        "strike": strike,
+        "right": right,
+        "bid": round(mid - 0.05, 2),
+        "ask": round(mid + 0.05, 2),
+        "mid": mid,
+        "delta": delta,
+        "iv": iv,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Intraday timing & event guidance
+# --------------------------------------------------------------------------- #
+def _wk(h, m):
+    # 2026-07-10 is a Friday (a trading weekday).
+    return datetime(2026, 7, 10, h, m, tzinfo=NY)
+
+
+class TestAssessTiming:
+    def test_weekend_is_closed(self):
+        sat = datetime(2026, 7, 11, 11, 0, tzinfo=NY)
+        assert assess_timing(sat, "bear_call")["entry_quality"] == "closed"
+        assert assess_timing(sat, "bear_call")["market_open"] is False
+
+    def test_pre_market_closed(self):
+        assert assess_timing(_wk(9, 0), "bear_call")["window"] == "pre_market"
+
+    def test_after_hours_closed(self):
+        assert assess_timing(_wk(16, 5), "bear_call")["window"] == "after_hours"
+
+    def test_opening_bell_avoid(self):
+        t = assess_timing(_wk(9, 35), "bear_call")
+        assert t["window"] == "opening_bell"
+        assert t["entry_quality"] == "avoid"
+
+    def test_morning_prime_best_for_credit_spread(self):
+        t = assess_timing(_wk(10, 30), "bear_call")
+        assert t["window"] == "morning_prime"
+        assert t["entry_quality"] == "best"
+
+    def test_midday_best_for_iron_condor(self):
+        assert assess_timing(_wk(12, 30), "iron_condor")["entry_quality"] == "best"
+        assert assess_timing(_wk(12, 30), "bear_call")["entry_quality"] == "fair"
+
+    def test_power_hour_avoid(self):
+        t = assess_timing(_wk(15, 30), "bear_call")
+        assert t["window"] == "power_hour"
+        assert t["entry_quality"] == "avoid"
+
+
+class TestAssessTimingSession:
+    def test_holiday_session_is_closed(self):
+        # Weekday, midday, but the calendar says not a trading day.
+        session = {"is_trading_day": False, "close_hm": 960}
+        t = assess_timing(_wk(11, 0), "bear_call", session=session)
+        assert t["window"] == "closed"
+        assert "holiday" in t["recommendation"]
+
+    def test_early_close_shifts_power_hour(self):
+        # Half-day close at 13:00 (780 min): 12:15 should already be power_hour.
+        session = {"is_trading_day": True, "close_hm": 780}
+        assert assess_timing(_wk(12, 15), "bear_call", session=session)["window"] == "power_hour"
+        assert assess_timing(_wk(13, 30), "bear_call", session=session)["window"] == "after_hours"
+
+
+class TestEventGuidanceStatic:
+    def test_ten_am_window_flagged(self):
+        e = event_guidance(_wk(10, 5), "index")
+        assert e["source"] == "static"
+        assert e["near_release_window"] is True
+        assert any("10:00" in w for w in e["warnings"])
+
+    def test_fomc_slot_flagged(self):
+        assert any("FOMC" in w for w in event_guidance(_wk(14, 5), "index")["warnings"])
+
+    def test_quiet_time_no_warnings(self):
+        e = event_guidance(_wk(11, 0), "index")
+        assert e["warnings"] == []
+
+    def test_stock_underlying_adds_earnings_check(self):
+        assert any(
+            "earnings" in v.lower()
+            for v in event_guidance(_wk(11, 0), "stock")["verify_before_trading"]
+        )
+        assert not any(
+            "earnings" in v.lower()
+            for v in event_guidance(_wk(11, 0), "index")["verify_before_trading"]
+        )
+
+
+class TestEventGuidanceLive:
+    def _events(self):
+        return [
+            {
+                "event": "FOMC Statement",
+                "time_et": "14:00 ET",
+                "impact": "high",
+                "actual": None,
+                "consensus": None,
+                "previous": None,
+            },
+            {
+                "event": "Existing Home Sales",
+                "time_et": "10:00 ET",
+                "impact": "medium",
+                "actual": None,
+                "consensus": None,
+                "previous": None,
+            },
+        ]
+
+    def test_live_events_drive_source_and_high_impact(self):
+        e = event_guidance(_wk(9, 0), "index", live_events=self._events())
+        assert e["source"] == "nasdaq"
+        assert e["high_impact_today"] == ["FOMC Statement"]
+        assert any("FOMC Statement" in w for w in e["warnings"])
+        assert e["events_today"] == self._events()
+
+    def test_imminent_event_flagged(self):
+        # now 09:45; the 10:00 event is within 30 min -> imminent.
+        e = event_guidance(_wk(9, 45), "index", live_events=self._events())
+        assert e["near_release_window"] is True
+        assert any("Imminent" in w for w in e["warnings"])
+
+    def test_unverified_calendar_warns_and_is_flagged(self):
+        e = event_guidance(
+            _wk(9, 0), "index", live_events=[], calendar_verified=False, calendar_date="2026-10-29"
+        )
+        assert e["calendar_verified"] is False
+        assert e["calendar_date"] == "2026-10-29"
+        assert any("could not be verified" in w for w in e["warnings"])
+
+    def test_empty_live_list_still_nasdaq_source(self):
+        e = event_guidance(_wk(11, 0), "index", live_events=[])
+        assert e["source"] == "nasdaq"
+        assert e["warnings"] == []
+
+    def test_already_released_events_not_warned(self):
+        # Events with a non-null `actual` have already printed — must not appear
+        # in high_impact_today or warnings, even if impact == "high".
+        released = [
+            {
+                "event": "Fed Interest Rate Decision",
+                "time_et": "14:00 ET",
+                "impact": "high",
+                "actual": "4.00%",  # already released
+                "consensus": "4.00%",
+                "previous": "3.75%",
+            },
+            {
+                "event": "Core Retail Sales",
+                "time_et": "08:30 ET",
+                "impact": "high",
+                "actual": "1.4%",  # already released
+                "consensus": "0.6%",
+                "previous": "-0.2%",
+            },
+        ]
+        e = event_guidance(_wk(9, 40), "index", live_events=released)
+        assert e["high_impact_today"] == []
+        assert e["warnings"] == []
+        assert e["near_release_window"] is False
+
+    def test_mixed_released_and_pending_only_warns_pending(self):
+        events = [
+            {
+                "event": "Fed Interest Rate Decision",
+                "time_et": "14:00 ET",
+                "impact": "high",
+                "actual": "4.00%",  # already released
+                "consensus": "4.00%",
+                "previous": "3.75%",
+            },
+            {
+                "event": "FOMC Press Conference",
+                "time_et": "14:30 ET",
+                "impact": "high",
+                "actual": None,  # still pending
+                "consensus": None,
+                "previous": None,
+            },
+        ]
+        e = event_guidance(_wk(9, 40), "index", live_events=events)
+        assert e["high_impact_today"] == ["FOMC Press Conference"]
+        assert any("FOMC Press Conference" in w for w in e["warnings"])
+        assert not any("Fed Interest Rate Decision" in w for w in e["warnings"])
+
+
+# --------------------------------------------------------------------------- #
+# Quote resolution / --allow-stale gating
+# --------------------------------------------------------------------------- #
+class TestResolveQuote:
+    def _call(self, bid, ask, last, close, g_delta, g_iv, allow_stale):
+        return _resolve_quote(
+            bid,
+            ask,
+            last,
+            close,
+            g_delta,
+            g_iv,
+            spot=100,
+            strike=110,
+            right="C",
+            T=0.02,
+            r=0.045,
+            allow_stale=allow_stale,
+        )
+
+    def test_live_bid_ask_used_for_mid(self):
+        mid, delta, iv, stale, no_live = self._call(1.0, 1.2, None, 5.0, 0.15, 0.2, False)
+        assert mid == pytest.approx(1.1)
+        assert (delta, iv) == (0.15, 0.2)  # straight from IBKR greeks
+        assert stale is False
+        assert no_live is False
+
+    def test_no_live_quote_default_leaves_unpriceable(self):
+        # Only a close available, greeks absent, allow_stale False -> nothing usable.
+        mid, delta, iv, stale, no_live = self._call(None, None, None, 5.0, None, None, False)
+        assert mid is None  # close NOT used
+        assert iv is None  # greeks NOT computed
+        assert stale is False
+        assert no_live is True
+
+    def test_allow_stale_prices_from_close_and_derives_iv(self):
+        mid, delta, iv, stale, no_live = self._call(None, None, None, 5.0, None, None, True)
+        assert mid == 5.0  # yesterday's close
+        assert iv is not None and iv > 0  # BS-inverted from the close
+        assert stale is True
+        assert no_live is True
+
+    def test_ibkr_greeks_preferred_even_when_stale_allowed(self):
+        # If IBKR provides greeks, we never overwrite them with a BS estimate.
+        mid, delta, iv, stale, no_live = self._call(None, None, None, 5.0, 0.15, 0.33, True)
+        assert (delta, iv) == (0.15, 0.33)
+
+
+class TestExpectedPnl:
+    def test_none_without_sigma(self):
+        assert expected_pnl_pc("C", 100, 105, 110, 0.6, 0.02, 0.045, 0) is None
+
+    def test_vrp_makes_fairly_priced_spread_positive(self):
+        # credit = fair value at implied 0.20; valued at realized 0.17 -> positive EV
+        T, r, imp = 0.02, 0.045, 0.20
+        fair = black_scholes_price(100, 105, T, r, imp, "call") - black_scholes_price(
+            100, 110, T, r, imp, "call"
+        )
+        assert expected_pnl_pc("C", 100, 105, 110, fair, T, r, 0.85 * imp) > 0
+
+    def test_realized_equals_implied_is_near_zero(self):
+        T, r, imp = 0.02, 0.045, 0.20
+        fair = black_scholes_price(100, 105, T, r, imp, "call") - black_scholes_price(
+            100, 110, T, r, imp, "call"
+        )
+        assert abs(expected_pnl_pc("C", 100, 105, 110, fair, T, r, imp)) < 0.01
+
+
+class TestQuoteSource:
+    def test_bidask(self):
+        assert _quote_source({"bid": 1.0, "ask": 1.2, "mid": 1.1}) == "bidask"
+
+    def test_last_only(self):
+        # No live bid/ask but a last trade -> flagged as suspect "last"
+        assert _quote_source({"bid": None, "ask": None, "mid": 4.65, "stale": False}) == "last"
+
+    def test_close(self):
+        assert _quote_source({"bid": None, "ask": None, "mid": 5.0, "stale": True}) == "close"
+
+    def test_none(self):
+        assert _quote_source({"bid": None, "ask": None, "mid": None}) is None
+
+
+# --------------------------------------------------------------------------- #
+# Underlying resolution
+# --------------------------------------------------------------------------- #
+class TestResolveUnderlying:
+    def test_index_symbols_route_to_index_contract(self):
+        for sym, exch in [("SPX", "CBOE"), ("NDX", "NASDAQ"), ("RUT", "CBOE"), ("VIX", "CBOE")]:
+            contract, sec_type, asset_type = resolve_underlying(sym)
+            assert sec_type == "IND"
+            assert asset_type == "index"
+            assert contract.exchange == exch
+            assert contract.secType == "IND"
+
+    def test_stock_symbol_routes_to_stock(self):
+        contract, sec_type, asset_type = resolve_underlying("AAPL")
+        assert sec_type == "STK"
+        assert asset_type == "stock"
+        assert contract.exchange == "SMART"
+
+    def test_lowercase_is_normalized(self):
+        contract, sec_type, asset_type = resolve_underlying("spx")
+        assert asset_type == "index"
+        assert contract.symbol == "SPX"
+
+
+class TestResolveEntryDelta:
+    def test_index_default_is_012(self):
+        assert resolve_entry_delta("NDX", "index", None) == 0.12
+
+    def test_stock_default_is_020(self):
+        assert resolve_entry_delta("AAPL", "stock", None) == 0.20
+
+    def test_explicit_overrides_class_default(self):
+        assert resolve_entry_delta("NDX", "index", 0.25) == 0.25
+
+
+class TestResolveTargetDelta:
+    def test_per_side_defaults(self):
+        assert resolve_target_delta("C", None) == 0.11  # bear call
+        assert resolve_target_delta("P", None) == 0.07  # bull put
+
+    def test_explicit_applies_to_both_sides(self):
+        assert resolve_target_delta("C", 0.15) == 0.15
+        assert resolve_target_delta("P", 0.15) == 0.15
+
+    def test_zero_disables_band(self):
+        assert resolve_target_delta("C", 0) is None
+        assert resolve_target_delta("P", 0.0) is None
+
+
+# --------------------------------------------------------------------------- #
+# Probability of profit
+# --------------------------------------------------------------------------- #
+class TestPopShort:
+    def test_delta_is_primary(self):
+        # short call delta 0.20 -> POP ~ 0.80
+        pop = pop_short("C", 100, 105, delta=0.20, iv=None, T=0.001, r=0.045)
+        assert pop == pytest.approx(0.80)
+
+    def test_put_delta_uses_absolute_value(self):
+        pop = pop_short("P", 100, 95, delta=-0.25, iv=None, T=0.001, r=0.045)
+        assert pop == pytest.approx(0.75)
+
+    def test_bs_fallback_when_delta_missing(self):
+        # OTM call, should return a high (>0.5) POP from N(d2)
+        pop = pop_short("C", 100, 110, delta=None, iv=0.20, T=0.02, r=0.045)
+        assert pop is not None
+        assert 0.5 < pop < 1.0
+
+    def test_returns_none_without_usable_inputs(self):
+        assert pop_short("C", 100, 105, delta=None, iv=None, T=0.001, r=0.045) is None
+
+    def test_pop_clamped_to_unit_interval(self):
+        assert 0.0 <= pop_short("C", 100, 105, delta=1.5, iv=None, T=0.001, r=0.045) <= 1.0
+
+
+# --------------------------------------------------------------------------- #
+# Bear call verticals
+# --------------------------------------------------------------------------- #
+class TestBuildVerticalsBearCall:
+    def _calls(self):
+        # spot 100; OTM calls above spot
+        return [
+            _opt(100, 1.20, delta=0.50),
+            _opt(105, 0.60, delta=0.30),
+            _opt(110, 0.25, delta=0.15),
+            _opt(115, 0.10, delta=0.07),
+        ]
+
+    def test_produces_credit_spreads(self):
+        out = build_verticals(self._calls(), "C", spot=100, budget=1000, T=0.01, r=0.045)
+        assert out
+        for c in out:
+            assert c["strategy"] == "bear_call"
+            assert c["legs"][0]["action"] == "sell"
+            assert c["legs"][1]["action"] == "buy"
+            # long strike is further OTM than short
+            assert c["legs"][1]["strike"] > c["legs"][0]["strike"]
+            assert c["net_credit"] > 0
+            assert c["max_loss_per_contract"] > 0
+            assert c["contracts"] >= 1
+
+    def test_max_loss_matches_width_minus_credit(self):
+        out = build_verticals(self._calls(), "C", spot=100, budget=1000, T=0.01, r=0.045)
+        c = out[0]
+        width = c["width"]
+        expected_loss = round((width - c["net_credit"]) * 100, 2)
+        assert c["max_loss_per_contract"] == pytest.approx(expected_loss, abs=0.02)
+
+    def test_combo_nbbo_reflects_leg_bid_ask(self):
+        # Each leg's bid=mid-0.05, ask=mid+0.05, so the vertical's combo NBBO is
+        # net_credit ± 0.10 (marketable BUY is 10c worse than mid; resting bid 10c better).
+        out = build_verticals(self._calls(), "C", spot=100, budget=1000, T=0.01, r=0.045)
+        for c in out:
+            assert c["combo_ask_credit"] == pytest.approx(c["net_credit"] - 0.10, abs=0.01)
+            assert c["combo_bid_credit"] == pytest.approx(c["net_credit"] + 0.10, abs=0.01)
+
+    def test_budget_caps_position_size(self):
+        # tiny budget -> at most one contract, and only if a spread fits
+        out = build_verticals(self._calls(), "C", spot=100, budget=200, T=0.01, r=0.045)
+        for c in out:
+            assert c["max_loss_total"] <= 200 + 1e-6
+
+    def test_does_not_sell_itm_calls(self):
+        out = build_verticals(self._calls(), "C", spot=100, budget=1000, T=0.01, r=0.045)
+        for c in out:
+            assert c["legs"][0]["strike"] >= 100
+
+    def test_min_pop_filter(self):
+        out = build_verticals(
+            self._calls(), "C", spot=100, budget=1000, T=0.01, r=0.045, min_pop=0.80
+        )
+        for c in out:
+            assert c["pop"] >= 0.80
+
+    def test_max_width_filter(self):
+        out = build_verticals(
+            self._calls(), "C", spot=100, budget=1000, T=0.01, r=0.045, max_width=5
+        )
+        for c in out:
+            assert c["width"] <= 5
+
+    def test_ev_model_is_expected_pnl_with_iv(self):
+        out = build_verticals(
+            self._calls(), "C", spot=100, budget=1000, T=0.02, r=0.045, rv_ratio=0.85
+        )
+        # legs have no iv in this fixture -> falls back to binary
+        assert all(c["ev_model"] == "binary" for c in out)
+
+    def test_ev_uses_iv_as_a_fraction_not_a_percent(self):
+        # The raw leg's `iv` is a FRACTION (0.20), not percent — only _leg_view scales
+        # it for display. Scaling it again inside the EV collapses sigma 100x, the
+        # expected loss underflows to zero, and EV degenerates to the whole credit.
+        # Guard the defining property: a credit spread that can lose money must have
+        # EV strictly below its max profit.
+        legs = [
+            _opt(105, mid=1.00, delta=0.20, iv=0.20),
+            _opt(110, mid=0.40, delta=0.08, iv=0.22),
+        ]
+        [c] = build_verticals(legs, "C", spot=100, budget=10_000, T=0.02, r=0.045, rv_ratio=0.85)
+        assert c["ev_model"] == "expected_pnl_rv0.85"
+
+        expected = expected_pnl_pc("C", 100, 105, 110, c["net_credit"], 0.02, 0.045, 0.85 * 0.20)
+        assert c["ev_per_contract"] == pytest.approx(expected, abs=0.01)
+        assert c["ev_per_contract"] < c["max_profit_per_contract"]
+
+    def test_target_delta_band_filters(self):
+        # calls deltas 0.50/0.30/0.15/0.07; target 0.15 (+/-0.05) keeps only 0.15 short
+        out = build_verticals(
+            self._calls(), "C", spot=100, budget=1000, T=0.01, r=0.045, target_delta=0.15
+        )
+        assert out
+        for c in out:
+            assert abs(c["short_delta"] - 0.15) <= 0.05
+            assert c["legs"][0]["strike"] == 110  # the 0.15-delta short
+
+    def test_max_short_delta_filter(self):
+        # calls have deltas 0.50/0.30/0.15/0.07; cap at 0.20 keeps only 0.15 & 0.07 shorts
+        out = build_verticals(
+            self._calls(), "C", spot=100, budget=1000, T=0.01, r=0.045, max_short_delta=0.20
+        )
+        assert out
+        for c in out:
+            assert c["short_delta"] <= 0.20
+            assert c["legs"][0]["strike"] in (110, 115)  # 0.30-delta 105 short excluded
+
+    def test_reports_short_delta_and_distance(self):
+        out = build_verticals(self._calls(), "C", spot=100, budget=1000, T=0.01, r=0.045)
+        c = next(x for x in out if x["legs"][0]["strike"] == 110)
+        assert c["short_delta"] == pytest.approx(0.15)  # from IBKR delta
+        assert c["distance_to_short"] == pytest.approx(10.0)  # 110 - 100
+        assert c["distance_to_short_pct"] == pytest.approx(10.0)
+
+
+# --------------------------------------------------------------------------- #
+# Bull put verticals
+# --------------------------------------------------------------------------- #
+class TestBuildVerticalsBullPut:
+    def _puts(self):
+        # spot 100; OTM puts below spot
+        return [
+            _opt(85, 0.10, delta=-0.07, right="P"),
+            _opt(90, 0.25, delta=-0.15, right="P"),
+            _opt(95, 0.60, delta=-0.30, right="P"),
+            _opt(100, 1.20, delta=-0.50, right="P"),
+        ]
+
+    def test_produces_credit_spreads(self):
+        out = build_verticals(self._puts(), "P", spot=100, budget=1000, T=0.01, r=0.045)
+        assert out
+        for c in out:
+            assert c["strategy"] == "bull_put"
+            # long put is further OTM (lower strike) than short
+            assert c["legs"][1]["strike"] < c["legs"][0]["strike"]
+            assert c["net_credit"] > 0
+
+    def test_does_not_sell_otm_above_spot(self):
+        out = build_verticals(self._puts(), "P", spot=100, budget=1000, T=0.01, r=0.045)
+        for c in out:
+            assert c["legs"][0]["strike"] <= 100
+
+    def test_breakeven_below_short_strike(self):
+        out = build_verticals(self._puts(), "P", spot=100, budget=1000, T=0.01, r=0.045)
+        for c in out:
+            assert c["breakeven"] < c["legs"][0]["strike"]
+
+    def test_distance_is_spot_minus_short_strike(self):
+        out = build_verticals(self._puts(), "P", spot=100, budget=1000, T=0.01, r=0.045)
+        c = next(x for x in out if x["legs"][0]["strike"] == 95)
+        assert c["distance_to_short"] == pytest.approx(5.0)  # 100 - 95, positive cushion
+        assert c["short_delta"] == pytest.approx(0.30)
+
+
+# --------------------------------------------------------------------------- #
+# Iron condor
+# --------------------------------------------------------------------------- #
+class TestBuildIronCondors:
+    def _calls(self):
+        return [
+            _opt(105, 0.60, delta=0.30),
+            _opt(110, 0.25, delta=0.15),
+            _opt(115, 0.10, delta=0.07),
+        ]
+
+    def _puts(self):
+        return [
+            _opt(85, 0.10, delta=-0.07, right="P"),
+            _opt(90, 0.25, delta=-0.15, right="P"),
+            _opt(95, 0.60, delta=-0.30, right="P"),
+        ]
+
+    def _condors(self):
+        return build_iron_condors(
+            self._calls(), self._puts(), spot=100, budget=1000, T=0.01, r=0.045
+        )
+
+    def test_produces_condors_with_four_legs(self):
+        out = self._condors()
+        assert out
+        for c in out:
+            assert c["strategy"] == "iron_condor"
+            assert len(c["legs"]) == 4
+            # short strikes bracket spot
+            assert c["breakeven_low"] < 100 < c["breakeven_high"]
+
+    def test_condor_pop_is_two_sided(self):
+        for c in self._condors():
+            # POP of staying inside the range is a valid probability
+            assert 0.0 <= c["pop"] <= 1.0
+
+    def test_reports_short_leg_deltas_and_distances(self):
+        for c in self._condors():
+            assert c["short_call_delta"] is not None
+            assert c["short_put_delta"] is not None
+            assert c["call_distance_to_short"] > 0  # short call above spot
+            assert c["put_distance_to_short"] > 0  # short put below spot
+
+    def test_delta_cap_applies_to_both_short_legs(self):
+        out = build_iron_condors(
+            self._calls(),
+            self._puts(),
+            spot=100,
+            budget=1000,
+            T=0.01,
+            r=0.045,
+            max_short_delta=0.20,
+        )
+        for c in out:
+            assert c["short_call_delta"] <= 0.20
+            assert c["short_put_delta"] <= 0.20
+
+    def test_put_target_delta_overrides_put_side(self):
+        # deltas 0.30/0.15/0.07 per side; call target 0.30, put target 0.15 (+/-0.05)
+        out = build_iron_condors(
+            self._calls(),
+            self._puts(),
+            spot=100,
+            budget=1000,
+            T=0.01,
+            r=0.045,
+            target_delta=0.30,
+            put_target_delta=0.15,
+        )
+        assert out
+        for c in out:
+            assert abs(c["short_call_delta"] - 0.30) <= 0.05
+            assert abs(c["short_put_delta"] - 0.15) <= 0.05
+
+    def test_short_strikes_do_not_cross(self):
+        out = self._condors()
+        for c in out:
+            short_put = c["legs"][0]["strike"]
+            short_call = c["legs"][2]["strike"]
+            assert short_put < short_call
+
+    def test_combo_nbbo_sums_both_verticals(self):
+        # 4-leg BAG's combo NBBO is the sum of each side's NBBO. With ±0.05 per leg,
+        # each vertical is net ± 0.10, so the condor is net ± 0.20.
+        for c in self._condors():
+            assert c["combo_ask_credit"] == pytest.approx(c["net_credit"] - 0.20, abs=0.01)
+            assert c["combo_bid_credit"] == pytest.approx(c["net_credit"] + 0.20, abs=0.01)
+
+
+# --------------------------------------------------------------------------- #
+# Ranking
+# --------------------------------------------------------------------------- #
+class TestRankCandidates:
+    def test_ranks_by_ev_then_pop(self):
+        cands = [
+            {"ev_total": 10, "pop": 0.7},
+            {"ev_total": 50, "pop": 0.6},
+            {"ev_total": 50, "pop": 0.9},
+        ]
+        ranked = rank_candidates(cands, top=3)
+        assert ranked[0] == {"ev_total": 50, "pop": 0.9}  # higher EV, POP tiebreak
+        assert ranked[1] == {"ev_total": 50, "pop": 0.6}
+        assert ranked[2] == {"ev_total": 10, "pop": 0.7}
+
+    def test_top_limits_length(self):
+        cands = [{"ev_total": i, "pop": 0.5} for i in range(10)]
+        assert len(rank_candidates(cands, top=3)) == 3
+
+    def test_empty_input(self):
+        assert rank_candidates([], top=5) == []
+
+
+# --------------------------------------------------------------------------- #
+# Validation / edge cases (offline)
+# --------------------------------------------------------------------------- #
+class TestValidation:
+    def test_unknown_spread_type_errors(self):
+        result = asyncio.run(find_0dte_spreads("SPX", spread_type="butterfly"))
+        assert result["success"] is False
+        assert "Unknown spread type" in result["error"]
+
+    def test_crossed_quotes_rejected(self):
+        # long mid exceeds short mid -> no credit -> no candidates
+        calls = [_opt(105, 0.20, delta=0.30), _opt(110, 0.60, delta=0.15)]
+        out = build_verticals(calls, "C", spot=100, budget=1000, T=0.01, r=0.045)
+        assert out == []
+
+    def test_budget_too_small_yields_nothing(self):
+        calls = [_opt(105, 0.60, delta=0.30), _opt(115, 0.10, delta=0.07)]
+        # width 10 -> max loss ~ (10 - 0.5)*100 = 950 per contract; budget 100 fits none
+        out = build_verticals(calls, "C", spot=100, budget=100, T=0.01, r=0.045)
+        assert out == []
+
+
+# --------------------------------------------------------------------------- #
+# Execute guardrails (offline — guards return before any IB call)
+# --------------------------------------------------------------------------- #
+class TestExecuteGuards:
+    def _cand(self, max_loss_total=500.0):
+        return {"max_loss_total": max_loss_total, "net_credit": 0.85, "contracts": 5, "legs": []}
+
+    def _run(self, ranked, pick, account, budget):
+        # ib=None is safe: every case here fails a guard before _place_spread_order.
+        return asyncio.run(
+            _maybe_execute(
+                None,
+                ranked,
+                pick,
+                account,
+                budget,
+                None,
+                None,
+                "SPX",
+                "20260710",
+                "SMART",
+                "SPXW",
+                "bear_call",
+                spot=100,
+                T=0.01,
+                rate=0.045,
+                underlying_conid=1,
+                underlying_exch="SMART",
+                stop_cfg={"mult": 2.0, "buffer": 0, "delta": None, "fill_timeout": 1},
+            )
+        )
+
+    def test_no_candidates(self):
+        res = self._run([], 1, "U123", 1000)
+        assert res["ok"] is False
+        assert "No candidates" in res["error"]
+
+    def test_pick_out_of_range(self):
+        res = self._run([self._cand()], 3, "U123", 1000)
+        assert res["ok"] is False
+        assert "out of range" in res["error"]
+
+    def test_account_required(self):
+        res = self._run([self._cand()], 1, None, 1000)
+        assert res["ok"] is False
+        assert "Account required" in res["error"]
+
+    def test_budget_reexceeded_blocks(self):
+        res = self._run([self._cand(max_loss_total=5000.0)], 1, "U123", 1000)
+        assert res["ok"] is False
+        assert "exceeds budget" in res["error"]
+
+
+class TestStopBreachGuard:
+    def _cand(self, strategy, short_k, long_k):
+        right = "C" if strategy == "bear_call" else "P"
+        return {
+            "strategy": strategy,
+            "max_loss_total": 500.0,
+            "net_credit": 0.85,
+            "contracts": 1,
+            "legs": [
+                {"action": "sell", "right": right, "strike": short_k, "iv": 20.0},
+                {"action": "buy", "right": right, "strike": long_k, "iv": 20.0},
+            ],
+        }
+
+    def _run(self, cand, ib=None):
+        return asyncio.run(
+            _maybe_execute(
+                ib,
+                [cand],
+                1,
+                "U123",
+                1000,
+                None,
+                None,
+                "NDX",
+                "20260710",
+                "SMART",
+                "NDXP",
+                cand["strategy"],
+                spot=20000,
+                T=0.01,
+                rate=0.045,
+                underlying_conid=1,
+                underlying_exch="SMART",
+                stop_cfg={
+                    "mult": 0,
+                    "buffer": 50.0,
+                    "put_buffer": -50.0,
+                    "delta": None,
+                    "fill_timeout": 1,
+                },
+            )
+        )
+
+    def test_call_within_buffer_is_refused(self):
+        # short call 20040 - 50 = 19990 trigger, already below spot 20000
+        res = self._run(self._cand("bear_call", 20040, 20140))
+        assert res["ok"] is False
+        assert "already breached" in res["error"]
+
+    def test_call_beyond_buffer_passes_guard(self):
+        # short call 20100 - 50 = 20050 trigger, above spot -> reaches order placement
+        res = self._run(self._cand("bear_call", 20100, 20200), ib=_FakeIB([]))
+        assert "already breached" not in (res.get("error") or "")
+
+    def test_put_stop_past_strike_passes_guard(self):
+        # short put 19980 - 50 = 19930 trigger, below spot -> not breached
+        res = self._run(self._cand("bull_put", 19980, 19880), ib=_FakeIB([]))
+        assert "already breached" not in (res.get("error") or "")
+
+
+# --------------------------------------------------------------------------- #
+# Duplicate-order guard (offline, with a fake IB)
+# --------------------------------------------------------------------------- #
+class _FakeOrder:
+    def __init__(self, order_id, ref, account):
+        self.orderId = order_id
+        self.orderRef = ref
+        self.account = account
+
+
+class _FakeStatus:
+    def __init__(self, status):
+        self.status = status
+
+
+class _FakeTrade:
+    def __init__(self, order_id, ref, account, status):
+        self.order = _FakeOrder(order_id, ref, account)
+        self.orderStatus = _FakeStatus(status)
+
+
+class _FakeIB:
+    def __init__(self, trades):
+        self._trades = trades
+        self.cancelled = []
+
+    async def reqAllOpenOrdersAsync(self):
+        return self._trades
+
+    def openTrades(self):
+        return self._trades
+
+    def cancelOrder(self, order):
+        self.cancelled.append(order.orderId)
+
+    async def qualifyContractsAsync(self, *contracts):
+        return []  # forces _place_spread_order to bail after the guard/replace
+
+
+class TestDuplicateGuard:
+    REF = "ZDTE_bear_call_SPX_20260710"
+
+    def _cand(self):
+        return {
+            "strategy": "bear_call",
+            "max_loss_total": 500.0,
+            "net_credit": 0.85,
+            "contracts": 5,
+            "legs": [
+                {"action": "sell", "strike": 105, "right": "C", "iv": 20.0},
+                {"action": "buy", "strike": 110, "right": "C", "iv": 20.0},
+            ],
+        }
+
+    def _run(self, ib, replace):
+        return asyncio.run(
+            _maybe_execute(
+                ib,
+                [self._cand()],
+                1,
+                "U123",
+                1000,
+                None,
+                None,
+                "SPX",
+                "20260710",
+                "SMART",
+                "SPXW",
+                "bear_call",
+                replace=replace,
+                spot=100,
+                T=0.01,
+                rate=0.045,
+                underlying_conid=1,
+                underlying_exch="SMART",
+                stop_cfg={"mult": 2.0, "buffer": 0, "delta": None, "fill_timeout": 1},
+            )
+        )
+
+    def test_active_duplicate_is_refused(self):
+        ib = _FakeIB([_FakeTrade(42, self.REF, "U123", "PreSubmitted")])
+        res = self._run(ib, replace=False)
+        assert res["ok"] is False
+        assert "Duplicate" in res["error"]
+        assert res["existing_order_id"] == 42
+        assert ib.cancelled == []  # nothing cancelled when refusing
+
+    def test_replace_cancels_existing(self):
+        ib = _FakeIB([_FakeTrade(42, self.REF, "U123", "PreSubmitted")])
+        self._run(ib, replace=True)
+        assert ib.cancelled == [42]  # existing order was cancelled before re-placing
+
+    def test_inactive_order_is_not_a_duplicate(self):
+        # A cancelled/filled order with the same ref must not block a new placement.
+        ib = _FakeIB([_FakeTrade(42, self.REF, "U123", "Cancelled")])
+        res = self._run(ib, replace=False)
+        assert res["ok"] is False  # bails at qualify, NOT at the duplicate guard
+        assert "Duplicate" not in (res.get("error") or "")
+
+    def test_different_account_is_not_a_duplicate(self):
+        ib = _FakeIB([_FakeTrade(42, self.REF, "U999", "PreSubmitted")])
+        res = self._run(ib, replace=False)
+        assert "Duplicate" not in (res.get("error") or "")
+
+
+# --------------------------------------------------------------------------- #
+# Chain-side fetching
+# --------------------------------------------------------------------------- #
+class TestFetchChainSides:
+    """Streaming both sides at once exceeds IB's market-data line limit, so one
+    side returns without greeks and every candidate is filtered out. The sides
+    must be streamed one after the other."""
+
+    @staticmethod
+    def _instrumented():
+        state = {"in_flight": 0, "peak": 0, "rights": []}
+
+        async def fake_fetch_side(ib, symbol, expiry, strikes, right, *args, **kwargs):
+            state["in_flight"] += 1
+            state["peak"] = max(state["peak"], state["in_flight"])
+            state["rights"].append(right)
+            await asyncio.sleep(0)  # yield: concurrent sides would interleave here
+            state["in_flight"] -= 1
+            return [{"strike": strikes[0], "right": right}]
+
+        return state, fake_fetch_side
+
+    def _run(self, monkeypatch, *, need_calls, need_puts):
+        state, fake = self._instrumented()
+        monkeypatch.setattr(zero_dte, "_fetch_side", fake)
+        calls, puts = asyncio.run(
+            zero_dte._fetch_chain_sides(
+                None,
+                "SPX",
+                "20260911",
+                [7600.0],
+                "CBOE",
+                "SPXW",
+                7650.0,
+                0.001,
+                0.04,
+                False,
+                need_calls=need_calls,
+                need_puts=need_puts,
+                want_oi=False,
+            )
+        )
+        return state, calls, puts
+
+    def test_both_sides_stream_one_at_a_time(self, monkeypatch):
+        state, _, _ = self._run(monkeypatch, need_calls=True, need_puts=True)
+        assert state["peak"] == 1
+
+    def test_both_sides_land_on_the_right_legs(self, monkeypatch):
+        state, calls, puts = self._run(monkeypatch, need_calls=True, need_puts=True)
+        assert state["rights"] == ["C", "P"]
+        assert [o["right"] for o in calls] == ["C"]
+        assert [o["right"] for o in puts] == ["P"]
+
+    def test_calls_only(self, monkeypatch):
+        state, calls, puts = self._run(monkeypatch, need_calls=True, need_puts=False)
+        assert state["rights"] == ["C"]
+        assert [o["right"] for o in calls] == ["C"]
+        assert puts == []
+
+    def test_puts_only(self, monkeypatch):
+        state, calls, puts = self._run(monkeypatch, need_calls=False, need_puts=True)
+        assert state["rights"] == ["P"]
+        assert calls == []
+        assert [o["right"] for o in puts] == ["P"]
+
+
+# --------------------------------------------------------------------------- #
+# Live IB integration (manual — requires TWS/Gateway on 7496)
+# --------------------------------------------------------------------------- #
+@pytest.mark.manual
+class TestLiveIB:
+    def test_spx_expiries(self):
+        result = asyncio.run(get_0dte_expiries("SPX"))
+        assert result["success"] is True
+        assert result["asset_type"] == "index"
+        assert isinstance(result["expiries"], list)
+
+    def test_spx_bear_call(self):
+        result = asyncio.run(find_0dte_spreads("SPX", spread_type="bear_call", budget=2000))
+        assert result["success"] is True
+        assert result["asset_type"] == "index"
+        assert "account" in result
+        assert result["dry_run"] is True  # no --execute → nothing placed
+        if result["candidates"]:
+            c = result["best"]
+            assert c["max_loss_total"] <= 2000 + 1e-6
+
+    def test_invalid_account_rejected(self):
+        result = asyncio.run(find_0dte_spreads("SPX", spread_type="bear_call", account="U0000000"))
+        assert result["success"] is False
+        assert "not found" in result["error"]
+
+
+class TestResolveBudget:
+    """Budget sizing from the account's live margin cushion."""
+
+    def test_explicit_budget_wins(self):
+        """An explicit --budget is never overridden by the account cushion."""
+        r = resolve_budget(50_000.0, 210_000.0, 0.5, account="U1")
+        assert r["budget"] == 50_000.0
+        assert r["budget_source"] == "explicit"
+        assert r["error"] is None
+
+    def test_explicit_zero_is_respected(self):
+        """0 is a real budget, not 'unset' — must not fall through to auto-sizing."""
+        r = resolve_budget(0.0, 210_000.0, 0.5, account="U1")
+        assert r["budget"] == 0.0
+        assert r["budget_source"] == "explicit"
+
+    def test_auto_sizes_to_half_excess_liquidity(self):
+        r = resolve_budget(None, 210_000.0, account="U1")
+        assert r["budget"] == 105_000.0
+        assert r["budget_source"] == "excess_liquidity"
+        assert r["excess_liquidity"] == 210_000.0
+        assert r["error"] is None
+
+    def test_custom_fraction(self):
+        r = resolve_budget(None, 210_000.0, 0.25, account="U1")
+        assert r["budget"] == 52_500.0
+        assert r["budget_frac"] == 0.25
+
+    def test_full_cushion_allowed_explicitly(self):
+        r = resolve_budget(None, 100_000.0, 1.0, account="U1")
+        assert r["budget"] == 100_000.0
+
+    @pytest.mark.parametrize("frac", [0, -0.5, 1.5])
+    def test_invalid_fraction_errors(self, frac):
+        r = resolve_budget(None, 210_000.0, frac, account="U1")
+        assert r["budget"] is None
+        assert "budget_frac" in r["error"]
+
+    def test_no_account_on_multi_account_login_errors(self):
+        """Margin doesn't cross accounts, so we must never guess which one funds it."""
+        r = resolve_budget(None, None, account=None, managed=["U1", "U2", "U3"])
+        assert r["budget"] is None
+        assert "manages 3 accounts" in r["error"]
+        assert "--account" in r["error"]
+
+    def test_unreadable_cushion_errors_rather_than_defaulting(self):
+        r = resolve_budget(None, None, account="U1")
+        assert r["budget"] is None
+        assert "ExcessLiquidity" in r["error"]
+        assert "--budget" in r["error"]
+
+    @pytest.mark.parametrize("cushion", [0.0, -5_000.0])
+    def test_no_cushion_refuses_to_size(self, cushion):
+        """Zero/negative excess liquidity is auto-liquidation territory — refuse."""
+        r = resolve_budget(None, cushion, account="U1")
+        assert r["budget"] is None
+        assert "no margin cushion" in r["error"]
+
+
+# --------------------------------------------------------------------------- #
+# Quote + open-interest fetching
+# --------------------------------------------------------------------------- #
+class _QuoteIB:
+    """Records every market-data subscription so the passes can be counted."""
+
+    def __init__(self, oi=1234, call_oi=None, put_oi=None):
+        self.requests = []  # (conId, genericTickList)
+        self.cancelled = []
+        self.oi = oi
+        self.call_oi = call_oi if call_oi is not None else oi
+        self.put_oi = put_oi if put_oi is not None else oi
+        self.peak = 0
+        self.live = 0
+
+    async def qualifyContractsAsync(self, *contracts):
+        for i, c in enumerate(contracts, 1):
+            c.conId = i
+        return list(contracts)
+
+    def reqMktData(self, contract, genericTickList="", snapshot=False, *a, **kw):
+        self.requests.append((contract.conId, genericTickList))
+        self.live += 1
+        self.peak = max(self.peak, self.live)
+        greeks = SimpleNamespace(delta=-0.1, gamma=0.002, impliedVol=0.17, vega=1.0, theta=-1.0)
+        return SimpleNamespace(
+            contract=contract,
+            bid=1.0,
+            ask=1.1,
+            last=1.05,
+            close=1.05,
+            volume=50,
+            callOpenInterest=self.call_oi,
+            putOpenInterest=self.put_oi,
+            modelGreeks=greeks,
+        )
+
+    def cancelMktData(self, contract):
+        self.live -= 1
+        self.cancelled.append(contract.conId)
+
+
+class TestFetchSideOpenInterest:
+    """Open interest rides along with the quote rather than costing a second pass."""
+
+    def _fetch(self, ib, want_oi):
+        return asyncio.run(
+            zero_dte._fetch_side(
+                ib,
+                "SPX",
+                "20260912",
+                [7600.0, 7610.0],
+                "P",
+                "CBOE",
+                "SPXW",
+                7650.0,
+                0.001,
+                0.04,
+                False,
+                want_oi=want_oi,
+            )
+        )
+
+    def test_open_interest_needs_no_extra_subscription(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        ib = _QuoteIB()
+        legs = self._fetch(ib, want_oi=True)
+        assert len(ib.requests) == 2  # one per contract, not two per contract
+        assert [leg["open_interest"] for leg in legs] == [1234, 1234]
+
+    def test_open_interest_tick_is_requested_on_the_quote(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        ib = _QuoteIB()
+        self._fetch(ib, want_oi=True)
+        assert all("101" in generic for _, generic in ib.requests)
+
+    def test_quotes_and_greeks_still_arrive(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        legs = self._fetch(_QuoteIB(), want_oi=True)
+        assert [leg["bid"] for leg in legs] == [1.0, 1.0]
+        assert all(leg["delta"] is not None and leg["iv"] is not None for leg in legs)
+
+    def test_subscriptions_are_cancelled(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        ib = _QuoteIB()
+        self._fetch(ib, want_oi=True)
+        assert sorted(ib.cancelled) == [1, 2]
+
+    def test_without_oi_the_tick_is_not_requested(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        ib = _QuoteIB()
+        legs = self._fetch(ib, want_oi=False)
+        assert all(generic == "" for _, generic in ib.requests)
+        assert all(leg["open_interest"] is None for leg in legs)
+
+    def test_reads_the_side_matching_the_right(self, monkeypatch):
+        """Calls take callOpenInterest, puts take putOpenInterest."""
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        ib = _QuoteIB(call_oi=4200, put_oi=3100)
+        assert [leg["open_interest"] for leg in self._fetch(ib, want_oi=True)] == [3100, 3100]
+        calls = asyncio.run(
+            zero_dte._fetch_side(
+                ib,
+                "SPX",
+                "20260912",
+                [7700.0],
+                "C",
+                "CBOE",
+                "SPXW",
+                7650.0,
+                0.001,
+                0.04,
+                False,
+                want_oi=True,
+            )
+        )
+        assert [leg["open_interest"] for leg in calls] == [4200]
+
+    def test_nan_open_interest_is_omitted(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        legs = self._fetch(_QuoteIB(oi=float("nan")), want_oi=True)
+        assert all(leg["open_interest"] is None for leg in legs)
+
+    def test_never_holds_more_than_a_batch_of_lines(self, monkeypatch):
+        monkeypatch.setattr(zero_dte.asyncio, "sleep", _no_sleep)
+        ib = _QuoteIB()
+        strikes = [7000.0 + i for i in range(100)]
+        asyncio.run(
+            zero_dte._fetch_side(
+                ib,
+                "SPX",
+                "20260912",
+                strikes,
+                "P",
+                "CBOE",
+                "SPXW",
+                7650.0,
+                0.001,
+                0.04,
+                False,
+                want_oi=True,
+            )
+        )
+        assert ib.peak <= zero_dte._QUOTE_BATCH
+        assert ib.live == 0  # everything released
+
+
+class TestClockSkew:
+    def _t(self, h, m, s=0, day=29):
+        return datetime(2026, 10, day, h, m, s, tzinfo=zero_dte.NY)
+
+    def test_in_sync_is_ok(self):
+        assert zero_dte.clock_skew_error(self._t(9, 42, 10), self._t(9, 42, 0)) is None
+
+    def test_no_server_reading_is_ok(self):
+        assert zero_dte.clock_skew_error(self._t(9, 42), None) is None
+
+    def test_large_skew_errors(self):
+        err = zero_dte.clock_skew_error(self._t(9, 50), self._t(9, 42))
+        assert err and "System clock is off" in err
+
+    def test_wrong_day_errors(self):
+        err = zero_dte.clock_skew_error(self._t(9, 42, day=28), self._t(9, 42))
+        assert err and "2026-10-28" in err
+
+
+class TestEventGateUsesNasdaqOnly:
+    """The live 0DTE event gate must not depend on the rate-limited ForexFactory feed."""
+
+    def test_forexfactory_is_not_used(self):
+        assert "forexfactory" not in inspect.getsource(zero_dte).lower()

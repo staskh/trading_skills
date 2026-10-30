@@ -438,6 +438,11 @@ class TestFormatScanResults:
         assert output["errors"] == []
 
 
+def _one_year_out() -> str:
+    """Expiry one year from today, keeping time-to-expiry fixed as the calendar advances."""
+    return (date.today() + timedelta(days=365)).isoformat()
+
+
 def _make_chain(strikes, bids, asks, last_prices, ivs, last_trade="2026-05-16"):
     return pd.DataFrame(
         {
@@ -649,8 +654,8 @@ class TestAtmIvDividend:
         )
 
     def test_dividend_raises_recovered_iv(self):
-        no_div = compute_atm_iv(self._atm_calls(), 100.0, "2027-05-18", q=0.0)
-        with_div = compute_atm_iv(self._atm_calls(), 100.0, "2027-05-18", q=0.07)
+        no_div = compute_atm_iv(self._atm_calls(), 100.0, _one_year_out(), q=0.0)
+        with_div = compute_atm_iv(self._atm_calls(), 100.0, _one_year_out(), q=0.07)
         assert with_div > no_div
 
 
@@ -683,12 +688,13 @@ class TestComputeAtmIv:
             last_prices=[16.8, 14.2, 12.0],
             ivs=[0.30, 0.28, 0.32],  # unused — computed from price
         )
-        iv = compute_atm_iv(calls, 100.0, "2027-05-18")
+        iv = compute_atm_iv(calls, 100.0, _one_year_out())
         assert iv is not None
         assert 0.25 <= iv <= 0.40
 
     def test_always_computes_from_price_not_yahoo(self):
         """IV must be computed from bid/ask mid, never from Yahoo's impliedVolatility."""
+        # Prices are sized for a 1-year expiry; keep T fixed as the calendar moves.
         calls = _make_chain(
             strikes=[95.0, 100.0, 105.0],
             bids=[16.3, 13.7, 11.5],
@@ -696,7 +702,7 @@ class TestComputeAtmIv:
             last_prices=[16.8, 14.2, 12.0],
             ivs=[0.001, 0.001, 0.001],  # bad Yahoo data — must be ignored
         )
-        iv = compute_atm_iv(calls, 100.0, "2027-05-18")
+        iv = compute_atm_iv(calls, 100.0, _one_year_out())
         assert iv is not None
         # Should compute ~30% IV from bid/ask, not use the bad Yahoo 0.001
         assert 0.25 <= iv <= 0.40, f"Expected IV ~30% from price, got {iv:.3f}"

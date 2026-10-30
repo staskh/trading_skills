@@ -37,7 +37,7 @@ uv run ruff format src/ tests/
 
 Use available skills to fetch real-time data and perform analysis:
 
-**Market Data**: `stock-quote`, `option-chain`, `price-history`, `fundamentals`, `news-sentiment`, `earnings-calendar`
+**Market Data**: `stock-quote`, `option-chain`, `price-history`, `fundamentals`, `news-sentiment`, `earnings-calendar`, `calendar`
 
 **Analysis**: `technical-analysis`, `greeks`, `spread-analysis`, `risk-assessment`
 
@@ -87,6 +87,19 @@ You MUST complete all of the following steps before opening a pull request:
    - Whale integration tests (`test_massive_whales.py`, `test_whales_hunter.py`) skip automatically when `MASSIVE_API_KEY` is not set; they run when the key is present (via env or `.env` file).
 
 Do not open a PR if either step fails.
+
+## 0DTE Trading Defaults
+
+Always apply these flags when running `zero_dte.py` unless the user explicitly overrides:
+
+| Parameter | Default | Reason |
+|-----------|---------|--------|
+| `--port` | `7496` | Live trading account; never use 7497 (paper) |
+| `--account` | required | Multi-account login; also the account whose excess liquidity funds the budget |
+| `--budget` | *(omit)* | Auto-sizes to 50% of the account's excess liquidity. Pass a value only to override |
+| `--max-width` | *(omit)* | Defaults to `150` points in code. NDX bid/ask per leg is ~$1.50–$2 wide; narrow spreads have negative combo_ask_credit and are unfillable at market |
+
+Always run sequentially (not in parallel) when scanning multiple symbols — concurrent connections share client ID 50 and collide.
 
 ## Key Paths
 

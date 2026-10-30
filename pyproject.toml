@@ -3,7 +3,7 @@
 
 [project]
 name = "trading-skills"
-version = "0.17.2"
+version = "0.20.0"
 
 
 description = "AI-powered market analysis skills and MCP server for stock and options traders"
@@ -24,6 +24,9 @@ dependencies = [
     "plotly>=6.6.0",
     "mistune>=3.2",
     "reportlab>=4.0",
+    "requests>=2.32",
+    "pypdf>=6.14.2",
+    "python-dotenv>=1.0",
 ]
 
 [project.scripts]
@@ -58,7 +61,6 @@ dev = [
     "pytest-asyncio>=0.24",
     "pytest-cov>=7.0.0",
     "pytest-rerunfailures>=15.0",
-    "python-dotenv>=1.0",
     "ruff>=0.8",
     "nbconvert>=7.17.0",
     "jupyter>=1.1.1",

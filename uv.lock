@@ -2041,6 +2041,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pypdf"
+version = "6.18.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4f/c2/e537e78a8282b51ed47031566be118debbc34c04782a9afd8739672eb07d/pypdf-6.18.1.tar.gz", hash = "sha256:2441fc839053745638d9b9ddb38ed66beed8d611f47a3036c9838fc4e3074dea", size = 7027577, upload-time = "2026-09-11T10:10:07.616Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/58/13/645df3995075112cb3cce15e8797c205f0f88fb50acc11012b84b071bc22/pypdf-6.18.1-py3-none-any.whl", hash = "sha256:ee93a2665670ecf57ee81d197a4ca548f3dc15f9cefc56e59b8140866aaa3de5", size = 394327, upload-time = "2026-09-11T10:10:06.103Z" },
+]
+
+[[package]]
 name = "pytest"
 version = "9.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2109,11 +2118,11 @@ wheels = [
 
 [[package]]
 name = "python-dotenv"
-version = "1.2.2"
+version = "1.2.4"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/82/ed/0301aeeac3e5353ef3d94b6ec08bbcabd04a72018415dcb29e588514bba8/python_dotenv-1.2.2.tar.gz", hash = "sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3", size = 50135, upload-time = "2026-03-01T16:00:26.196Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/74/26/2fbeedb218a787a5eea551c7532cac4e009f83d689dd2faa0d0353473f86/python_dotenv-1.2.4.tar.gz", hash = "sha256:f0d53e69935a851c0dcc78f3ab7aaccd8cabef0b92382b576b824212902873c0", size = 60824, upload-time = "2026-10-01T05:36:10Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/d7/1959b9648791274998a9c3526f6d0ec8fd2233e4d4acce81bbae76b44b2a/python_dotenv-1.2.2-py3-none-any.whl", hash = "sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a", size = 22101, upload-time = "2026-03-01T16:00:25.09Z" },
+    { url = "https://files.pythonhosted.org/packages/60/d1/38f3a3405989a89ac18390803e70c6ad7c7760da4f9b83cbeca0c44a0c72/python_dotenv-1.2.4-py3-none-any.whl", hash = "sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc", size = 23266, upload-time = "2026-10-01T05:36:08.633Z" },
 ]
 
 [[package]]
@@ -2653,7 +2662,7 @@ wheels = [
 
 [[package]]
 name = "trading-skills"
-version = "0.17.2"
+version = "0.20.0"
 source = { editable = "." }
 dependencies = [
     { name = "ib-async" },
@@ -2666,7 +2675,10 @@ dependencies = [
     { name = "pandas-market-calendars" },
     { name = "pandas-ta" },
     { name = "plotly" },
+    { name = "pypdf" },
+    { name = "python-dotenv" },
     { name = "reportlab" },
+    { name = "requests" },
     { name = "scipy" },
     { name = "yfinance" },
 ]
@@ -2680,7 +2692,6 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-rerunfailures" },
-    { name = "python-dotenv" },
     { name = "ruff" },
 ]
 
@@ -2696,7 +2707,10 @@ requires-dist = [
     { name = "pandas-market-calendars", specifier = ">=5.3.1.2" },
     { name = "pandas-ta", specifier = ">=0.3.14b0" },
     { name = "plotly", specifier = ">=6.6.0" },
+    { name = "pypdf", specifier = ">=6.14.2" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "reportlab", specifier = ">=4.0" },
+    { name = "requests", specifier = ">=2.32" },
     { name = "scipy", specifier = ">=1.14" },
     { name = "yfinance", specifier = ">=0.2.50" },
 ]
@@ -2710,7 +2724,6 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-rerunfailures", specifier = ">=15.0" },
-    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "ruff", specifier = ">=0.8" },
 ]
 

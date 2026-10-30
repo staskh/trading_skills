@@ -434,36 +434,48 @@ class _Renderer(mistune.HTMLRenderer):
             else:
                 i += 1
 
-        table_data = []
+        raw_rows: list[list[tuple[str, bool]]] = []
         is_head_row = []
 
         for marker, row_str in rows:
             cells_raw = re.split(re.escape(_CELL_SEP), row_str)
-            row_cells = []
+            row_cells: list[tuple[str, bool]] = []
             for cell in cells_raw:
                 if not cell.strip():
                     continue
                 parts = cell.rsplit("|", 1)
                 if len(parts) == 2:
                     content, flag = parts[0], parts[1].strip()
-                    head = flag == "H"
-                    style = self.styles["table_head"] if head else self.styles["table_cell"]
-                    row_cells.append(Paragraph(content, style))
+                    row_cells.append((content, flag == "H"))
             if row_cells:
-                table_data.append(row_cells)
+                raw_rows.append(row_cells)
                 is_head_row.append(marker == _HEAD_ROW)
 
-        if not table_data:
+        if not raw_rows:
             return ""
 
-        col_count = max(len(r) for r in table_data)
-        for row in table_data:
+        col_count = max(len(r) for r in raw_rows)
+        for row in raw_rows:
             while len(row) < col_count:
-                row.append(Paragraph("", self.styles["table_cell"]))
+                row.append(("", False))
 
         available_width = LETTER[0] - (2 * inch)
-        col_width = available_width / col_count
-        t = Table(table_data, colWidths=[col_width] * col_count, repeatRows=1)
+        head_style = self.styles["table_head"]
+        cell_style = self.styles["table_cell"]
+        font_size, col_widths = _fit_columns(
+            raw_rows, col_count, available_width, cell_style.fontName, head_style.fontName
+        )
+
+        if font_size != cell_style.fontSize:
+            head_style = _resized(head_style, font_size)
+            cell_style = _resized(cell_style, font_size)
+
+        table_data = [
+            [Paragraph(text, head_style if head else cell_style) for text, head in row]
+            for row in raw_rows
+        ]
+
+        t = Table(table_data, colWidths=col_widths, repeatRows=1)
 
         cmd = [
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
@@ -481,6 +493,99 @@ class _Renderer(mistune.HTMLRenderer):
         self.story.append(t)
         self.story.append(Spacer(1, 6))
         return ""
+
+
+_CELL_PADDING = 8  # LEFTPADDING + RIGHTPADDING applied in the table style
+_MIN_TABLE_PT = 6.0
+_TABLE_PT_STEPS = (8.0, 7.5, 7.0, 6.5, 6.0)
+
+
+def _resized(style: ParagraphStyle, size: float) -> ParagraphStyle:
+    """Clone a paragraph style at a smaller font size, keeping leading proportional."""
+    clone = ParagraphStyle(f"{style.name}_{size}", parent=style)
+    clone.fontSize = size
+    clone.leading = size * 1.35
+    return clone
+
+
+def _text_width(text: str, font: str, size: float) -> float:
+    try:
+        return pdfmetrics.stringWidth(text, font, size)
+    except Exception:
+        return pdfmetrics.stringWidth(text, "Helvetica", size)
+
+
+def _fit_columns(
+    raw_rows: list[list[tuple[str, bool]]],
+    col_count: int,
+    available: float,
+    font: str,
+    bold_font: str,
+) -> tuple[float, list[float]]:
+    """Size table columns to content, shrinking the font only when geometry demands it.
+
+    Equal-width columns waste space on narrow fields ("W", "Lots") and starve wide ones,
+    which makes reportlab wrap mid-token — splitting "$85,950" into "$85,95" + "0". That
+    is unacceptable in a financial table, so every column is guaranteed at least the width
+    of its longest unbreakable token whenever that is geometrically possible.
+
+    Returns the chosen font size and per-column widths.
+    """
+    # Header cells and <b> spans render bold, which is wider than the regular face.
+    # Measuring them with the regular font under-sizes the column and wraps the header
+    # mid-word ("Capture" -> "Captur" + "e"), so pick the face each cell actually uses.
+    plain: list[list[tuple[str, str]]] = [
+        [
+            (re.sub(r"<[^>]+>", "", text), bold_font if (head or "<b" in text) else font)
+            for text, head in row
+        ]
+        for row in raw_rows
+    ]
+
+    for size in _TABLE_PT_STEPS:
+        # Widest single token — the narrowest a column can get without breaking a word.
+        token_w = [0.0] * col_count
+        # Widest whole cell — the width at which a column never wraps at all.
+        full_w = [0.0] * col_count
+        for row in plain:
+            for c, (text, face) in enumerate(row):
+                if c >= col_count:
+                    continue
+                full_w[c] = max(full_w[c], _text_width(text, face, size))
+                for tok in text.split():
+                    token_w[c] = max(token_w[c], _text_width(tok, face, size))
+
+        pad_total = _CELL_PADDING * col_count
+        min_total = sum(token_w) + pad_total
+        if min_total > available and size > _MIN_TABLE_PT:
+            continue  # try a smaller font before giving up on unbroken tokens
+
+        want_total = sum(full_w) + pad_total
+        if want_total <= available:
+            # Everything fits unwrapped; distribute the slack proportionally.
+            slack = available - want_total
+            total_full = sum(full_w)
+            widths = [
+                w + _CELL_PADDING + (slack * w / total_full if total_full else 0) for w in full_w
+            ]
+            return size, widths
+
+        if min_total <= available:
+            # Guarantee each column its longest token, then share what's left in
+            # proportion to how much more each column actually wants.
+            extra = available - min_total
+            want_more = [full_w[c] - token_w[c] for c in range(col_count)]
+            total_more = sum(want_more)
+            widths = [
+                token_w[c]
+                + _CELL_PADDING
+                + (extra * (want_more[c] / total_more) if total_more else extra / col_count)
+                for c in range(col_count)
+            ]
+            return size, widths
+
+    # Even at the floor the longest tokens do not fit; fall back to equal widths.
+    return _MIN_TABLE_PT, [available / col_count] * col_count
 
 
 def default_output_path(input_path: str) -> str:

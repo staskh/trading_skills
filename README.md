@@ -4,7 +4,7 @@ Most retail traders juggle 5+ tabs — broker, charting platform, screener, news
 
 Ask a question in plain English, get back real data: technicals, fundamentals, option Greeks, risk metrics, earnings dates, correlation matrices, and full PDF reports. Connect your Interactive Brokers account and it manages your portfolio too — finds roll candidates for expiring shorts, flags earnings risk, and generates action reports.
 
-[![Star History Chart](https://api.star-history.com/chart?repos=staskh/trading_skills&type=date&legend=bottom-right)](https://www.star-history.com/?repos=staskh%2Ftrading_skills&type=date&legend=bottom-right)
+[![Star History Chart](https://star-history.dera.page/svg?repos=staskh/trading_skills&type=date&legend=bottom-right)](https://star-history.dera.page/#staskh/trading_skills&type=date&legend=bottom-right)
 
 **Who is this for?**
 - **Retail options traders** who sell premium, run PMCCs, or manage covered calls
@@ -171,6 +171,7 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 | `fundamentals` | Financials, earnings, key metrics, Piotroski F-Score |
 | `news-sentiment` | Recent headlines and sentiment |
 | `earnings-calendar` | Upcoming earnings dates with BMO/AMC timing and EPS estimates |
+| `calendar` | Scheduled US economic events (CPI, NFP, FOMC, GDP...) in ET, with optional ForexFactory cross-check |
 | `insider-trading` | SEC Form 4 insider transactions — executive buys/sells and sentiment |
 
 ### Analysis
@@ -222,7 +223,7 @@ The MCP server exposes skills as tools for Claude Desktop:
 
 | Category | Tools |
 |----------|-------|
-| **Market Data** | `stock_quote`, `price_history`, `news_sentiment`, `insider_trading`, `fundamentals`, `piotroski_score`, `earnings_calendar` |
+| **Market Data** | `stock_quote`, `price_history`, `news_sentiment`, `insider_trading`, `fundamentals`, `piotroski_score`, `earnings_calendar`, `economic_calendar` |
 | **Technical** | `technical_indicators`, `price_correlation`, `risk_assessment` |
 | **Options** | `option_expiries`, `option_chain`, `option_greeks` |
 | **Spreads** | `spread_vertical`, `spread_diagonal`, `spread_straddle`, `spread_strangle`, `spread_iron_condor` |
