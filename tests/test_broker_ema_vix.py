@@ -221,9 +221,18 @@ class TestRrGateUsesRecentBars:
         _, signal, _, _ = ema_vix._detect_signal(bars, rr_gate=True)
         assert signal == "EMA-Dn+RR"
 
-    def test_morning_bars_no_longer_decide_it(self):
+    def test_morning_bars_no_longer_decide_it(self, monkeypatch):
         """9:30 and 10:00 green, but the recent bars are red -> confirmed."""
         now = datetime.now(NY).replace(hour=15, minute=0, second=0, microsecond=0)
+
+        class _At1500(datetime):
+            # Pin the module clock to the 15:00 session the bars describe; reading
+            # the real clock made this fail whenever the suite ran before 15:00 ET.
+            @classmethod
+            def now(cls, tz=None):
+                return now.astimezone(tz) if tz else now
+
+        monkeypatch.setattr(ema_vix, "datetime", _At1500)
         bars = _falling_bars([(100.0, 99.0), (99.0, 98.0), (98.0, 97.0)], now=now)
         morning = now.replace(hour=9, minute=30).astimezone(UTC)
         bars.insert(0, {"dt": morning, "open": 100.0, "close": 110.0})  # green 9:30

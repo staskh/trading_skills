@@ -1,15 +1,50 @@
 # ABOUTME: Tests for the live US economic-calendar module.
 # ABOUTME: Parsing/classification run offline; the live Nasdaq fetch is marked manual.
 
+from datetime import datetime
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from trading_skills.economic_calendar import (
     _inject_fomc_if_missing,
     classify_impact,
+    fetch_us_economic_calendar,
     fetch_us_economic_events,
     is_fomc_day,
     parse_events,
+    verify_events_date,
 )
+
+NY = ZoneInfo("America/New_York")
+
+
+def _row(gmt, name, actual=""):
+    return {"country": "United States", "gmt": gmt, "eventName": name, "actual": actual}
+
+
+# Real Nasdaq responses observed 2026-10-29 (Thu): the `date` label is one day ahead
+# of the contents — date=2026-10-29 served Wednesday's rows, date=2026-10-30 Thursday's.
+_FEED = {
+    "2026-10-29": [  # actually Wed Oct 28
+        _row("07:00", "MBA Mortgage Applications", "3.4%"),
+        _row("10:30", "Crude Oil Inventories", "-1.892M"),
+        _row("14:00", "FOMC Statement", "&nbsp;"),
+        _row("14:00", "Fed Interest Rate Decision", "4.00%"),
+    ],
+    "2026-10-30": [  # actually Thu Oct 29
+        _row("08:30", "Initial Jobless Claims", "194K"),
+        _row("08:30", "Continuing Jobless Claims", "1,701K"),
+        _row("08:30", "GDP", "3.4%"),
+        _row("10:30", "Natural Gas Storage", "&nbsp;"),
+        _row("13:00", "7-Year Note Auction", "&nbsp;"),
+    ],
+}
+
+
+def _fake_rows(feed_date, timeout):
+    return _FEED.get(feed_date)
 
 
 class TestClassifyImpact:
@@ -131,6 +166,98 @@ class TestInjectFomc:
         ]  # noqa: E501
         events = _inject_fomc_if_missing(existing, "2026-09-16")
         assert len(events) == 1  # not injected, already there
+
+
+class TestVerifyEventsDate:
+    def test_wednesday_rows_rejected_for_thursday(self):
+        events = parse_events(_FEED["2026-10-29"])
+        assert verify_events_date(events, "2026-10-29") == "rejected"
+
+    def test_thursday_rows_verified_for_thursday(self):
+        events = parse_events(_FEED["2026-10-30"])
+        assert verify_events_date(events, "2026-10-29") == "verified"
+
+    def test_future_release_with_actual_rejected_today(self):
+        # A 14:00 release already printed at 09:42 can't be today's data.
+        events = parse_events([_row("14:00", "Some Survey", "51.0")])
+        now = datetime(2026, 10, 29, 9, 42, tzinfo=NY)
+        assert verify_events_date(events, "2026-10-29", now) == "rejected"
+
+    def test_no_anchors_is_unverifiable(self):
+        events = parse_events([_row("10:00", "Consumer Sentiment", "")])
+        assert verify_events_date(events, "2026-10-26") == "unverifiable"
+
+    def test_holiday_shift_majority_still_verifies(self):
+        # Thanksgiving week: claims move to Wednesday, MBA/EIA stay — 2 vs 1.
+        events = parse_events(
+            [
+                _row("07:00", "MBA Mortgage Applications", "1%"),
+                _row("08:30", "Initial Jobless Claims", "200K"),
+                _row("10:30", "Crude Oil Inventories", "1M"),
+            ]
+        )
+        assert verify_events_date(events, "2026-11-25") == "verified"
+
+
+class TestFetchCalendarOffset:
+    @patch("trading_skills.economic_calendar._fetch_rows", side_effect=_fake_rows)
+    def test_returns_the_true_day_not_the_label(self, _):
+        now = datetime(2026, 10, 29, 9, 42, tzinfo=NY)
+        cal = fetch_us_economic_calendar("2026-10-29", now=now)
+        names = [e["event"] for e in cal["events"]]
+        assert cal["verified"] is True
+        assert cal["feed_date"] == "2026-10-30"
+        assert "Initial Jobless Claims" in names
+        assert "FOMC Statement" not in names
+        assert "MBA Mortgage Applications" not in names
+
+    @patch("trading_skills.economic_calendar._fetch_rows")
+    def test_falls_back_to_unshifted_feed_if_offset_disappears(self, mock_rows):
+        # If Nasdaq fixes the label, date=D holds D's rows and D+1 holds Friday's.
+        mock_rows.side_effect = lambda d, t: {
+            "2026-10-30": [_row("08:30", "Nonfarm Payrolls", "")],
+            "2026-10-29": _FEED["2026-10-30"],
+        }.get(d)
+        cal = fetch_us_economic_calendar("2026-10-29")
+        assert cal["verified"] is True
+        assert cal["feed_date"] == "2026-10-29"
+
+    @patch("trading_skills.economic_calendar._fetch_rows")
+    def test_contradicting_feeds_return_none(self, mock_rows):
+        mock_rows.return_value = _FEED["2026-10-29"]  # Wednesday rows everywhere
+        assert fetch_us_economic_calendar("2026-10-29") is None
+
+    @patch("trading_skills.economic_calendar._fetch_rows")
+    def test_empty_unverified_feed_is_unavailable_not_event_free(self, mock_rows):
+        # Observed for Thu 2026-11-05: date=11-06 came back empty and date=11-05
+        # held Wednesday's rows. An empty unverified feed is no evidence of a quiet day.
+        mock_rows.side_effect = lambda d, t: {
+            "2026-10-30": [],
+            "2026-10-29": _FEED["2026-10-29"],
+        }.get(d)
+        assert fetch_us_economic_calendar("2026-10-29") is None
+
+    @patch("trading_skills.economic_calendar._fetch_rows")
+    def test_empty_unverified_feed_on_fomc_day_flags_only_fomc(self, mock_rows):
+        # Observed for Wed 2026-10-28: date=10-29 empty, date=10-28 held Tuesday's rows.
+        mock_rows.side_effect = lambda d, t: {
+            "2026-10-29": [],
+            "2026-10-28": [_row("08:55", "Redbook", "6.1%")],
+        }.get(d)
+        cal = fetch_us_economic_calendar("2026-10-28")
+        assert cal["verified"] is False
+        assert [e["event"] for e in cal["events"]] == ["FOMC Rate Decision"]
+
+    @patch("trading_skills.economic_calendar._fetch_rows", return_value=None)
+    def test_fetch_failure_on_fomc_day_still_flags_fomc(self, _):
+        cal = fetch_us_economic_calendar("2026-10-28")
+        assert cal["verified"] is False
+        assert cal["events"][0]["event"] == "FOMC Rate Decision"
+
+    @patch("trading_skills.economic_calendar._fetch_rows", side_effect=_fake_rows)
+    def test_wrapper_returns_events_list(self, _):
+        events = fetch_us_economic_events("2026-10-29")
+        assert any(e["event"] == "Initial Jobless Claims" for e in events)
 
 
 @pytest.mark.manual

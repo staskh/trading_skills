@@ -162,6 +162,14 @@ class TestEventGuidanceLive:
         assert e["near_release_window"] is True
         assert any("Imminent" in w for w in e["warnings"])
 
+    def test_unverified_calendar_warns_and_is_flagged(self):
+        e = event_guidance(
+            _wk(9, 0), "index", live_events=[], calendar_verified=False, calendar_date="2026-10-29"
+        )
+        assert e["calendar_verified"] is False
+        assert e["calendar_date"] == "2026-10-29"
+        assert any("could not be verified" in w for w in e["warnings"])
+
     def test_empty_live_list_still_nasdaq_source(self):
         e = event_guidance(_wk(11, 0), "index", live_events=[])
         assert e["source"] == "nasdaq"
@@ -1185,3 +1193,22 @@ class TestFetchSideOpenInterest:
         )
         assert ib.peak <= zero_dte._QUOTE_BATCH
         assert ib.live == 0  # everything released
+
+
+class TestClockSkew:
+    def _t(self, h, m, s=0, day=29):
+        return datetime(2026, 10, day, h, m, s, tzinfo=zero_dte.NY)
+
+    def test_in_sync_is_ok(self):
+        assert zero_dte.clock_skew_error(self._t(9, 42, 10), self._t(9, 42, 0)) is None
+
+    def test_no_server_reading_is_ok(self):
+        assert zero_dte.clock_skew_error(self._t(9, 42), None) is None
+
+    def test_large_skew_errors(self):
+        err = zero_dte.clock_skew_error(self._t(9, 50), self._t(9, 42))
+        assert err and "System clock is off" in err
+
+    def test_wrong_day_errors(self):
+        err = zero_dte.clock_skew_error(self._t(9, 42, day=28), self._t(9, 42))
+        assert err and "2026-10-28" in err
