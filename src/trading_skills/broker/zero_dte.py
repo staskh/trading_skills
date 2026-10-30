@@ -29,7 +29,7 @@ from trading_skills.broker.zero_dte_stop import (
     resolve_stop_cfg,
     stop_plan,
 )
-from trading_skills.economic_calendar import fetch_us_economic_calendar
+from trading_skills.calendar_nasdaq import fetch_us_economic_calendar
 from trading_skills.utils import fetch_with_timeout
 
 NY = ZoneInfo("America/New_York")

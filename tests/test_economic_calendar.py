@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from trading_skills.economic_calendar import (
+from trading_skills.calendar_nasdaq import (
     _inject_fomc_if_missing,
     classify_impact,
     fetch_us_economic_calendar,
@@ -200,7 +200,7 @@ class TestVerifyEventsDate:
 
 
 class TestFetchCalendarOffset:
-    @patch("trading_skills.economic_calendar._fetch_rows", side_effect=_fake_rows)
+    @patch("trading_skills.calendar_nasdaq._fetch_rows", side_effect=_fake_rows)
     def test_returns_the_true_day_not_the_label(self, _):
         now = datetime(2026, 10, 29, 9, 42, tzinfo=NY)
         cal = fetch_us_economic_calendar("2026-10-29", now=now)
@@ -211,7 +211,7 @@ class TestFetchCalendarOffset:
         assert "FOMC Statement" not in names
         assert "MBA Mortgage Applications" not in names
 
-    @patch("trading_skills.economic_calendar._fetch_rows")
+    @patch("trading_skills.calendar_nasdaq._fetch_rows")
     def test_falls_back_to_unshifted_feed_if_offset_disappears(self, mock_rows):
         # If Nasdaq fixes the label, date=D holds D's rows and D+1 holds Friday's.
         mock_rows.side_effect = lambda d, t: {
@@ -222,12 +222,12 @@ class TestFetchCalendarOffset:
         assert cal["verified"] is True
         assert cal["feed_date"] == "2026-10-29"
 
-    @patch("trading_skills.economic_calendar._fetch_rows")
+    @patch("trading_skills.calendar_nasdaq._fetch_rows")
     def test_contradicting_feeds_return_none(self, mock_rows):
         mock_rows.return_value = _FEED["2026-10-29"]  # Wednesday rows everywhere
         assert fetch_us_economic_calendar("2026-10-29") is None
 
-    @patch("trading_skills.economic_calendar._fetch_rows")
+    @patch("trading_skills.calendar_nasdaq._fetch_rows")
     def test_empty_unverified_feed_is_unavailable_not_event_free(self, mock_rows):
         # Observed for Thu 2026-11-05: date=11-06 came back empty and date=11-05
         # held Wednesday's rows. An empty unverified feed is no evidence of a quiet day.
@@ -237,7 +237,7 @@ class TestFetchCalendarOffset:
         }.get(d)
         assert fetch_us_economic_calendar("2026-10-29") is None
 
-    @patch("trading_skills.economic_calendar._fetch_rows")
+    @patch("trading_skills.calendar_nasdaq._fetch_rows")
     def test_empty_unverified_feed_on_fomc_day_flags_only_fomc(self, mock_rows):
         # Observed for Wed 2026-10-28: date=10-29 empty, date=10-28 held Tuesday's rows.
         mock_rows.side_effect = lambda d, t: {
@@ -248,13 +248,13 @@ class TestFetchCalendarOffset:
         assert cal["verified"] is False
         assert [e["event"] for e in cal["events"]] == ["FOMC Rate Decision"]
 
-    @patch("trading_skills.economic_calendar._fetch_rows", return_value=None)
+    @patch("trading_skills.calendar_nasdaq._fetch_rows", return_value=None)
     def test_fetch_failure_on_fomc_day_still_flags_fomc(self, _):
         cal = fetch_us_economic_calendar("2026-10-28")
         assert cal["verified"] is False
         assert cal["events"][0]["event"] == "FOMC Rate Decision"
 
-    @patch("trading_skills.economic_calendar._fetch_rows", side_effect=_fake_rows)
+    @patch("trading_skills.calendar_nasdaq._fetch_rows", side_effect=_fake_rows)
     def test_wrapper_returns_events_list(self, _):
         events = fetch_us_economic_events("2026-10-29")
         assert any(e["event"] == "Initial Jobless Claims" for e in events)

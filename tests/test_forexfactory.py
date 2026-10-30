@@ -7,7 +7,12 @@ import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from trading_skills.forexfactory import compare_events, events_for_date, fetch_week, fill_gaps
+from trading_skills.calendar_forexfactory import (
+    compare_events,
+    events_for_date,
+    fetch_week,
+    fill_gaps,
+)
 
 # Rows as served by nfs.faireconomy.media/ff_calendar_thisweek.json (week of 2026-10-25).
 _WEEK = [
@@ -211,7 +216,7 @@ class _Feed:
 class TestFetchWeekCache:
     def test_second_fetch_within_the_hour_reuses_the_cache(self, tmp_path):
         feed, cache = _Feed(), tmp_path / "week.json"
-        with patch("trading_skills.forexfactory.requests.get", feed.get):
+        with patch("trading_skills.calendar_forexfactory.requests.get", feed.get):
             assert fetch_week(cache_path=cache) == _WEEK
             assert fetch_week(cache_path=cache) == _WEEK
         assert feed.calls == 1
@@ -221,7 +226,7 @@ class TestFetchWeekCache:
         cache.write_text(json.dumps(_WEEK[:1]))
         two_hours_ago = time.time() - 7200
         os.utime(cache, (two_hours_ago, two_hours_ago))
-        with patch("trading_skills.forexfactory.requests.get", feed.get):
+        with patch("trading_skills.calendar_forexfactory.requests.get", feed.get):
             assert fetch_week(cache_path=cache) == _WEEK
         assert feed.calls == 1
 
@@ -230,11 +235,11 @@ class TestFetchWeekCache:
         cache.write_text(json.dumps(_WEEK))
         two_hours_ago = time.time() - 7200
         os.utime(cache, (two_hours_ago, two_hours_ago))
-        with patch("trading_skills.forexfactory.requests.get", feed.get):
+        with patch("trading_skills.calendar_forexfactory.requests.get", feed.get):
             assert fetch_week(cache_path=cache) == _WEEK
 
     def test_rate_limited_fetch_without_cache_is_none(self, tmp_path):
-        with patch("trading_skills.forexfactory.requests.get", _Feed(status=429).get):
+        with patch("trading_skills.calendar_forexfactory.requests.get", _Feed(status=429).get):
             assert fetch_week(cache_path=tmp_path / "week.json") is None
 
 

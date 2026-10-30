@@ -4,8 +4,13 @@
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from trading_skills.economic_calendar import fetch_us_economic_calendar
-from trading_skills.forexfactory import compare_events, events_for_date, fetch_week, fill_gaps
+from trading_skills.calendar_forexfactory import (
+    compare_events,
+    events_for_date,
+    fetch_week,
+    fill_gaps,
+)
+from trading_skills.calendar_nasdaq import fetch_us_economic_calendar
 from trading_skills.utils import generated_at_str
 
 NY = ZoneInfo("America/New_York")

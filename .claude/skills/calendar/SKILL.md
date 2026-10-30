@@ -7,7 +7,7 @@ dependencies: ["trading-skills"]
 # Economic Calendar
 
 Scheduled US economic releases per weekday, from Nasdaq's public economic-events feed
-(through `trading_skills.economic_calendar`, which corrects the feed's day offset and
+(through `trading_skills.calendar_nasdaq`, which corrects the feed's day offset and
 verifies each day against weekly releases with a fixed weekday).
 
 ## Instructions
