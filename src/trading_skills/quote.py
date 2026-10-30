@@ -1,7 +1,32 @@
 # ABOUTME: Fetches stock quote from Yahoo Finance.
 # ABOUTME: Returns price, volume, market cap, and key metrics.
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import yfinance as yf
+
+from .utils import is_trading_now
+
+NY = ZoneInfo("America/New_York")
+
+
+def _et(epoch) -> datetime | None:
+    return datetime.fromtimestamp(epoch, NY) if isinstance(epoch, (int, float)) else None
+
+
+def _extended_hours(info: dict, prefix: str) -> dict | None:
+    """Pre- or post-market price and move ('preMarket' / 'postMarket'), or None if absent."""
+    price = info.get(f"{prefix}Price")
+    if price is None:
+        return None
+    when = _et(info.get(f"{prefix}Time"))
+    return {
+        "price": price,
+        "change": info.get(f"{prefix}Change"),
+        "change_percent": info.get(f"{prefix}ChangePercent"),
+        "time": when.strftime("%Y-%m-%d %H:%M ET") if when else None,
+    }
 
 
 def get_quote(symbol: str) -> dict:
@@ -13,12 +38,24 @@ def get_quote(symbol: str) -> dict:
     if not info or info.get("regularMarketPrice") is None:
         return {"error": f"No data found for symbol: {symbol}"}
 
+    # Before the regular session opens, Yahoo's regularMarket* fields still describe
+    # the last COMPLETED session (yesterday's close vs the day before), not today —
+    # so a pre-market call can return a "change" that is actually yesterday's already-
+    # priced-in move. as_of_session pins down which session price/change belong to,
+    # so callers don't relabel a stale move as "today's". It is read from Yahoo's own
+    # regular-session timestamp, so a stale feed is labeled with the session it holds.
+    session = _et(info.get("regularMarketTime"))
     return {
         "symbol": symbol.upper(),
         "name": info.get("shortName", info.get("longName", "N/A")),
         "price": info.get("currentPrice") or info.get("regularMarketPrice"),
         "change": info.get("regularMarketChange"),
         "change_percent": info.get("regularMarketChangePercent"),
+        "as_of_session": session.date().isoformat() if session else None,
+        "market_open_now": is_trading_now(),
+        "market_state": info.get("marketState"),
+        "pre_market": _extended_hours(info, "preMarket"),
+        "post_market": _extended_hours(info, "postMarket"),
         "volume": info.get("volume"),
         "avg_volume": info.get("averageVolume"),
         "market_cap": info.get("marketCap"),

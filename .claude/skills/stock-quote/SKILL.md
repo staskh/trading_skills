@@ -24,10 +24,18 @@ Replace SYMBOL with the requested ticker (e.g., AAPL, MSFT, TSLA, SPY).
 
 The script outputs JSON with:
 - symbol, name, price, change, change_percent
+- as_of_session - the trading date `price`/`change` belong to (YYYY-MM-DD, from Yahoo's regular-session timestamp; null if Yahoo omits it)
+- market_open_now - whether the NYSE regular session is open right now
+- market_state - Yahoo's session state: `PRE`, `REGULAR`, `POST`, `CLOSED` (also `PREPRE`/`POSTPOST`)
+- pre_market, post_market - `{price, change, change_percent, time}` for extended-hours trading, or null. `change` is measured from the last regular close; `time` is the ET timestamp of that print
 - volume, avg_volume, market_cap
-- high_52w, low_52w, pe_ratio, dividend_yield
+- high_52w, low_52w, pe_ratio, forward_pe, dividend_yield, beta
 
 Present the data in a readable format. Highlight significant moves (>2% change).
+
+**Before presenting `change`/`change_percent` as "today's move", check `as_of_session` against today's NY calendar date.** Before the regular session opens (`market_open_now: false` and `as_of_session` is a prior date), Yahoo's change fields still describe the *last completed session* (yesterday's close vs. the day before) — not intraday movement in the still-unopened current session. In that case, label it as "as of `<as_of_session>` close", not "today". Once `as_of_session` equals today's date, `change`/`change_percent` are genuinely intraday.
+
+**Report the extended-hours move when there is one.** Pre-market (`market_state: PRE`), lead with `pre_market` as the current move, then give the regular `change` as the prior session's close. After the close (`POST`), show `post_market` alongside the day's regular move. Check each block's `time`: a `post_market` print from the previous evening seen during pre-market is last night's move, not this morning's.
 
 ## Dependencies
 
