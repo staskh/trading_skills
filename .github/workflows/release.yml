@@ -1,24 +1,81 @@
 name: Release to PyPI
 
+# Publishes trading-skills to PyPI. Runs after CI passes on main (a merged PR),
+# tagging and releasing v<version> from pyproject.toml when that tag does not yet
+# exist; also on a manually published GitHub release or a manual dispatch.
+
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   release:
     types: [published]
   workflow_dispatch:
 
 permissions:
+  contents: write
   id-token: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  tag:
+    # Only for a push to main whose CI succeeded; PR runs of CI never release.
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      created: ${{ steps.release.outputs.created }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      # A merge without a version bump finds its tag already released and stops,
+      # since PyPI refuses to re-upload a version. The release is created with
+      # GITHUB_TOKEN, which does not fire the `release` trigger above, so the
+      # package is published by the jobs below rather than by a second run.
+      - name: Create tag and release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          tag="v${version}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" > /dev/null; then
+            echo "${tag} already exists; nothing to release"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          else
+            gh release create "${tag}" --target "${SHA}" --title "${tag}" --generate-notes
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: tag
+    # The tag job is skipped for release/dispatch events, so `always()` keeps this
+    # job eligible; after a merge it runs only when a new tag was created.
+    if: >-
+      always() && !cancelled() &&
+      (needs.tag.outputs.created == 'true' || github.event_name != 'workflow_run')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.tag || github.ref }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install 3.13
 
       - name: Build package
         run: uv build
@@ -31,6 +88,7 @@ jobs:
 
   publish:
     needs: build
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment: pypi
     steps:
