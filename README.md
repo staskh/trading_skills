@@ -171,6 +171,7 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 | `fundamentals` | Financials, earnings, key metrics, Piotroski F-Score |
 | `news-sentiment` | Recent headlines and sentiment |
 | `earnings-calendar` | Upcoming earnings dates with BMO/AMC timing and EPS estimates |
+| `calendar` | Scheduled US economic events (CPI, NFP, FOMC, GDP...) in ET, with optional ForexFactory cross-check |
 | `insider-trading` | SEC Form 4 insider transactions — executive buys/sells and sentiment |
 
 ### Analysis
