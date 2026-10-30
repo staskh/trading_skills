@@ -227,6 +227,27 @@ class TestFetchCalendarOffset:
         mock_rows.return_value = _FEED["2026-10-29"]  # Wednesday rows everywhere
         assert fetch_us_economic_calendar("2026-10-29") is None
 
+    @patch("trading_skills.economic_calendar._fetch_rows")
+    def test_empty_unverified_feed_is_unavailable_not_event_free(self, mock_rows):
+        # Observed for Thu 2026-11-05: date=11-06 came back empty and date=11-05
+        # held Wednesday's rows. An empty unverified feed is no evidence of a quiet day.
+        mock_rows.side_effect = lambda d, t: {
+            "2026-10-30": [],
+            "2026-10-29": _FEED["2026-10-29"],
+        }.get(d)
+        assert fetch_us_economic_calendar("2026-10-29") is None
+
+    @patch("trading_skills.economic_calendar._fetch_rows")
+    def test_empty_unverified_feed_on_fomc_day_flags_only_fomc(self, mock_rows):
+        # Observed for Wed 2026-10-28: date=10-29 empty, date=10-28 held Tuesday's rows.
+        mock_rows.side_effect = lambda d, t: {
+            "2026-10-29": [],
+            "2026-10-28": [_row("08:55", "Redbook", "6.1%")],
+        }.get(d)
+        cal = fetch_us_economic_calendar("2026-10-28")
+        assert cal["verified"] is False
+        assert [e["event"] for e in cal["events"]] == ["FOMC Rate Decision"]
+
     @patch("trading_skills.economic_calendar._fetch_rows", return_value=None)
     def test_fetch_failure_on_fomc_day_still_flags_fomc(self, _):
         cal = fetch_us_economic_calendar("2026-10-28")

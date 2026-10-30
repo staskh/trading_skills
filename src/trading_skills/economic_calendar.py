@@ -209,9 +209,9 @@ def fetch_us_economic_calendar(
     Nasdaq's `date` parameter is NOT the calendar day it returns: date=D has been
     observed to serve D-1's releases. So the label is never trusted — the D+1 and D
     feeds are both tried and the one whose contents verify as date_str wins. If
-    neither verifies, an unverifiable (not contradicted) feed is used with
-    verified=False; if both contradict date_str, returns None (callers fall back to
-    manual-verify guidance rather than show another day's events as today's).
+    neither verifies, a non-empty unverifiable (not contradicted) feed is used with
+    verified=False; otherwise returns None (callers fall back to manual-verify
+    guidance rather than show another day's events, or none, as today's).
     Always injects the FOMC Rate Decision on known announcement days.
     """
     target = datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -229,7 +229,9 @@ def fetch_us_economic_calendar(
                 "verified": True,
                 "feed_date": feed_date,
             }
-        if status == "unverifiable" and fallback is None:
+        # An empty unverified feed is no evidence of a quiet day — Nasdaq has
+        # served empty pages for days that had releases.
+        if status == "unverifiable" and events and fallback is None:
             fallback = {
                 "events": _inject_fomc_if_missing(events, date_str),
                 "verified": False,
