@@ -76,6 +76,16 @@ class TestForexFactoryCrossCheck:
             "nasdaq_only",
         }
 
+    def test_gaps_are_filled_and_every_event_names_its_source(self):
+        day = run_events("--date", _this_week_weekday(), "--forexfactory")["days"][0]
+        if not day["forexfactory"]["available"]:
+            pytest.skip(f"ForexFactory feed unavailable: {day['forexfactory']['note']}")
+        assert day["events"] is not None
+        assert {e["source"] for e in day["events"]} <= {"nasdaq", "forexfactory"}
+        added = {e["event"] for e in day["events"] if e["source"] == "forexfactory"}
+        missing = {m["event"] for m in day["forexfactory"]["cross_check"]["missing_in_nasdaq"]}
+        assert missing <= added
+
     def test_day_outside_the_published_week_is_unavailable(self):
         day = run_events("--date", date(2026, 1, 5).isoformat(), "--forexfactory")["days"][0]
         assert day["forexfactory"]["available"] is False

@@ -173,3 +173,20 @@ def compare_events(nasdaq: list[dict], reference: list[dict]) -> dict:
         if not any(_keywords(n["event"]) & words for words in reference_words):
             result["nasdaq_only"].append({"event": n["event"], "time_et": n.get("time_et")})
     return result
+
+
+def fill_gaps(nasdaq: list[dict] | None, reference: list[dict]) -> list[dict]:
+    """Nasdaq events plus the high/medium reference releases Nasdaq lacks, each tagged by source.
+
+    With no Nasdaq events (None), the whole reference day is used. Reference events
+    keep their own impact rating and carry no actual value.
+    """
+    if nasdaq is None:
+        added = reference
+    else:
+        gaps = compare_events(nasdaq, reference)["missing_in_nasdaq"]
+        missing = {(m["event"], m["time_et"]) for m in gaps}
+        added = [r for r in reference if (r["event"], r["time_et"]) in missing]
+    merged = [{**e, "source": "nasdaq"} for e in nasdaq or []]
+    merged += [{**r, "actual": None, "source": "forexfactory"} for r in added]
+    return sorted(merged, key=lambda e: (e["impact"] != "high", e.get("time_et") or ""))

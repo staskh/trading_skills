@@ -7,7 +7,7 @@ import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from trading_skills.forexfactory import compare_events, events_for_date, fetch_week
+from trading_skills.forexfactory import compare_events, events_for_date, fetch_week, fill_gaps
 
 # Rows as served by nfs.faireconomy.media/ff_calendar_thisweek.json (week of 2026-10-25).
 _WEEK = [
@@ -236,3 +236,52 @@ class TestFetchWeekCache:
     def test_rate_limited_fetch_without_cache_is_none(self, tmp_path):
         with patch("trading_skills.forexfactory.requests.get", _Feed(status=429).get):
             assert fetch_week(cache_path=tmp_path / "week.json") is None
+
+
+class TestFillGaps:
+    def test_adds_reference_releases_nasdaq_lacks(self):
+        nasdaq = [_nasdaq("Initial Jobless Claims", "08:30 ET")]
+        merged = fill_gaps(nasdaq, events_for_date(_WEEK, "2026-10-29"))
+        added = [e for e in merged if e["source"] == "forexfactory"]
+        assert added == [
+            {
+                "event": "Advance GDP q/q",
+                "time_et": "08:30 ET",
+                "impact": "high",
+                "actual": None,
+                "consensus": "3.2%",
+                "previous": "1.5%",
+                "source": "forexfactory",
+            }
+        ]
+
+    def test_nasdaq_events_are_kept_and_tagged(self):
+        nasdaq = [_nasdaq("Initial Jobless Claims", "08:30 ET")]
+        merged = fill_gaps(nasdaq, events_for_date(_WEEK, "2026-10-29"))
+        kept = [e for e in merged if e["source"] == "nasdaq"]
+        assert kept == [{**nasdaq[0], "source": "nasdaq"}]
+
+    def test_low_impact_reference_releases_are_not_added(self):
+        merged = fill_gaps([], events_for_date(_WEEK, "2026-10-29"))
+        assert "Natural Gas Storage" not in [e["event"] for e in merged]
+
+    def test_without_nasdaq_the_whole_reference_day_is_used(self):
+        merged = fill_gaps(None, events_for_date(_WEEK, "2026-10-29"))
+        assert [e["event"] for e in merged] == [
+            "Advance GDP q/q",
+            "Unemployment Claims",
+            "Natural Gas Storage",
+        ]
+        assert {e["source"] for e in merged} == {"forexfactory"}
+
+    def test_high_impact_first_then_by_time(self):
+        nasdaq = [
+            _nasdaq("Natural Gas Storage", "10:30 ET"),
+            _nasdaq("Initial Jobless Claims", "08:30 ET"),
+        ]
+        merged = fill_gaps(nasdaq, events_for_date(_WEEK, "2026-10-29"))
+        assert [e["event"] for e in merged] == [
+            "Advance GDP q/q",
+            "Initial Jobless Claims",
+            "Natural Gas Storage",
+        ]

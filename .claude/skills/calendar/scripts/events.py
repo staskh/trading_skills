@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ABOUTME: CLI report of scheduled US economic events per weekday from the Nasdaq calendar.
-# ABOUTME: Optionally cross-checks each day against ForexFactory's current-week calendar.
+# ABOUTME: Optionally cross-checks against ForexFactory's current week and fills Nasdaq's gaps.
 
 import argparse
 import json
@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from trading_skills.economic_calendar import fetch_us_economic_calendar
-from trading_skills.forexfactory import compare_events, events_for_date, fetch_week
+from trading_skills.forexfactory import compare_events, events_for_date, fetch_week, fill_gaps
 from trading_skills.utils import generated_at_str
 
 NY = ZoneInfo("America/New_York")
@@ -45,21 +45,30 @@ def build_report(start: date, count: int, impact: str, forexfactory: bool) -> di
     for day in _weekdays(start, count):
         date_str = day.isoformat()
         cal = fetch_us_economic_calendar(date_str, now=now)
-        entry = {"date": date_str, "weekday": day.strftime("%a")}
-        if cal is None:
-            entry.update(
-                verified=False,
-                feed_date=None,
-                events=None,
-                note="Calendar unavailable or unverifiable — verify this day manually.",
-            )
-            all_events = None
+        nasdaq = cal["events"] if cal else None
+        entry = {
+            "date": date_str,
+            "weekday": day.strftime("%a"),
+            "verified": cal["verified"] if cal else False,
+            "feed_date": cal["feed_date"] if cal else None,
+        }
+        ff = _forexfactory_day(week, date_str, nasdaq) if forexfactory else None
+        if ff and ff["available"]:
+            events = fill_gaps(nasdaq, ff["events"])
+            if nasdaq is None:
+                entry["note"] = (
+                    "Nasdaq calendar unavailable — events are ForexFactory's (no actuals)."
+                )
+        elif nasdaq is not None:
+            events = [{**e, "source": "nasdaq"} for e in nasdaq]
         else:
-            all_events = cal["events"]
-            shown = [e for e in all_events if impact == "all" or e["impact"] == "high"]
-            entry.update(verified=cal["verified"], feed_date=cal["feed_date"], events=shown)
-        if forexfactory:
-            entry["forexfactory"] = _forexfactory_day(week, date_str, all_events)
+            events = None
+            entry["note"] = "Calendar unavailable or unverifiable — verify this day manually."
+        if events is not None:
+            events = [e for e in events if impact == "all" or e["impact"] == "high"]
+        entry["events"] = events
+        if ff:
+            entry["forexfactory"] = ff
         days.append(entry)
     return {
         "generated_at": generated_at_str(),
