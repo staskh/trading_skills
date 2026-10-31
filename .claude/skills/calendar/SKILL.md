@@ -53,7 +53,7 @@ uv run python scripts/events.py --date 2026-10-29 --days 2 --impact high --forex
 uv run python scripts/events.py --date 2026-11-02 --days 5 --impact high
 ```
 
-Only this report uses ForexFactory. The 0DTE event gate (`ib_0dte`) reads the Nasdaq calendar alone.
+Only this report uses ForexFactory.
 
 ## Reporting
 

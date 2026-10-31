@@ -19,7 +19,6 @@ from mcp.server.mcpserver import MCPServer
 from trading_skills.broker.account import get_account_summary
 from trading_skills.broker.collar import find_collar_candidates
 from trading_skills.broker.delta_exposure import get_delta_exposure
-from trading_skills.broker.ema_vix import DEFAULT_BAR_MINUTES, run_ema_vix_strategy
 from trading_skills.broker.options import (
     get_expiries as ib_get_expiries,
 )
@@ -36,7 +35,6 @@ from trading_skills.broker.roll import find_roll_candidates
 from trading_skills.broker.stop_loss import get_stop_loss_data
 from trading_skills.broker.trades import get_trades
 from trading_skills.broker.trailing_stop import get_trailing_stop_data
-from trading_skills.broker.zero_dte import DEFAULT_MAX_WIDTH
 from trading_skills.calendar_report import build_calendar_report
 from trading_skills.correlation import compute_correlation
 from trading_skills.earnings import get_earnings_info, get_multiple_earnings
@@ -914,74 +912,6 @@ async def ib_trades_history(
         end_date=end_date,
         flex_token=flex_token,
         flex_query_id=flex_query_id,
-    )
-
-
-@mcp.tool()
-async def ib_0dte_ema_vix(
-    symbol: str,
-    budget: float = 50000.0,
-    port: int = 7496,
-    vix_threshold: float | None = None,
-    target_delta: float | None = None,
-    rr_gate: bool = False,
-    time_gate: bool = False,
-    bar_minutes: int = DEFAULT_BAR_MINUTES,
-    max_width: float | None = DEFAULT_MAX_WIDTH,
-    gex: bool = False,
-    top: int = 5,
-    account: str | None = None,
-    execute: bool = False,
-    pick: int = 1,
-    limit_frac: float | None = None,
-) -> dict:
-    """Find (and optionally place) the best 0DTE credit spread via the EMA + VIX/VXN strategy.
-
-    Reads closed 12-min IB bars + the live vol index, applies the vol gate, then auto-selects
-    bull_put or bear_call from the EMA9/EMA21 cross before ranking spreads. NDX/QQQ are
-    gated on VXN (Nasdaq-100 vol); all other symbols on VIX. Returns success=False with a
-    reason when a gate blocks the trade (VIX-SKIP / no-cross / EMA-Dn-no-RR / missing-bars).
-
-    Default is a bare EMA cross runnable any time of day; enable the optional confirmation
-    gates per call. Default is a dry run — pass execute=True to place a live combo order
-    with the automatic OCA exit bracket. Requires TWS or IB Gateway running locally.
-
-    Args:
-        symbol: Underlying (e.g. NDX, SPX, RUT, QQQ, SPY)
-        budget: Max capital at risk in dollars (default 50000)
-        port: IB port (7496 for live, 7497 for paper)
-        vix_threshold: Skip if vol index >= this. Default is per-index: VXN 30 for
-            NDX/QQQ, VIX 20 otherwise.
-        target_delta: Short-leg delta target (default 0.11 bear call / 0.07 bull put)
-        rr_gate: Require red→red (today's two most recently closed bars both red) to
-            confirm a Bear Call
-        time_gate: Require today's bars from 9:30 through 10:30 ET (run at 10:30 ET+) and
-            anchor the EMA-cross lookback to the last bar closing by 10:30 ET
-        bar_minutes: Bar size in minutes for the EMAs and gates (default 12)
-        max_width: Cap the strike width in points (default 150; 0 = no cap)
-        gex: Compute the dealer gamma-exposure profile
-        top: Number of candidates to return (default 5)
-        account: IBKR account for execution (required with execute when >1 managed account)
-        execute: Place the chosen spread as a live combo order (default False = dry run)
-        pick: 1-based rank of the candidate to execute (default 1 = best)
-        limit_frac: Walk between the marketable combo credit (0) and mid (1.0) at execution
-    """
-    return await run_ema_vix_strategy(
-        symbol,
-        budget=budget,
-        port=port,
-        vix_threshold=vix_threshold,
-        target_delta=target_delta,
-        rr_gate=rr_gate,
-        time_gate=time_gate,
-        bar_minutes=bar_minutes,
-        max_width=max_width,
-        gex=gex,
-        top=top,
-        account=account,
-        execute=execute,
-        pick=pick,
-        limit_frac=limit_frac,
     )
 
 
