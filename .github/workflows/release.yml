@@ -1,8 +1,10 @@
 name: Release to PyPI
 
 # Publishes trading-skills to PyPI. Runs after CI passes on main (a merged PR),
-# tagging and releasing v<version> from pyproject.toml when that tag does not yet
-# exist; also on a manually published GitHub release or a manual dispatch.
+# tagging and releasing v<version> from pyproject.toml when that version changes
+# the major or minor number of the latest release; a patch-only bump waits for a
+# manual dispatch on main or the next minor release. Also runs on a manually
+# published GitHub release.
 
 on:
   workflow_run:
@@ -23,11 +25,13 @@ concurrency:
 
 jobs:
   tag:
-    # Only for a push to main whose CI succeeded; PR runs of CI never release.
+    # A push to main whose CI succeeded (PR runs of CI never release), or a
+    # manual dispatch on main.
     if: >-
-      github.event_name == 'workflow_run' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push'
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     outputs:
       created: ${{ steps.release.outputs.created }}
@@ -35,23 +39,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      # A merge without a version bump finds its tag already released and stops,
-      # since PyPI refuses to re-upload a version. The release is created with
-      # GITHUB_TOKEN, which does not fire the `release` trigger above, so the
-      # package is published by the jobs below rather than by a second run.
+      # An existing tag stops the run, since PyPI refuses to re-upload a version.
+      # The release is created with GITHUB_TOKEN, which does not fire the
+      # `release` trigger above, so the package is published by the jobs below
+      # rather than by a second run.
       - name: Create tag and release
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          EVENT: ${{ github.event_name }}
         run: |
           version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
           tag="v${version}"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          latest=$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's#.*refs/tags/v##' | sort -V | tail -n 1)
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" > /dev/null; then
             echo "${tag} already exists; nothing to release"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          elif [ "${EVENT}" = "workflow_run" ] && [ -n "${latest}" ] && [ "${version%.*}" = "${latest%.*}" ]; then
+            echo "${tag} only changes the patch number of v${latest}; dispatch this workflow on main to release it"
             echo "created=false" >> "$GITHUB_OUTPUT"
           else
             gh release create "${tag}" --target "${SHA}" --title "${tag}" --generate-notes
@@ -60,11 +69,11 @@ jobs:
 
   build:
     needs: tag
-    # The tag job is skipped for release/dispatch events, so `always()` keeps this
-    # job eligible; after a merge it runs only when a new tag was created.
+    # The tag job is skipped for a published release, so `always()` keeps this
+    # job eligible; otherwise it runs only when a new tag was created.
     if: >-
       always() && !cancelled() &&
-      (needs.tag.outputs.created == 'true' || github.event_name != 'workflow_run')
+      (needs.tag.outputs.created == 'true' || github.event_name == 'release')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
