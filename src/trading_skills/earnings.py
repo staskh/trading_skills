@@ -1,7 +1,7 @@
 # ABOUTME: Retrieves upcoming earnings dates for stock symbols.
 # ABOUTME: Returns date, before/after market timing, and EPS estimate.
 
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -11,26 +11,30 @@ _NY = ZoneInfo("America/New_York")
 
 
 def get_next_earnings_date(symbol: str) -> str | None:
-    """Get next earnings date string (YYYY-MM-DD) using 3-fallback chain."""
+    """Get next earnings date string (YYYY-MM-DD) using 3-fallback chain.
+
+    Dates before today (ET) are skipped in every source: Yahoo keeps a
+    just-reported date in the calendar and info fields for days afterwards.
+    """
     try:
         ticker = yf.Ticker(symbol)
+        today = datetime.now(_NY).date()
 
         # Method 1: calendar dict
         calendar = ticker.calendar
         if calendar and isinstance(calendar, dict):
-            earnings_list = calendar.get("Earnings Date")
-            if earnings_list and len(earnings_list) > 0:
-                return str(earnings_list[0])[:10]
+            listed = [date.fromisoformat(str(e)[:10]) for e in calendar.get("Earnings Date") or []]
+            upcoming = [d for d in listed if d >= today]
+            if upcoming:
+                return str(min(upcoming))
 
-        # Method 2: earnings_dates DataFrame
+        # Method 2: earnings_dates DataFrame (listed newest first)
         try:
             earnings_df = ticker.earnings_dates
             if earnings_df is not None and not earnings_df.empty:
-                today = datetime.now(_NY).date()
-                for idx in earnings_df.index:
-                    earn_date = idx.date()
-                    if earn_date >= today:
-                        return str(earn_date)
+                upcoming = [idx.date() for idx in earnings_df.index if idx.date() >= today]
+                if upcoming:
+                    return str(min(upcoming))
         except Exception:
             pass
 
@@ -39,8 +43,9 @@ def get_next_earnings_date(symbol: str) -> str | None:
             info = ticker.info
             earnings_ts = info.get("earningsTimestamp") or info.get("earningsTimestampStart")
             if earnings_ts:
-                earn_dt = datetime.fromtimestamp(earnings_ts)
-                return earn_dt.strftime("%Y-%m-%d")
+                earn_date = datetime.fromtimestamp(earnings_ts, _NY).date()
+                if earn_date >= today:
+                    return str(earn_date)
         except Exception:
             pass
 

@@ -1,13 +1,24 @@
 # ABOUTME: Tests for earnings calendar module using real Yahoo Finance data.
 # ABOUTME: Validates single and multiple symbol earnings date retrieval.
 
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from trading_skills.earnings import get_earnings_info, get_multiple_earnings, get_next_earnings_date
 
 MODULE = "trading_skills.earnings"
+
+_TODAY = datetime.now(ZoneInfo("America/New_York")).date()
+_PAST = _TODAY - timedelta(days=3)
+_SOON = _TODAY + timedelta(days=60)
+_LATER = _TODAY + timedelta(days=150)
+
+
+def _et_stamp(day, hour):
+    return pd.Timestamp(datetime(day.year, day.month, day.day, hour), tz="America/New_York")
 
 
 class TestGetEarningsInfo:
@@ -67,11 +78,57 @@ class TestGetNextEarningsDate:
     @patch(f"{MODULE}.yf.Ticker")
     def test_returns_date_from_calendar(self, mock_ticker):
         mock_instance = MagicMock()
-        mock_instance.calendar = {"Earnings Date": ["2025-04-15"]}
+        mock_instance.calendar = {"Earnings Date": [_SOON]}
         mock_ticker.return_value = mock_instance
 
         result = get_next_earnings_date("AAPL")
-        assert result == "2025-04-15"
+        assert result == str(_SOON)
+
+    @patch(f"{MODULE}.yf.Ticker")
+    def test_reported_calendar_date_is_skipped(self, mock_ticker):
+        """Yahoo keeps a just-reported date in the calendar for days after the report."""
+        mock_instance = MagicMock()
+        mock_instance.calendar = {"Earnings Date": [_PAST]}
+        mock_instance.earnings_dates = pd.DataFrame(
+            {"EPS Estimate": [11.12, 6.35]},
+            index=pd.DatetimeIndex([_et_stamp(_SOON, 8), _et_stamp(_PAST, 6)]),
+        )
+        mock_ticker.return_value = mock_instance
+
+        assert get_next_earnings_date("LLY") == str(_SOON)
+
+    @patch(f"{MODULE}.yf.Ticker")
+    def test_earnings_today_counts_as_next(self, mock_ticker):
+        mock_instance = MagicMock()
+        mock_instance.calendar = {"Earnings Date": [_TODAY]}
+        mock_ticker.return_value = mock_instance
+
+        assert get_next_earnings_date("AAPL") == str(_TODAY)
+
+    @patch(f"{MODULE}.yf.Ticker")
+    def test_soonest_of_several_future_dates(self, mock_ticker):
+        """earnings_dates lists newest first, so the soonest future date is not the first row."""
+        mock_instance = MagicMock()
+        mock_instance.calendar = None
+        mock_instance.earnings_dates = pd.DataFrame(
+            {"EPS Estimate": [2.0, 1.5, 1.2]},
+            index=pd.DatetimeIndex(
+                [_et_stamp(_LATER, 16), _et_stamp(_SOON, 16), _et_stamp(_PAST, 16)]
+            ),
+        )
+        mock_ticker.return_value = mock_instance
+
+        assert get_next_earnings_date("AAPL") == str(_SOON)
+
+    @patch(f"{MODULE}.yf.Ticker")
+    def test_reported_info_timestamp_is_skipped(self, mock_ticker):
+        mock_instance = MagicMock()
+        mock_instance.calendar = None
+        mock_instance.earnings_dates = None
+        mock_instance.info = {"earningsTimestamp": int(_et_stamp(_PAST, 6).timestamp())}
+        mock_ticker.return_value = mock_instance
+
+        assert get_next_earnings_date("AAPL") is None
 
     @patch(f"{MODULE}.yf.Ticker")
     def test_fallback_to_earnings_dates(self, mock_ticker):
@@ -93,13 +150,13 @@ class TestGetNextEarningsDate:
         mock_instance = MagicMock()
         mock_instance.calendar = None
         mock_instance.earnings_dates = None
-        # timestamp for 2025-04-15 12:00:00 UTC
-        mock_instance.info = {"earningsTimestamp": 1744718400}
+        # 21:30 ET is already the next day in UTC; the date must be read in ET
+        moment = _et_stamp(_SOON, 21).replace(minute=30)
+        mock_instance.info = {"earningsTimestamp": int(moment.timestamp())}
         mock_ticker.return_value = mock_instance
 
         result = get_next_earnings_date("AAPL")
-        assert result is not None
-        assert "2025" in result
+        assert result == str(_SOON)
 
     @patch(f"{MODULE}.yf.Ticker")
     def test_returns_none_when_no_data(self, mock_ticker):
