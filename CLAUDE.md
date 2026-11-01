@@ -78,7 +78,7 @@ Create the branch before writing any code: `git checkout -b feat/issue-N-descrip
 
 Version is in `pyproject.toml`. Bump it as the **final commit before opening a PR** — separate from the implementation commit. No need to run tests for the version bump commit.
 
-Once a merged PR passes CI on `main`, `.github/workflows/release.yml` tags `v<version>`, creates the GitHub release and publishes to PyPI. A merge that leaves the version unchanged releases nothing.
+Once a merged PR passes CI on `main`, `.github/workflows/release.yml` tags `v<version>`, creates the GitHub release and publishes to PyPI, but only when the version changes the major or minor number of the latest `v*` tag. A patch-only bump (`bug/` branch) or an unchanged version releases nothing automatically. To release a patch version, only when Stas explicitly asks, run `gh workflow run release.yml --ref main` after CI passes on `main`.
 
 ## Before Creating a PR
 
