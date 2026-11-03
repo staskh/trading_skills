@@ -76,6 +76,15 @@ class TestWhalesHunter:
         assert len(result["whales"]) > 0
 
     @requires_massive
+    def test_precise_mode_whales_have_spot_at_trade_time(self):
+        result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=True)
+        assert len(result["whales"]) > 0
+        for w in result["whales"]:
+            assert w["spot"] > 0
+            expected = round((w["break_even"] - w["spot"]) / w["spot"] * 100, 2)
+            assert w["pct_from_spot"] == expected
+
+    @requires_massive
     def test_precise_mode_source_is_massive(self):
         result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=True)
         assert result["source"] == "massive"

@@ -37,9 +37,12 @@ Returns JSON with:
 - `total_call_invested` — Sum of invested dollars in call whale events
 - `total_put_invested` — Sum of invested dollars in put whale events
 - `call_put_ratio` — Call invested / put invested (null if no puts)
+- `directional_call_invested` — Call invested where break-even is ≥ 1.5% above spot
+- `directional_put_invested` — Put invested where break-even is ≥ 1.5% below spot
+- `directional_call_put_ratio` — Directional call / directional put invested (null if no directional puts)
 - `whales` — List of whale events:
-  - `timestamp`, `ticker`, `type`, `strike`, `expiry`
-  - `close`, `volume`, `transactions`, `invested`, `break_even`
+  - `timestamp`, `ticker`, `type`, `strike`, `spot` (underlying price at trade time), `expiry`
+  - `close`, `volume`, `transactions`, `invested`, `break_even`, `pct_from_spot` (break-even distance from spot, %)
 - `summary` *(present only when `--summary` is passed)* — List of per-ticker aggregates:
   - `ticker`, `type`, `strike`, `expiry`, `whale_count`, `total_invested`, `break_even`
 
@@ -66,6 +69,7 @@ After running the script, present the results as follows.
 **Header line:**
 > Whale activity for **{underlying}** on {trading_date} — source: {source}
 > Call flow: ${total_call_invested:,.0f} | Put flow: ${total_put_invested:,.0f} | C/P ratio: {call_put_ratio:.2f}
+> Directional (≥1.5% B/E from spot) — Calls: ${directional_call_invested:,.0f} | Puts: ${directional_put_invested:,.0f} | C/P ratio: {directional_call_put_ratio:.2f}
 
 **When `--summary` was requested**, render the `summary` array as a table:
 
@@ -78,8 +82,9 @@ Sort by `total_invested` descending. For multi-event rows use the time range of 
 **Interpretation guidance:**
 - `source: "massive"` — High-confidence; per-second block trade data from Massive API
 - `source: "yahoo only"` — Fallback; daily-level data (Massive API key missing or no intraday data)
-- Low C/P ratio (< 0.5) — Bearish institutional positioning
-- High C/P ratio (> 2.0) — Bullish institutional positioning
+- Judge direction by `directional_call_put_ratio`, not `call_put_ratio` — trades with break-even within 1.5% of spot (deep ITM stock replacement, hedges) carry no directional signal
+- Low directional C/P ratio (< 0.5) — Bearish institutional positioning
+- High directional C/P ratio (> 2.0) — Bullish institutional positioning
 - `transactions: 1` — Single block trade; strongest whale signal
 
 ## Requirements
