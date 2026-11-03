@@ -8,7 +8,7 @@ import sys
 
 import pandas as pd
 
-from trading_skills.massive.whales import WhaleDataError, whales_hunter
+from trading_skills.massive.whales import WhaleDataError, directional_flow, whales_hunter
 from trading_skills.utils import generated_at_str
 
 
@@ -79,6 +79,7 @@ def main():
         "total_call_invested": round(call_invested, 2),
         "total_put_invested": round(put_invested, 2),
         "call_put_ratio": round(call_put_ratio, 4) if call_put_ratio is not None else None,
+        **directional_flow(whales),
         "whales": [
             {**w, "timestamp": str(w["timestamp"]), "expiry": str(w["expiry"])} for w in whales
         ],

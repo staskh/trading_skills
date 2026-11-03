@@ -271,6 +271,82 @@ _WHALE_COLS = [
 ]
 
 
+# Minimum break-even distance from spot (in %) for a trade to count as a
+# directional bet; closer trades behave like stock replacement or hedges.
+DIRECTIONAL_PCT = 1.5
+
+
+def underlying_spot_bars(underlying: str, trading_date) -> pd.DataFrame:
+    """Fetch per-second underlying prices for the trading date.
+
+    Returns a DataFrame with NY-timezone-aware timestamp and spot (bar close),
+    sorted ascending. Empty if no bars.
+    """
+    client = _make_client()
+    bars = [
+        {"timestamp": bar.timestamp, "spot": bar.close}
+        for bar in client.list_aggs(
+            underlying,
+            1,
+            "second",
+            trading_date,
+            trading_date,
+            adjusted="true",
+            sort="asc",
+            limit=50000,
+        )
+    ]
+    if not bars:
+        return pd.DataFrame(columns=["timestamp", "spot"])
+    df = pd.DataFrame(bars)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(_NY)
+    return df
+
+
+def attach_spot(whales: pd.DataFrame, spot_bars: pd.DataFrame) -> pd.DataFrame:
+    """Add the underlying spot at each trade's time and break-even distance from it.
+
+    spot is the latest underlying price at or before the trade timestamp.
+    pct_from_spot = (break_even − spot) / spot × 100, rounded to 2 decimals.
+    Inserts spot after strike and pct_from_spot after break_even; row order is kept.
+    """
+    result = whales.reset_index(drop=True)
+    order = result["timestamp"].sort_values(kind="stable").index
+    matched = pd.merge_asof(
+        result.loc[order, ["timestamp"]],
+        spot_bars[["timestamp", "spot"]].sort_values("timestamp"),
+        on="timestamp",
+        direction="backward",
+    )
+    spot = pd.Series(matched["spot"].to_numpy(), index=order).sort_index()
+    pct = ((result["break_even"] - spot) / spot * 100).round(2)
+    result.insert(result.columns.get_loc("strike") + 1, "spot", spot)
+    result.insert(result.columns.get_loc("break_even") + 1, "pct_from_spot", pct)
+    return result
+
+
+def directional_flow(whales: list[dict], threshold_pct: float = DIRECTIONAL_PCT) -> dict:
+    """Sum invested in directional bets: calls with break-even at least threshold_pct
+    above spot and puts with break-even at least threshold_pct below spot.
+    """
+    call_invested = 0
+    put_invested = 0
+    for w in whales:
+        pct = w.get("pct_from_spot")
+        if pct is None or pd.isna(pct):
+            continue
+        if w["type"] == "call" and pct >= threshold_pct:
+            call_invested += w["invested"]
+        elif w["type"] == "put" and pct <= -threshold_pct:
+            put_invested += w["invested"]
+    ratio = call_invested / put_invested if put_invested > 0 else None
+    return {
+        "directional_call_invested": round(call_invested, 2),
+        "directional_put_invested": round(put_invested, 2),
+        "directional_call_put_ratio": round(ratio, 4) if ratio is not None else None,
+    }
+
+
 def _apply_crude_selection(active: pd.DataFrame, sigma_z: float) -> pd.DataFrame:
     """Select whale candidates and tag each with the selection reason.
 
@@ -337,6 +413,8 @@ def whales_hunter(
         dict with:
           "whales": list of dicts with keys timestamp, ticker, type, strike,
                     expiry, close, volume, transactions, invested, break_even.
+                    Precise results also carry spot (underlying price at trade
+                    time) and pct_from_spot (break-even distance from spot, %).
           "source": "massive" if precise step succeeded, else "yahoo only".
     """
     if trading_date is None:
@@ -408,6 +486,12 @@ def whales_hunter(
 
     if whale_dfs:
         precise_df = pd.concat(whale_dfs, ignore_index=True)
+        # Candidates may trade on the previous trading day, so fetch spot for every trade date
+        trade_dates = sorted(set(precise_df["timestamp"].dt.date))
+        spot_bars = pd.concat(
+            [underlying_spot_bars(underlying, d) for d in trade_dates], ignore_index=True
+        )
+        precise_df = attach_spot(precise_df, spot_bars)
         return {
             "whales": precise_df.to_dict("records"),
             "source": "massive",
