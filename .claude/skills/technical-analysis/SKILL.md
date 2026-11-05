@@ -72,6 +72,48 @@ uv run python scripts/technicals.py TSLA --indicators rsi,macd
 
 ---
 
+# Intraday Technical Analysis
+
+Same RSI/MACD/ADX-DMI math as above, computed on intraday (sub-daily) bars instead of daily closes. Daily-period indicators barely move within a single session — a whole trading day can pass with ADX unchanged to two decimal places — so they're the wrong tool for monitoring a position you plan to hold hours, not weeks. Use this for same-day/next-day position checks (day-trade or 1-3 day scalp monitoring); use the daily version above for swing/multi-week positions, or once at the start of a monitoring series as slower-moving regime context.
+
+## Instructions
+
+```bash
+uv run python scripts/intraday_technicals.py SYMBOL [--interval INTERVAL] [--period PERIOD]
+```
+
+## Arguments
+
+- `SYMBOL` - Ticker symbol
+- `--interval` - Bar size: `1m`,`2m`,`5m`,`15m`,`30m`,`60m` (default: `5m`)
+- `--period` - Lookback window: `1d`,`5d` (default: `1d` — today's session only)
+
+## Output
+
+- `bars` - Number of bars fetched. Early in the session this can be too few for stable indicators.
+- `warnings` - Non-empty when `bars` is too low for RSI (~15+) or MACD's signal line (~35+) to be trustworthy — read this before trusting the numbers, don't just check for `null`.
+- `price` - Current price, and change/change_pct measured from the first bar in the window (i.e. since session/period open, not vs. yesterday's close).
+- `indicators.rsi`, `.macd` (`macd`/`signal`/`histogram`/`prev_histogram`), `.ema` (`ema9`/`ema21`/`crossover`), `.adx` (`adx`/`dmp`/`dmn`) - same fields and interpretation as the daily version, except `ema.crossover` reports age as `bars_ago` and `minutes_ago` (not `days_ago` — a crossover 4 bars back on 5m bars is 20 minutes old, not 4 days).
+
+## Examples
+
+```bash
+# Default: 5-minute bars, today's session
+uv run python scripts/intraday_technicals.py MU
+
+# 15-minute bars for a slightly steadier read
+uv run python scripts/intraday_technicals.py MU --interval 15m
+
+# Include the prior session too (early in a new session, when today alone is too thin)
+uv run python scripts/intraday_technicals.py MU --interval 5m --period 5d
+```
+
+## Gotcha
+
+Right after the open there may be only a handful of bars — `compute_raw_indicators` still returns a number for RSI/ADX from whatever it has, it does not withhold output. Check `warnings` (or `bars`) rather than trusting a lone RSI value at 9:35 ET.
+
+---
+
 # Correlation Analysis
 
 Compute price correlation matrix between multiple symbols for diversification analysis.
