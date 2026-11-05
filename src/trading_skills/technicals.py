@@ -390,3 +390,44 @@ def compute_multi_symbol(
         results.append(result)
 
     return {"results": results}
+
+
+# RSI needs ~14 bars, MACD's signal line needs ~26+9. Below these thresholds
+# compute_raw_indicators still returns a number (it doesn't withhold output),
+# so intraday_technicals.py surfaces this warning instead of a bare null-check.
+MIN_BARS_FOR_RSI = 15
+MIN_BARS_FOR_MACD = 35
+
+
+def intraday_bar_warnings(n_bars: int) -> list[str]:
+    """Return human-readable caveats when too few intraday bars exist for stable indicators.
+
+    Empty list means RSI/MACD/ADX on this many bars are as trustworthy as they get.
+    """
+    if n_bars < MIN_BARS_FOR_RSI:
+        return [
+            f"Only {n_bars} bars available — RSI/ADX not yet reliable "
+            f"(need {MIN_BARS_FOR_RSI}+, session likely just opened). "
+            "Lean on price/flow/news instead."
+        ]
+    if n_bars < MIN_BARS_FOR_MACD:
+        return [
+            f"Only {n_bars} bars available — MACD signal line not yet reliable "
+            f"(need {MIN_BARS_FOR_MACD}+). RSI/ADX are usable."
+        ]
+    return []
+
+
+def interval_minutes(interval: str) -> int | None:
+    """Minutes per bar for a yfinance intraday interval ("5m" -> 5, "1h" -> 60).
+
+    Returns None for daily-or-longer or unrecognised intervals.
+    """
+    unit, value = interval[-1:], interval[:-1]
+    if not value.isdigit():
+        return None
+    if unit == "m":
+        return int(value)
+    if unit == "h":
+        return int(value) * 60
+    return None
