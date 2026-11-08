@@ -27,6 +27,7 @@ dependencies = [
     "requests>=2.32",
     "pypdf>=6.14.2",
     "python-dotenv>=1.0",
+    "mplfinance>=0.12.10b0",
 ]
 
 [project.scripts]
