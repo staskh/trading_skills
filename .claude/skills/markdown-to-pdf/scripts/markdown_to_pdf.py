@@ -4,12 +4,14 @@
 
 # Dependencies: mistune>=3.2, reportlab>=4.0  (pip install mistune reportlab)
 
+import html
 import json
 import re
 import sys
 import unicodedata
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote
 
 import mistune
 from reportlab.lib import colors
@@ -17,10 +19,12 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     HRFlowable,
+    Image,
     Paragraph,
     Preformatted,
     SimpleDocTemplate,
@@ -159,6 +163,8 @@ _CELL_SEP = "\x00C\x00"
 _HEAD_ROW = "\x01H\x01"
 _BODY_ROW = "\x01R\x01"
 _LIST_ITEM = "\x02I\x02"
+# Marks image N inside rendered inline text: \x03N\x03
+_IMAGE_RE = re.compile(r"\x03(\d+)\x03")
 
 # ---------------------------------------------------------------------------
 # Visual constants
@@ -166,6 +172,10 @@ _LIST_ITEM = "\x02I\x02"
 _NAVY = colors.HexColor("#1a3a5c")
 _BODY_PT = 9
 _LINE_SPACING = 14
+# Usable width inside the page frame (1-inch margins, 6 pt frame padding on each side).
+_FRAME_WIDTH = LETTER[0] - 2 * inch - 12
+# Leaves room on the page for a heading and a line of text with the picture.
+_MAX_IMAGE_HEIGHT = (LETTER[1] - 2 * inch - 12) * 0.75
 
 
 def _setup_font() -> str:
@@ -215,13 +225,34 @@ def _build_styles(font: str) -> dict:
     return {
         "body": s("body", fontSize=_BODY_PT, leading=_LINE_SPACING, spaceAfter=4, spaceBefore=0),
         "h1": s(
-            "h1_doc", fn=bold, fontSize=22, leading=28, textColor=_NAVY, spaceBefore=8, spaceAfter=4
+            "h1_doc",
+            fn=bold,
+            fontSize=22,
+            leading=28,
+            textColor=_NAVY,
+            spaceBefore=8,
+            spaceAfter=4,
+            keepWithNext=1,
         ),
         "h2": s(
-            "h2_doc", fn=bold, fontSize=16, leading=20, textColor=_NAVY, spaceBefore=8, spaceAfter=4
+            "h2_doc",
+            fn=bold,
+            fontSize=16,
+            leading=20,
+            textColor=_NAVY,
+            spaceBefore=8,
+            spaceAfter=4,
+            keepWithNext=1,
         ),
         "h3": s(
-            "h3_doc", fn=bold, fontSize=12, leading=16, textColor=_NAVY, spaceBefore=6, spaceAfter=3
+            "h3_doc",
+            fn=bold,
+            fontSize=12,
+            leading=16,
+            textColor=_NAVY,
+            spaceBefore=6,
+            spaceAfter=3,
+            keepWithNext=1,
         ),
         "code": s(
             "code",
@@ -306,6 +337,10 @@ def _apply_markup_subs(text: str) -> str:
     return text
 
 
+def _alt_text(alt: str) -> str:
+    return f"<i>[image: {alt}]</i>"
+
+
 class _Renderer(mistune.HTMLRenderer):
     """mistune renderer that builds a reportlab Platypus story.
 
@@ -316,11 +351,13 @@ class _Renderer(mistune.HTMLRenderer):
     So method signatures mirror HTMLRenderer, not BaseRenderer.
     """
 
-    def __init__(self, styles: dict, unicode_font: bool):
+    def __init__(self, styles: dict, unicode_font: bool, base_dir: Path | None = None):
         super().__init__()
         self.styles = styles
         self.unicode_font = unicode_font
+        self.base_dir = Path(base_dir) if base_dir else Path.cwd()
         self.story: list = []
+        self.images: list[tuple[str, Path]] = []  # (alt text, file) per image marker
 
     # ------------------------------------------------------------------
     # Inline methods — return XML markup strings for Paragraph
@@ -349,7 +386,28 @@ class _Renderer(mistune.HTMLRenderer):
         return f"<u>{text}</u>"
 
     def image(self, text: str, url: str, title=None) -> str:
-        return ""
+        """A local image becomes a marker that `paragraph` turns into a picture.
+
+        Paths are relative to the markdown file unless absolute. A missing file or a remote
+        URL shows the alt text instead.
+        """
+        target = unquote(html.unescape(url))
+        path = Path(target) if Path(target).is_absolute() else self.base_dir / target
+        if "://" in target or not path.is_file():
+            return _alt_text(text)
+        self.images.append((text, path))
+        return f"\x03{len(self.images) - 1}\x03"
+
+    def _alt_only(self, text: str) -> str:
+        """Replace image markers with alt text, where a picture can't be placed."""
+        return _IMAGE_RE.sub(lambda m: _alt_text(self.images[int(m.group(1))][0]), text)
+
+    def _picture(self, index: int) -> Image:
+        """The image flowable, scaled down to fit the frame width and maximum height."""
+        _, path = self.images[index]
+        width, height = ImageReader(str(path)).getSize()
+        scale = min(1.0, _FRAME_WIDTH / width, _MAX_IMAGE_HEIGHT / height)
+        return Image(str(path), width=width * scale, height=height * scale)
 
     def inline_html(self, html: str) -> str:
         return ""
@@ -360,11 +418,26 @@ class _Renderer(mistune.HTMLRenderer):
 
     def heading(self, text: str, level: int, **attrs) -> str:
         style = self.styles.get(f"h{level}", self.styles.get("h3", self.styles["body"]))
-        self.story.append(Paragraph(text, style))
+        self.story.append(Paragraph(self._alt_only(text), style))
         return ""
 
     def paragraph(self, text: str) -> str:
-        self.story.append(Paragraph(text, self.styles["body"]))
+        """Text and pictures in their written order.
+
+        An image inside inline markup (e.g. bold) can't split the text without leaving
+        unbalanced tags; then the whole text comes first and its pictures after it.
+        """
+        parts = _IMAGE_RE.split(text)
+        try:
+            flowables = [
+                self._picture(int(part)) if i % 2 else Paragraph(part.strip(), self.styles["body"])
+                for i, part in enumerate(parts)
+                if i % 2 or part.strip()
+            ]
+        except ValueError:
+            flowables = [Paragraph(_IMAGE_RE.sub("", text), self.styles["body"])]
+            flowables += [self._picture(int(part)) for part in parts[1::2]]
+        self.story.extend(flowables)
         return ""
 
     def thematic_break(self) -> str:
@@ -385,7 +458,7 @@ class _Renderer(mistune.HTMLRenderer):
         return ""
 
     def block_quote(self, text: str) -> str:
-        self.story.append(Paragraph(text, self.styles["quote"]))
+        self.story.append(Paragraph(self._alt_only(text), self.styles["quote"]))
         return ""
 
     def blank_line(self) -> str:
@@ -399,6 +472,7 @@ class _Renderer(mistune.HTMLRenderer):
         bullet = "•" if self.unicode_font else "-"
         for i, body in enumerate(items, 1):
             marker = f"{i}." if ordered else bullet
+            body = self._alt_only(body)
             self.story.append(Paragraph(f"{marker}&nbsp;&nbsp;{body}", self.styles["bullet"]))
         return ""
 
@@ -411,7 +485,7 @@ class _Renderer(mistune.HTMLRenderer):
 
     def table_cell(self, text: str, align=None, head=False) -> str:
         marker = "H" if head else "D"
-        return _CELL_SEP + text + "|" + marker + _CELL_SEP
+        return _CELL_SEP + self._alt_only(text) + "|" + marker + _CELL_SEP
 
     def table_row(self, text: str) -> str:
         return _BODY_ROW + text
@@ -617,7 +691,9 @@ def convert(input_path: str, output_path: str | None = None) -> dict:
         unicode_font = font_family != "Helvetica"
         styles = _build_styles(font_family)
 
-        renderer = _Renderer(styles=styles, unicode_font=unicode_font)
+        renderer = _Renderer(
+            styles=styles, unicode_font=unicode_font, base_dir=input_file.resolve().parent
+        )
         md = mistune.create_markdown(renderer=renderer, plugins=["table"])
         md(raw_md)
 
