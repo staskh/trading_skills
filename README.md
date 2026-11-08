@@ -181,6 +181,7 @@ The MCP server is a lightweight alternative for use with Claude Desktop (includi
 | `greeks` | Delta, gamma, theta, vega, IV (Black-Scholes) |
 | `spread-analysis` | Verticals, diagonals, straddles, strangles, iron condors |
 | `risk-assessment` | Volatility, beta, VaR, drawdown, Sharpe ratio |
+| `chart-ema-rsi` | JPG chart: daily candles, EMA 9/20 with crossovers marked, RSI panel |
 
 ### Scanners
 | Skill | Description |
