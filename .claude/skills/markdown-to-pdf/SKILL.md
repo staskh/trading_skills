@@ -65,3 +65,6 @@ uv run python .claude/skills/markdown-to-pdf/scripts/markdown_to_pdf.py sandbox/
 - Tables (pipe syntax)
 - Fenced code blocks
 - Unordered and ordered lists
+- Images: `![alt](path)` with a local JPG or PNG, relative to the markdown file or absolute.
+  Each is scaled down to fit the page width and three quarters of its height, keeping its
+  aspect ratio. A missing file or a remote URL shows `[image: alt]` instead.

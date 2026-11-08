@@ -457,3 +457,121 @@ class TestWideTableColumnFitting:
         size, widths = _mod._fit_columns(rows, 2, 468.0, "Helvetica", "Helvetica-Bold")
         assert size == _mod._MIN_TABLE_PT
         assert widths == [234.0, 234.0]
+
+
+class TestImages:
+    """Markdown images (`![alt](path)`) render as pictures scaled to the page."""
+
+    @staticmethod
+    def _jpg(path, size=(300, 150)):
+        from PIL import Image as PILImage
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        PILImage.new("RGB", size, "steelblue").save(path, "JPEG")
+        return path
+
+    @staticmethod
+    def _pdf_images(path) -> int:
+        from pypdf import PdfReader
+
+        return sum(len(p.images) for p in PdfReader(str(path)).pages)
+
+    @staticmethod
+    def _pdf_text(path) -> str:
+        from pypdf import PdfReader
+
+        return "\n".join((p.extract_text() or "") for p in PdfReader(str(path)).pages)
+
+    def test_relative_image_is_embedded(self, tmp_path):
+        self._jpg(tmp_path / "report_charts" / "AAPL.jpg")
+        md = tmp_path / "report.md"
+        md.write_text("# Report\n\n![AAPL chart](report_charts/AAPL.jpg)\n\nAfter.")
+        result = convert(str(md))
+        assert result["success"] is True
+        assert self._pdf_images(result["output"]) == 1
+        assert "After." in self._pdf_text(result["output"])
+
+    def test_absolute_image_path(self, tmp_path):
+        img = self._jpg(tmp_path / "pics" / "x.jpg")
+        md = tmp_path / "doc" / "report.md"
+        md.parent.mkdir()
+        md.write_text(f"![x]({img})")
+        result = convert(str(md))
+        assert self._pdf_images(result["output"]) == 1
+
+    def test_image_keeps_order_inside_a_paragraph(self, tmp_path):
+        self._jpg(tmp_path / "a.jpg")
+        styles = _build_styles("Helvetica")
+        renderer = _Renderer(styles=styles, unicode_font=False, base_dir=tmp_path)
+        md = _mod.mistune.create_markdown(renderer=renderer, plugins=["table"])
+        md("Before ![a](a.jpg) after")
+        kinds = [type(f).__name__ for f in renderer.story]
+        assert kinds == ["Paragraph", "Image", "Paragraph"]
+        assert "Before" in renderer.story[0].text
+        assert "after" in renderer.story[2].text
+
+    def test_wide_image_scaled_to_frame_width_keeping_aspect(self, tmp_path):
+        self._jpg(tmp_path / "wide.jpg", size=(4000, 1000))
+        styles = _build_styles("Helvetica")
+        renderer = _Renderer(styles=styles, unicode_font=False, base_dir=tmp_path)
+        md = _mod.mistune.create_markdown(renderer=renderer, plugins=["table"])
+        md("![w](wide.jpg)")
+        (img,) = renderer.story
+        assert img.drawWidth == pytest.approx(_mod._FRAME_WIDTH)
+        assert img.drawHeight == pytest.approx(_mod._FRAME_WIDTH / 4)
+
+    def test_tall_image_scaled_to_max_height(self, tmp_path):
+        self._jpg(tmp_path / "tall.jpg", size=(500, 5000))
+        styles = _build_styles("Helvetica")
+        renderer = _Renderer(styles=styles, unicode_font=False, base_dir=tmp_path)
+        md = _mod.mistune.create_markdown(renderer=renderer, plugins=["table"])
+        md("![t](tall.jpg)")
+        (img,) = renderer.story
+        assert img.drawHeight == pytest.approx(_mod._MAX_IMAGE_HEIGHT)
+        assert img.drawWidth == pytest.approx(_mod._MAX_IMAGE_HEIGHT / 10)
+
+    def test_path_with_spaces_and_encoding(self, tmp_path):
+        self._jpg(tmp_path / "my charts" / "a b.jpg")
+        md = tmp_path / "report.md"
+        md.write_text("![a](my%20charts/a%20b.jpg)")
+        assert self._pdf_images(convert(str(md))["output"]) == 1
+
+    def test_missing_image_shows_alt_text(self, tmp_path):
+        md = tmp_path / "report.md"
+        md.write_text("![MSFT chart](nope/MSFT.jpg)")
+        result = convert(str(md))
+        assert result["success"] is True
+        assert self._pdf_images(result["output"]) == 0
+        assert "[image: MSFT chart]" in self._pdf_text(result["output"])
+
+    def test_remote_image_shows_alt_text(self, tmp_path):
+        md = tmp_path / "report.md"
+        md.write_text("![logo](https://example.com/logo.png)")
+        result = convert(str(md))
+        assert result["success"] is True
+        assert "[image: logo]" in self._pdf_text(result["output"])
+
+    def test_image_in_list_or_heading_shows_alt_text(self, tmp_path):
+        self._jpg(tmp_path / "a.jpg")
+        md = tmp_path / "report.md"
+        md.write_text("# Title ![h](a.jpg)\n\n- item ![li](a.jpg)\n")
+        result = convert(str(md))
+        assert result["success"] is True
+        text = self._pdf_text(result["output"])
+        assert "[image: h]" in text and "[image: li]" in text
+
+    def test_image_inside_bold_text(self, tmp_path):
+        """Splitting at an image inside <b> would leave unbalanced markup; text comes first."""
+        self._jpg(tmp_path / "a.jpg")
+        styles = _build_styles("Helvetica")
+        renderer = _Renderer(styles=styles, unicode_font=False, base_dir=tmp_path)
+        md = _mod.mistune.create_markdown(renderer=renderer, plugins=["table"])
+        md("**bold ![a](a.jpg) tail**")
+        kinds = [type(f).__name__ for f in renderer.story]
+        assert kinds == ["Paragraph", "Image"]
+        assert "bold" in renderer.story[0].text and "tail" in renderer.story[0].text
+
+    def test_headings_stay_with_the_next_block(self):
+        """A heading above a picture that moves to the next page must move with it."""
+        styles = _build_styles("Helvetica")
+        assert all(styles[h].keepWithNext for h in ("h1", "h2", "h3"))
