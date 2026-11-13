@@ -617,6 +617,62 @@ class TestNaNOptionData:
         assert result["short"]["iv"] > 0
 
 
+class TestLeapsExpiryWithoutStrikes:
+    """A LEAPS expiry Yahoo lists with no strikes must not end the analysis."""
+
+    def _ticker(self, chains_by_days):
+        """Ticker whose LEAPS expiries (days out -> calls) precede a 10-day short expiry."""
+        from unittest.mock import MagicMock
+
+        today = date.today()
+        expiries = {
+            (today + timedelta(days=days)).strftime("%Y-%m-%d"): calls
+            for days, calls in chains_by_days.items()
+        }
+        short_exp = (today + timedelta(days=10)).strftime("%Y-%m-%d")
+        expiries[short_exp] = _make_chain(
+            [160.0, 165.0, 170.0, 175.0, 180.0],
+            [3.0, 1.5, 0.8, 0.4, 0.2],
+            [3.5, 2.0, 1.2, 0.8, 0.5],
+            [3.2, 1.7, 1.0, 0.6, 0.3],
+            [0.30] * 5,
+        )
+        mock = MagicMock()
+        mock.info = {"currentPrice": 150.0}
+        mock.options = sorted(expiries)
+        mock.option_chain = lambda exp: MagicMock(calls=expiries[exp])
+        mock.history = MagicMock(
+            return_value=pd.DataFrame(
+                {"Close": [145.0] * 90, "Volume": [1_000_000] * 90},
+                index=pd.date_range("2025-02-17", periods=90),
+            )
+        )
+        return mock
+
+    @staticmethod
+    def _leaps_calls():
+        return _make_chain(
+            [100.0, 110.0, 120.0, 130.0, 140.0],
+            [52.0, 44.0, 36.0, 29.0, 22.0],
+            [54.0, 46.0, 38.0, 31.0, 24.0],
+            [53.0, 45.0, 37.0, 30.0, 23.0],
+            [0.30] * 5,
+        )
+
+    def test_skips_expiry_without_strikes(self):
+        empty = self._leaps_calls().iloc[0:0]
+        ticker = self._ticker({400: empty, 435: self._leaps_calls()})
+        result = analyze_pmcc("TEST", min_leaps_days=365, ticker=ticker)
+        assert "pmcc_score" in result, f"Expected valid result, got error: {result.get('error')}"
+        assert result["leaps"]["days"] == 435
+
+    def test_error_when_no_expiry_has_a_suitable_strike(self):
+        empty = self._leaps_calls().iloc[0:0]
+        ticker = self._ticker({400: empty, 435: empty})
+        result = analyze_pmcc("TEST", min_leaps_days=365, ticker=ticker)
+        assert result["error"] == "Could not find suitable LEAPS strike with delta ~0.8"
+
+
 class TestDividendYieldHelper:
     """_dividend_yield normalizes the messy yfinance dividend fields to a fraction."""
 

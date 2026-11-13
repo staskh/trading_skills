@@ -765,18 +765,15 @@ def analyze_pmcc(
 
         today = datetime.now(_NY).date()
 
-        # Find LEAPS expiry
-        leaps_expiry = None
-        leaps_days = 0
+        # LEAPS expiries, nearest first
+        leaps_expiries = []
         for exp in expirations:
             exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
             days_to_exp = (exp_date - today).days
             if days_to_exp >= min_leaps_days:
-                leaps_expiry = exp
-                leaps_days = days_to_exp
-                break
+                leaps_expiries.append((exp, days_to_exp))
 
-        if not leaps_expiry:
+        if not leaps_expiries:
             return {"symbol": symbol, "error": f"No LEAPS expiry >= {min_leaps_days} days found"}
 
         # Find short-term expiry
@@ -804,29 +801,35 @@ def analyze_pmcc(
         if not short_expiry:
             return {"symbol": symbol, "error": "No suitable short-term expiry found"}
 
-        leaps_chain = ticker.option_chain(leaps_expiry)
         short_chain = ticker.option_chain(short_expiry)
 
         # Dividend yield — ignoring it biases recovered IV/delta on dividend payers
         div_yield = _dividend_yield(info, current_price)
 
-        # Estimate IV from ATM options, with fallback to lastPrice-based IV
-        atm_calls = leaps_chain.calls[
-            (leaps_chain.calls["strike"] >= current_price * 0.95)
-            & (leaps_chain.calls["strike"] <= current_price * 1.05)
-        ]
-        avg_iv = compute_atm_iv(atm_calls, current_price, leaps_expiry, q=div_yield)
+        # LEAPS call from the nearest expiry that has one; Yahoo sometimes lists an
+        # expiry with no strikes, so a later expiry can still qualify
+        leaps_option = None
+        for leaps_expiry, leaps_days in leaps_expiries:
+            leaps_chain = ticker.option_chain(leaps_expiry)
 
-        # Find LEAPS call
-        leaps_strike, leaps_option = find_strike_by_delta(
-            leaps_chain.calls,
-            current_price,
-            leaps_delta,
-            leaps_days,
-            avg_iv,
-            max_strike=current_price * 1.02,
-            q=div_yield,
-        )
+            # Estimate IV from ATM options, with fallback to lastPrice-based IV
+            atm_calls = leaps_chain.calls[
+                (leaps_chain.calls["strike"] >= current_price * 0.95)
+                & (leaps_chain.calls["strike"] <= current_price * 1.05)
+            ]
+            avg_iv = compute_atm_iv(atm_calls, current_price, leaps_expiry, q=div_yield)
+
+            leaps_strike, leaps_option = find_strike_by_delta(
+                leaps_chain.calls,
+                current_price,
+                leaps_delta,
+                leaps_days,
+                avg_iv,
+                max_strike=current_price * 1.02,
+                q=div_yield,
+            )
+            if leaps_option is not None:
+                break
 
         if leaps_option is None:
             return {
