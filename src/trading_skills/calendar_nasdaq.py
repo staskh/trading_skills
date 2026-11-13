@@ -35,6 +35,7 @@ _WEEKDAY_ANCHORS = {
     "continuing jobless claims": 3,
     "natural gas storage": 3,
     "fed's balance sheet": 3,
+    "baker hughes": 4,
 }
 
 # Releases whose ET time is fixed by the issuing agency; exact (lowercased) names.
@@ -266,7 +267,7 @@ def verify_events_date(events: list[dict], date_str: str, now: datetime | None =
     """Check that parsed events really belong to date_str (YYYY-MM-DD).
 
     Returns "verified", "rejected", or "unverifiable". Two independent checks:
-    - weekday anchors: weekly releases (claims Thu, EIA/MBA Wed, Redbook Tue)
+    - weekday anchors: weekly releases (claims Thu, EIA/MBA Wed, Redbook Tue, Baker Hughes Fri)
       must mostly land on date_str's weekday (majority vote tolerates holiday shifts);
     - when date_str is today: no event scheduled later than `now` may already
       carry an actual value — a printed future release means it's another day's data.
