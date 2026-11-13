@@ -184,6 +184,11 @@ class TestVerifyEventsDate:
         now = datetime(2026, 10, 29, 9, 42, tzinfo=NY)
         assert verify_events_date(events, "2026-10-29", now) == "rejected"
 
+    def test_baker_hughes_anchors_friday(self):
+        events = parse_events([_row("13:00", "U.S. Baker Hughes Oil Rig Count", "414")])
+        assert verify_events_date(events, "2026-10-30") == "verified"
+        assert verify_events_date(events, "2026-10-29") == "rejected"
+
     def test_no_anchors_is_unverifiable(self):
         events = parse_events([_row("10:00", "Consumer Sentiment", "")])
         assert verify_events_date(events, "2026-10-26") == "unverifiable"
@@ -237,6 +242,16 @@ class TestFetchCalendarOffset:
             "2026-10-29": _FEED["2026-10-29"],
         }.get(d)
         assert fetch_us_economic_calendar("2026-10-29") is None
+
+    @patch("trading_skills.calendar_nasdaq._fetch_rows")
+    def test_empty_weekend_label_is_not_a_quiet_day(self, mock_rows):
+        # Observed Fri 2026-10-30: date=10-31 (Sat) is empty, date=10-30 holds
+        # Thursday's rows. Must fall back (None), not report an empty calendar.
+        mock_rows.side_effect = lambda d, t: {
+            "2026-10-31": [],
+            "2026-10-30": _FEED["2026-10-30"],
+        }.get(d)
+        assert fetch_us_economic_calendar("2026-10-30") is None
 
     @patch("trading_skills.calendar_nasdaq._fetch_rows")
     def test_empty_unverified_feed_on_fomc_day_flags_only_fomc(self, mock_rows):
