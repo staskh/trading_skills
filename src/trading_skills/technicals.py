@@ -1,7 +1,6 @@
 # ABOUTME: Computes technical indicators using pandas-ta.
 # ABOUTME: Supports multi-symbol analysis and earnings data.
 
-from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -9,8 +8,8 @@ import pandas_ta as ta
 import yfinance as yf
 
 from trading_skills.earnings import get_next_earnings_date
-from trading_skills.pivots import pivot_status
-from trading_skills.utils import annualized_volatility, is_trading_now
+from trading_skills.pivots import completed_bars, is_partial_session, pivot_status
+from trading_skills.utils import annualized_volatility
 
 NY = ZoneInfo("America/New_York")
 
@@ -312,8 +311,13 @@ def compute_indicators(
     period: str = "3mo",
     indicators: list[str] | None = None,
     include_earnings: bool = False,
+    completed_sessions: bool = False,
 ) -> dict:
-    """Compute technical indicators for a symbol."""
+    """Compute technical indicators for a symbol.
+
+    With `completed_sessions` the indicator groups ignore today's partial session, so
+    "closes" are never the live intraday price; `as_of` is the last bar they used.
+    """
     if indicators is None:
         indicators = ["rsi", "macd", "bb", "sma", "ema", "atr", "adx"]
 
@@ -335,6 +339,11 @@ def compute_indicators(
         "indicators": {},
         "signals": [],
     }
+
+    full_df = df
+    if completed_sessions:
+        df = completed_bars(df)
+        result["as_of"] = df.index[-1].strftime("%Y-%m-%d")
 
     raw = compute_raw_indicators(df)
 
@@ -499,12 +508,9 @@ def compute_indicators(
     # Pivot levels and entry status
     if "pivots" in indicators:
         pivots = None
-        if len(df) >= 2:
-            today = datetime.now(NY).date()
-            partial = is_trading_now() and df.index[-1].date() == today
-            if partial and len(df) < 3:
-                partial = False
-            pivots = pivot_status(df, drop_today_partial=partial)
+        if len(full_df) >= 2:
+            partial = len(full_df) >= 3 and is_partial_session(full_df)
+            pivots = pivot_status(full_df, drop_today_partial=partial)
         result["indicators"]["pivots"] = pivots
 
     # Volatility and Sharpe Ratio
@@ -534,11 +540,14 @@ def compute_multi_symbol(
     period: str = "3mo",
     indicators: list[str] | None = None,
     include_earnings: bool = False,
+    completed_sessions: bool = False,
 ) -> dict:
     """Compute indicators for multiple symbols."""
     results = []
     for symbol in symbols:
-        result = compute_indicators(symbol, period, indicators, include_earnings)
+        result = compute_indicators(
+            symbol, period, indicators, include_earnings, completed_sessions
+        )
         results.append(result)
 
     return {"results": results}

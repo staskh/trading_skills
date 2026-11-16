@@ -7,6 +7,7 @@ import pandas as pd
 import pandas_ta as ta
 import pytest
 
+from trading_skills.pivots import completed_bars, is_partial_session
 from trading_skills.technicals import (
     _fill_from_info,
     adx_columns,
@@ -641,3 +642,59 @@ class TestFillFromInfo:
         )
         assert values == {"sma50": 150.0, "sma200": 190.0}
         assert filled is False
+
+
+class TestIsPartialSession:
+    TODAY = pd.Timestamp("2026-11-16").date()
+
+    def bars(self, last: str) -> pd.DataFrame:
+        return pd.DataFrame({"Close": [1.0, 2.0]}, index=pd.to_datetime(["2026-11-12", last]))
+
+    def test_last_bar_today_while_trading_is_partial(self):
+        assert is_partial_session(self.bars("2026-11-16"), True, self.TODAY) is True
+
+    def test_not_trading_keeps_bar(self):
+        assert is_partial_session(self.bars("2026-11-16"), False, self.TODAY) is False
+
+    def test_last_bar_not_today_keeps_bar(self):
+        assert is_partial_session(self.bars("2026-11-13"), True, self.TODAY) is False
+
+
+class TestCompletedSessions:
+    def test_as_of_matches_last_structure_bar(self):
+        r = compute_indicators(
+            "AAPL", period="2y", indicators=["sma200", "structure"], completed_sessions=True
+        )
+        assert r["as_of"] <= pd.Timestamp.now().strftime("%Y-%m-%d")
+        assert r["indicators"]["structure"]["recent_bars"][-1]["date"] == r["as_of"]
+
+    def test_default_has_no_as_of(self):
+        assert "as_of" not in compute_indicators("AAPL", indicators=["rsi"])
+
+    def test_multi_symbol_passes_through(self):
+        r = compute_multi_symbol(["AAPL"], indicators=["rsi"], completed_sessions=True)
+        assert "as_of" in r["results"][0]
+
+
+class TestCompletedBars:
+    TODAY = pd.Timestamp("2026-11-16").date()
+
+    def bars(self, *days: str) -> pd.DataFrame:
+        return pd.DataFrame({"Close": range(len(days))}, index=pd.to_datetime(list(days)))
+
+    def test_partial_today_is_removed(self):
+        out = completed_bars(self.bars("2026-11-12", "2026-11-13", "2026-11-16"), True, self.TODAY)
+        assert out.index[-1].strftime("%Y-%m-%d") == "2026-11-13"
+        assert len(out) == 2
+
+    def test_not_trading_unchanged(self):
+        df = self.bars("2026-11-12", "2026-11-13", "2026-11-16")
+        assert len(completed_bars(df, False, self.TODAY)) == 3
+
+    def test_last_bar_not_today_unchanged(self):
+        df = self.bars("2026-11-11", "2026-11-12", "2026-11-13")
+        assert len(completed_bars(df, True, self.TODAY)) == 3
+
+    def test_fewer_than_three_bars_unchanged(self):
+        df = self.bars("2026-11-13", "2026-11-16")
+        assert len(completed_bars(df, True, self.TODAY)) == 2
