@@ -152,6 +152,15 @@ def is_partial_session(
     return trading_now and bars.index[-1].date() == today
 
 
+def completed_bars(
+    bars: pd.DataFrame, trading_now: bool | None = None, today: date | None = None
+) -> pd.DataFrame:
+    """Bars without today's in-progress session; unchanged when fewer than 3 bars."""
+    if len(bars) >= 3 and is_partial_session(bars, trading_now, today):
+        return bars.iloc[:-1]
+    return bars
+
+
 def get_pivot_levels(symbols: list[str], sessions: int = 5, tolerance_pct: float = 1.5) -> dict:
     """Pivot levels for the last `sessions` completed sessions and an entry status per symbol.
 

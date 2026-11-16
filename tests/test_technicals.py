@@ -7,7 +7,7 @@ import pandas as pd
 import pandas_ta as ta
 import pytest
 
-from trading_skills.pivots import is_partial_session
+from trading_skills.pivots import completed_bars, is_partial_session
 from trading_skills.technicals import (
     _fill_from_info,
     adx_columns,
@@ -674,3 +674,27 @@ class TestCompletedSessions:
     def test_multi_symbol_passes_through(self):
         r = compute_multi_symbol(["AAPL"], indicators=["rsi"], completed_sessions=True)
         assert "as_of" in r["results"][0]
+
+
+class TestCompletedBars:
+    TODAY = pd.Timestamp("2026-11-16").date()
+
+    def bars(self, *days: str) -> pd.DataFrame:
+        return pd.DataFrame({"Close": range(len(days))}, index=pd.to_datetime(list(days)))
+
+    def test_partial_today_is_removed(self):
+        out = completed_bars(self.bars("2026-11-12", "2026-11-13", "2026-11-16"), True, self.TODAY)
+        assert out.index[-1].strftime("%Y-%m-%d") == "2026-11-13"
+        assert len(out) == 2
+
+    def test_not_trading_unchanged(self):
+        df = self.bars("2026-11-12", "2026-11-13", "2026-11-16")
+        assert len(completed_bars(df, False, self.TODAY)) == 3
+
+    def test_last_bar_not_today_unchanged(self):
+        df = self.bars("2026-11-11", "2026-11-12", "2026-11-13")
+        assert len(completed_bars(df, True, self.TODAY)) == 3
+
+    def test_fewer_than_three_bars_unchanged(self):
+        df = self.bars("2026-11-13", "2026-11-16")
+        assert len(completed_bars(df, True, self.TODAY)) == 2

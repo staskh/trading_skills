@@ -8,7 +8,7 @@ import pandas_ta as ta
 import yfinance as yf
 
 from trading_skills.earnings import get_next_earnings_date
-from trading_skills.pivots import is_partial_session, pivot_status
+from trading_skills.pivots import completed_bars, is_partial_session, pivot_status
 from trading_skills.utils import annualized_volatility
 
 NY = ZoneInfo("America/New_York")
@@ -342,8 +342,7 @@ def compute_indicators(
 
     full_df = df
     if completed_sessions:
-        if len(df) >= 3 and is_partial_session(df):
-            df = df.iloc[:-1]
+        df = completed_bars(df)
         result["as_of"] = df.index[-1].strftime("%Y-%m-%d")
 
     raw = compute_raw_indicators(df)
