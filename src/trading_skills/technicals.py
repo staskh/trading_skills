@@ -97,14 +97,14 @@ def detect_macd_crossover(macd_df: pd.DataFrame) -> dict | None:
     return None
 
 
-def detect_ema_crossover(ema_fast: pd.Series, ema_slow: pd.Series) -> dict | None:
-    """Find the most recent crossover between two EMA series (e.g. EMA9 vs EMA21).
+def detect_crossover(fast: pd.Series, slow: pd.Series) -> dict | None:
+    """Find the most recent crossover between two series (e.g. EMA9 vs EMA21, SMA50 vs SMA200).
 
     Returns {"direction": "up"|"down", "days_ago": int} or None if no crossover
-    is found. "up" means ema_fast crossed above ema_slow (bullish).
+    is found. "up" means fast crossed above slow (bullish).
     "days_ago" is trading bars since the crossover bar.
     """
-    diff = (ema_fast - ema_slow).dropna()
+    diff = (fast - ema_slow).dropna()
     if len(diff) < 2:
         return None
 
@@ -180,7 +180,7 @@ def compute_raw_indicators(df: pd.DataFrame) -> dict:
         if pd.notna(val):
             result["ema21"] = float(val)
     if ema9_series is not None and ema21_series is not None:
-        result["ema_crossover"] = detect_ema_crossover(ema9_series, ema21_series)
+        result["ema_crossover"] = detect_crossover(ema9_series, ema21_series)
 
     # MACD
     macd = ta.macd(close)

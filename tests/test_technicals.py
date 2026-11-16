@@ -12,7 +12,7 @@ from trading_skills.technicals import (
     compute_indicators,
     compute_multi_symbol,
     compute_raw_indicators,
-    detect_ema_crossover,
+    detect_crossover,
     detect_macd_crossover,
     get_earnings_data,
 )
@@ -311,7 +311,7 @@ class TestDetectEmaCrossover:
         # ema9 crosses above ema21: diff goes negative to positive
         ema9 = self._make_series([8.0, 9.0, 11.0, 12.0])
         ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is not None
         assert result["direction"] == "up"
         assert result["days_ago"] == 1
@@ -320,7 +320,7 @@ class TestDetectEmaCrossover:
         # ema9 crosses below ema21
         ema9 = self._make_series([12.0, 11.0, 9.0, 8.0])
         ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is not None
         assert result["direction"] == "down"
         assert result["days_ago"] == 1
@@ -328,7 +328,7 @@ class TestDetectEmaCrossover:
     def test_crossover_at_current_bar(self):
         ema9 = self._make_series([9.0, 11.0])
         ema21 = self._make_series([10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is not None
         assert result["direction"] == "up"
         assert result["days_ago"] == 0
@@ -337,7 +337,7 @@ class TestDetectEmaCrossover:
         # Two crossovers: down at index 2, up at index 3
         ema9 = self._make_series([9.0, 11.0, 9.0, 11.0])
         ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is not None
         assert result["direction"] == "up"
         assert result["days_ago"] == 0
@@ -345,19 +345,19 @@ class TestDetectEmaCrossover:
     def test_no_crossover_ema9_always_above(self):
         ema9 = self._make_series([11.0, 12.0, 13.0, 14.0])
         ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is None
 
     def test_no_crossover_ema9_always_below(self):
         ema9 = self._make_series([9.0, 8.0, 7.0, 6.0])
         ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is None
 
     def test_handles_leading_nans(self):
         ema9 = self._make_series([float("nan"), float("nan"), 9.0, 11.0])
         ema21 = self._make_series([float("nan"), float("nan"), 10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is not None
         assert result["direction"] == "up"
         assert result["days_ago"] == 0
@@ -365,11 +365,11 @@ class TestDetectEmaCrossover:
     def test_too_short_returns_none(self):
         ema9 = self._make_series([11.0])
         ema21 = self._make_series([10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is None
 
     def test_empty_returns_none(self):
-        result = detect_ema_crossover(self._make_series([]), self._make_series([]))
+        result = detect_crossover(self._make_series([]), self._make_series([]))
         assert result is None
 
 
