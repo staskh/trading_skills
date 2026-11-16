@@ -4,7 +4,7 @@
 import pandas as pd
 import pytest
 
-from trading_skills.chart_ema_rsi import ema_crossovers, render_chart
+from trading_skills.chart_ema_rsi import ema_crossovers, render_chart, sma_lines
 
 
 def _series(values):
@@ -87,3 +87,19 @@ def test_render_chart_extends_price_axis_to_show_far_levels(tmp_path):
     low, high = result["price_ylim"]
     assert low <= 1.0 and high >= 10000.0
     assert result["levels"] == {"S1": 1.0, "R1": 10000.0}
+
+
+def test_sma_lines_skips_length_longer_than_history():
+    close = _series(range(1, 121))
+    in_window = close.index >= close.index[60]
+    lines = sma_lines(close, (50, 200), in_window)
+    assert list(lines) == [50]
+    assert len(lines[50]) == 60
+    assert lines[50].notna().all()
+
+
+def test_render_chart_live_sma_longer_than_history(tmp_path):
+    out = tmp_path / "spcx.jpg"
+    result = render_chart("SPCX", sma=(50, 200), output=out)
+    assert out.read_bytes()[:3] == b"\xff\xd8\xff"
+    assert result["sma"] == [n for n in (50, 200) if n <= result["bars_fetched"]]
