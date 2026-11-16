@@ -13,13 +13,12 @@ from trading_skills.utils import generated_at_str
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Hunt institutional whale option activity")
+    parser = argparse.ArgumentParser(
+        description="Hunt institutional whale option activity", allow_abbrev=False
+    )
     parser.add_argument("symbol", help="Underlying ticker symbol (e.g. AAPL)")
     parser.add_argument(
         "--months", type=int, default=2, help="Max months to expiration (default: 2)"
-    )
-    parser.add_argument(
-        "--date", default=None, help="Trading date YYYY-MM-DD (default: latest trading day)"
     )
     parser.add_argument(
         "--sigma-z",
@@ -43,7 +42,6 @@ def main():
             max_months=args.months,
             precise=True,
             sigma_z=args.sigma_z,
-            trading_date=args.date,
         )
     except WhaleDataError as exc:
         print(
@@ -74,6 +72,7 @@ def main():
     output = {
         "underlying": symbol,
         "trading_date": str(trading_date),
+        "window_dates": [str(d) for d in result["window_dates"]],
         "source": result["source"],
         "total_whales": len(whales),
         "total_call_invested": round(call_invested, 2),

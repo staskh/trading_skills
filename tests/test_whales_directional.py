@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from trading_skills.massive.whales import attach_spot, directional_flow
+from trading_skills.massive.whales import _empty_spot_bars, attach_spot, directional_flow
 
 _NY = ZoneInfo("America/New_York")
 
@@ -64,6 +64,12 @@ class TestAttachSpot:
         whales = _whales_df([{"timestamp": _ts("09:30:00")}])
         bars = _spot_bars([("10:00:00", 100.0)])
         result = attach_spot(whales, bars)
+        assert pd.isna(result.iloc[0]["spot"])
+        assert pd.isna(result.iloc[0]["pct_from_spot"])
+
+    def test_no_spot_bars_leaves_spot_missing(self):
+        whales = _whales_df([{"timestamp": _ts("10:00:00")}])
+        result = attach_spot(whales, _empty_spot_bars())
         assert pd.isna(result.iloc[0]["spot"])
         assert pd.isna(result.iloc[0]["pct_from_spot"])
 

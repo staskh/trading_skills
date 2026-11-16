@@ -1,5 +1,5 @@
-# ABOUTME: Detects option whale activity using Polygon.io second-level aggregation.
-# ABOUTME: Identifies seconds with anomalous dollar invested for a given option contract.
+# ABOUTME: Detects option whale activity: Yahoo chain screen plus Massive per-second drill-down.
+# ABOUTME: Identifies seconds with anomalous dollar invested across the last two trading sessions.
 
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -218,19 +218,20 @@ def _fetch_chain(underlying: str, expiry: str) -> list[dict]:
 def _fetch_whales_parallel(
     candidates: pd.DataFrame,
     sigma_z: float,
+    window_dates: list[date],
 ) -> list[pd.DataFrame]:
-    """Fetch per-second whale data for each candidate concurrently.
+    """Fetch per-second whale data for each candidate on every window date concurrently.
 
-    Returns a list of non-empty DataFrames, one per candidate that had whale activity.
+    Returns a list of non-empty DataFrames, one per (candidate, date) with whale activity.
     Recoverable per-candidate errors are swallowed so others still complete, but a
     fatal auth/entitlement failure (see _is_fatal_api_error) is re-raised as a
     WhaleDataError so it cannot be silently turned into an empty result.
     """
 
-    def fetch_one(row):
+    def fetch_one(row, trading_date):
         poly_ticker = "O:" + row["contractSymbol"]
         try:
-            w = option_whales(poly_ticker, trading_date=row["tradeDate"], sigma_z=sigma_z)
+            w = option_whales(poly_ticker, trading_date=trading_date, sigma_z=sigma_z)
             if w.empty:
                 return None
             w["open_interest"] = row.get("open_interest")
@@ -245,9 +246,9 @@ def _fetch_whales_parallel(
                 ) from exc
             return None
 
-    rows = [row for _, row in candidates.iterrows()]
+    jobs = [(row, d) for _, row in candidates.iterrows() for d in window_dates]
     with ThreadPoolExecutor() as executor:
-        futures = {executor.submit(fetch_one, row): row for row in rows}
+        futures = [executor.submit(fetch_one, row, d) for row, d in jobs]
         results = []
         for f in as_completed(futures):
             results.append(f.result())  # re-raises WhaleDataError from fetch_one
@@ -276,6 +277,21 @@ _WHALE_COLS = [
 DIRECTIONAL_PCT = 1.5
 
 
+def _empty_spot_bars() -> pd.DataFrame:
+    """Spot frame with no rows, typed so it merges with NY-aware trade timestamps."""
+    return pd.DataFrame(
+        {
+            "timestamp": pd.Series(dtype=pd.DatetimeTZDtype(tz=_NY)),
+            "spot": pd.Series(dtype="float64"),
+        }
+    )
+
+
+def _to_records(df: pd.DataFrame) -> list[dict]:
+    """Convert rows to dicts with missing values as None, so output is strict JSON."""
+    return [{k: (None if pd.isna(v) else v) for k, v in r.items()} for r in df.to_dict("records")]
+
+
 def underlying_spot_bars(underlying: str, trading_date) -> pd.DataFrame:
     """Fetch per-second underlying prices for the trading date.
 
@@ -297,7 +313,7 @@ def underlying_spot_bars(underlying: str, trading_date) -> pd.DataFrame:
         )
     ]
     if not bars:
-        return pd.DataFrame(columns=["timestamp", "spot"])
+        return _empty_spot_bars()
     df = pd.DataFrame(bars)
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(_NY)
     return df
@@ -391,23 +407,26 @@ def whales_hunter(
     max_months: int = 2,
     precise: bool = True,
     sigma_z: float = 3.5,
-    trading_date=None,
 ) -> dict:
-    """Scan an underlying for whale option activity in two steps.
+    """Scan an underlying for whale option activity over the last two trading sessions.
+
+    The window is the latest trading session plus the one before it, so a scan
+    run during market hours also covers the previous day's flow.
 
     Step 1 (crude): uses Yahoo Finance option chain data to find contracts
     with anomalous daily investment, detected via Modified Z-Score (MAD-based).
+    Yahoo chains are a live snapshot, which is why past dates are not supported.
 
-    Step 2 (precise): if precise=True, drills into each candidate with
-    Polygon per-second data via option_whales. Falls back to crude results
-    if the precise step yields nothing.
+    Step 2 (precise): if precise=True and MASSIVE_API_KEY is set, drills into
+    each candidate with Massive per-second data on every window date. Falls
+    back to the crude results when the key is missing or the drill-down
+    finds no whales.
 
     Args:
         underlying: Underlying ticker (e.g. "AAPL").
         max_months: Maximum months until expiration (default 2).
-        precise: If True, refine with Polygon per-second data (default True).
+        precise: If True, refine with Massive per-second data (default True).
         sigma_z: Modified Z-Score threshold for outlier detection (default 3.5).
-        trading_date: Date to analyze. Defaults to latest trading day.
 
     Returns:
         dict with:
@@ -415,16 +434,25 @@ def whales_hunter(
                     expiry, close, volume, transactions, invested, break_even.
                     Precise results also carry spot (underlying price at trade
                     time) and pct_from_spot (break-even distance from spot, %).
-          "source": "massive" if precise step succeeded, else "yahoo only".
+                    Missing values are None.
+          "source": "massive" if the precise step found whales, else "yahoo".
+          "trading_date": latest trading session.
+          "window_dates": [previous session, latest session].
     """
-    if trading_date is None:
-        trading_date = latest_trading_date()
-    else:
-        trading_date = _coerce_date(trading_date)
-
-    expiry_max = trading_date + relativedelta(months=max_months)
+    trading_date = latest_trading_date()
     prev_trading_date = previous_trading_date(trading_date)
-    _empty = {"whales": [], "source": "yahoo", "trading_date": trading_date}
+    window_dates = [prev_trading_date, trading_date]
+    expiry_max = trading_date + relativedelta(months=max_months)
+
+    def _result(whales: list[dict], source: str) -> dict:
+        return {
+            "whales": whales,
+            "source": source,
+            "trading_date": trading_date,
+            "window_dates": window_dates,
+        }
+
+    _empty = _result([], "yahoo")
 
     # --- Step 1: crude Yahoo Finance scan ---
     all_expiries = get_expiries(underlying)
@@ -439,10 +467,8 @@ def whales_hunter(
 
     df = pd.DataFrame(rows)
     df = df.dropna(subset=["lastTradeDate"]).copy()
-    df["tradeDate"] = (
-        pd.to_datetime(df["lastTradeDate"], utc=True).dt.tz_convert("America/New_York").dt.date
-    )
-    df = df[df["tradeDate"].isin([trading_date, prev_trading_date])].copy()
+    df["tradeDate"] = pd.to_datetime(df["lastTradeDate"], utc=True).dt.tz_convert(_NY).dt.date
+    df = df[df["tradeDate"].isin(window_dates)].copy()
 
     if df.empty:
         return _empty
@@ -460,9 +486,7 @@ def whales_hunter(
 
     # Map candidate columns to the shared whale schema
     crude = candidates.copy()
-    crude["timestamp"] = pd.to_datetime(crude["lastTradeDate"], utc=True).dt.tz_convert(
-        "America/New_York"
-    )
+    crude["timestamp"] = pd.to_datetime(crude["lastTradeDate"], utc=True).dt.tz_convert(_NY)
     crude["ticker"] = crude["contractSymbol"]
     crude["close"] = crude["lastPrice"].round(2)
     crude["volume"] = crude["volume"].apply(lambda x: int(x) if pd.notna(x) else None)
@@ -476,26 +500,21 @@ def whales_hunter(
         ),
         axis=1,
     )
-    crude_records = crude[_WHALE_COLS].to_dict("records")
+    crude_result = _result(_to_records(crude[_WHALE_COLS]), "yahoo")
 
-    # --- Step 2: precise Polygon drill-down ---
-    if not precise:
-        return {"whales": crude_records, "source": "yahoo", "trading_date": trading_date}
+    # --- Step 2: precise Massive drill-down ---
+    if not precise or not os.getenv("MASSIVE_API_KEY"):
+        return crude_result
 
-    whale_dfs = _fetch_whales_parallel(candidates, sigma_z=sigma_z)
+    whale_dfs = _fetch_whales_parallel(candidates, sigma_z=sigma_z, window_dates=window_dates)
+    if not whale_dfs:
+        return crude_result
 
-    if whale_dfs:
-        precise_df = pd.concat(whale_dfs, ignore_index=True)
-        # Candidates may trade on the previous trading day, so fetch spot for every trade date
-        trade_dates = sorted(set(precise_df["timestamp"].dt.date))
-        spot_bars = pd.concat(
-            [underlying_spot_bars(underlying, d) for d in trade_dates], ignore_index=True
-        )
-        precise_df = attach_spot(precise_df, spot_bars)
-        return {
-            "whales": precise_df.to_dict("records"),
-            "source": "massive",
-            "trading_date": trading_date,
-        }
-
-    return {"whales": [], "source": "massive", "trading_date": trading_date}
+    precise_df = pd.concat(whale_dfs, ignore_index=True).sort_values("timestamp", kind="stable")
+    # Candidates may trade on the previous trading day, so fetch spot for every trade date
+    trade_dates = sorted(set(precise_df["timestamp"].dt.date))
+    spot_bars = pd.concat(
+        [underlying_spot_bars(underlying, d) for d in trade_dates], ignore_index=True
+    )
+    precise_df = attach_spot(precise_df, spot_bars)
+    return _result(_to_records(precise_df), "massive")
