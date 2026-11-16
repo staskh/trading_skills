@@ -384,6 +384,69 @@ def directional_flow(whales: list[dict], threshold_pct: float = DIRECTIONAL_PCT)
     }
 
 
+def _side_totals(records: list[dict], value_key: str, wall_key: str) -> dict:
+    """Total value_key per side and each side's wall: the strike with the largest
+    summed value (lowest strike on ties). Missing values are ignored.
+    """
+    by_strike = {"call": {}, "put": {}}
+    for r in records:
+        v = r.get(value_key)
+        if r.get("type") not in by_strike or v is None or pd.isna(v):
+            continue
+        strikes = by_strike[r["type"]]
+        strikes[r["strike"]] = strikes.get(r["strike"], 0) + v
+    totals, walls = {}, {}
+    for side, strikes in by_strike.items():
+        totals[side] = sum(strikes.values())
+        positive = {k: v for k, v in strikes.items() if v > 0}
+        strike = min(positive, key=lambda k: (-positive[k], k)) if positive else None
+        walls[side] = {"strike": strike, wall_key: positive[strike]} if positive else None
+    ratio = totals["put"] / totals["call"] if totals["call"] > 0 else None
+    return {
+        "call": totals["call"],
+        "put": totals["put"],
+        "ratio": round(ratio, 4) if ratio is not None else None,
+        "call_wall": walls["call"],
+        "put_wall": walls["put"],
+    }
+
+
+def open_interest_walls(rows: list[dict]) -> dict:
+    """Open interest per side, put/call OI ratio, and call/put walls (the strike with
+    the most open interest, summed across expiries) from option chain rows.
+    """
+    counted = [
+        {**r, "openInterest": int(r["openInterest"])}
+        for r in rows
+        if pd.notna(r.get("openInterest"))
+    ]
+    t = _side_totals(counted, "openInterest", "open_interest")
+    return {
+        "call_oi": t["call"],
+        "put_oi": t["put"],
+        "put_call_oi_ratio": t["ratio"],
+        "call_wall": t["call_wall"],
+        "put_wall": t["put_wall"],
+    }
+
+
+def whale_totals(whales: list[dict]) -> dict:
+    """Dollars invested per side, put/call ratio, and call/put walls (the strike with
+    the most whale money) from whale prints.
+    """
+    t = _side_totals(whales, "invested", "invested")
+    walls = {
+        side: t[side] and {**t[side], "invested": round(t[side]["invested"], 2)}
+        for side in ("call_wall", "put_wall")
+    }
+    return {
+        "call_invested": round(t["call"], 2),
+        "put_invested": round(t["put"], 2),
+        "put_call_ratio": t["ratio"],
+        **walls,
+    }
+
+
 def _apply_crude_selection(active: pd.DataFrame, sigma_z: float) -> pd.DataFrame:
     """Select whale candidates and tag each with the selection reason.
 
@@ -461,22 +524,13 @@ def whales_hunter(
           "window_dates": [previous session, latest session].
           "failed_fetches": (candidate, date) drill-down fetches that errored;
                     when non-zero, totals may be understated.
+          "open_interest": open_interest_walls() over every fetched chain row
+                    (all expiries up to max_months), whether traded in the window or not.
     """
     trading_date = latest_trading_date()
     prev_trading_date = previous_trading_date(trading_date)
     window_dates = [prev_trading_date, trading_date]
     expiry_max = trading_date + relativedelta(months=max_months)
-
-    def _result(whales: list[dict], source: str, failed_fetches: int = 0) -> dict:
-        return {
-            "whales": whales,
-            "source": source,
-            "trading_date": trading_date,
-            "window_dates": window_dates,
-            "failed_fetches": failed_fetches,
-        }
-
-    _empty = _result([], "yahoo")
 
     # --- Step 1: crude Yahoo Finance scan ---
     all_expiries = get_expiries(underlying)
@@ -485,6 +539,19 @@ def whales_hunter(
     with ThreadPoolExecutor() as executor:
         chain_results = list(executor.map(lambda e: _fetch_chain(underlying, e), expiries))
     rows = [row for chain_rows in chain_results for row in chain_rows]
+    open_interest = open_interest_walls(rows)
+
+    def _result(whales: list[dict], source: str, failed_fetches: int = 0) -> dict:
+        return {
+            "whales": whales,
+            "source": source,
+            "trading_date": trading_date,
+            "window_dates": window_dates,
+            "failed_fetches": failed_fetches,
+            "open_interest": open_interest,
+        }
+
+    _empty = _result([], "yahoo")
 
     if not rows:
         return _empty

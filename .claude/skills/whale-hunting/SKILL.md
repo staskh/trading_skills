@@ -39,6 +39,11 @@ Returns JSON with:
 - `total_call_invested` — Sum of invested dollars in call whale events
 - `total_put_invested` — Sum of invested dollars in put whale events
 - `call_put_ratio` — Call invested / put invested (null if no puts)
+- `put_call_ratio` — Put invested / call invested (null if no calls)
+- `whale_call_wall` / `whale_put_wall` — `{strike, invested}`: the strike with the most whale dollars per side (null if none)
+- `open_interest` — Positioning from every fetched chain (expiries up to `--months`), not only whale contracts:
+  - `call_oi`, `put_oi`, `put_call_oi_ratio` (null if no call OI)
+  - `call_wall` / `put_wall` — `{strike, open_interest}`: the strike with the most open interest per side, summed across expiries (null if none)
 - `directional_call_invested` — Call invested where break-even is ≥ 1.5% above spot
 - `directional_put_invested` — Put invested where break-even is ≥ 1.5% below spot
 - `directional_call_put_ratio` — Directional call / directional put invested (null if no directional puts)
@@ -70,6 +75,9 @@ After running the script, present the results as follows.
 > Whale activity for **{underlying}** on {window_dates[0]} – {window_dates[1]} — source: {source}
 > Call flow: ${total_call_invested:,.0f} | Put flow: ${total_put_invested:,.0f} | C/P ratio: {call_put_ratio:.2f}
 > Directional (≥1.5% B/E from spot) — Calls: ${directional_call_invested:,.0f} | Puts: ${directional_put_invested:,.0f} | C/P ratio: {directional_call_put_ratio:.2f}
+> Open interest — P/C ratio: {open_interest.put_call_oi_ratio:.2f} | Call wall: {open_interest.call_wall.strike} | Put wall: {open_interest.put_wall.strike}
+
+Print `—` for any null ratio or wall.
 
 **When `--summary` was requested**, render the `summary` array as a table:
 
@@ -85,6 +93,7 @@ Sort by `total_invested` descending. For multi-event rows use the time range of 
 - Judge direction by `directional_call_put_ratio`, not `call_put_ratio` — trades with break-even within 1.5% of spot (deep ITM stock replacement, hedges) carry no directional signal
 - Low directional C/P ratio (< 0.5) — Bearish institutional positioning
 - High directional C/P ratio (> 2.0) — Bullish institutional positioning
+- OI call wall often acts as resistance and put wall as support into expiry; P/C OI > 1 leans defensive
 - `transactions: 1` — Single block trade; strongest whale signal
 - `failed_fetches > 0` — Totals may be understated; mention the count alongside the header line
 

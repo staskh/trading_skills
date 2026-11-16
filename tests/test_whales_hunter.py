@@ -61,9 +61,16 @@ class TestWhalesHunter:
         for field in REQUIRED_FIELDS:
             assert field in result["whales"][0], f"Missing field: {field}"
 
+    def test_open_interest_walls_in_result(self):
+        result = whales_hunter(TEST_UNDERLYING, precise=False)
+        oi = result["open_interest"]
+        assert oi["call_oi"] > 0 and oi["put_oi"] > 0
+        assert oi["call_wall"]["open_interest"] > 0
+
     def test_invalid_underlying_returns_empty(self):
         result = whales_hunter("INVALIDXYZ123", precise=False)
         assert result["whales"] == []
+        assert result["open_interest"]["call_wall"] is None
 
     @requires_massive
     def test_precise_mode_source_is_massive_or_yahoo(self):
