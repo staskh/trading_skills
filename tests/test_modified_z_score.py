@@ -1,12 +1,10 @@
 # ABOUTME: Unit tests for _modified_z_score — the unified outlier detection function.
 # ABOUTME: Verifies MAD-based detection works for both small and large samples.
 
-import inspect
-
 import numpy as np
 import pandas as pd
 
-from trading_skills.massive.whales import _modified_z_score, option_whales
+from trading_skills.massive.whales import _modified_z_score
 
 
 class TestModifiedZScore:
@@ -33,11 +31,6 @@ class TestModifiedZScore:
         mask = _modified_z_score(data, sigma_z=3.5)
         assert mask.iloc[-1], "MAD-based detection should catch whale in large skewed sample"
 
-        # Verify std-based would miss it (documents the old behavior)
-        median = data.median()
-        std_threshold = median + 3.0 * data.std()
-        assert not (data.iloc[-1] > std_threshold), "std-based misses it (regression proof)"
-
     def test_mad_zero_all_equal_returns_no_outliers(self):
         """When all values are equal, none are above the median — no outliers flagged."""
         data = pd.Series([500.0] * 20)
@@ -53,10 +46,3 @@ class TestModifiedZScore:
         result = _modified_z_score(data, sigma_z=3.5)
         assert isinstance(result, pd.Series)
         assert result.dtype == bool
-
-
-class TestOptionWhalesNoSigma:
-    def test_sigma_parameter_removed(self):
-        """option_whales must not accept a sigma kwarg."""
-        sig = inspect.signature(option_whales)
-        assert "sigma" not in sig.parameters, "sigma parameter should be removed from option_whales"

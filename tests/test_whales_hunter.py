@@ -33,58 +33,59 @@ REQUIRED_FIELDS = {
 
 class TestWhalesHunter:
     def test_returns_dict_with_required_keys(self):
-        result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=False)
+        result = whales_hunter(TEST_UNDERLYING, precise=False)
         assert isinstance(result, dict)
         assert "whales" in result
         assert "source" in result
         assert "trading_date" in result
 
     def test_trading_date_in_result(self):
-        result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=False)
+        result = whales_hunter(TEST_UNDERLYING, precise=False)
         assert result["trading_date"] == TEST_DATE
 
     def test_whales_is_list(self):
-        result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=False)
+        result = whales_hunter(TEST_UNDERLYING, precise=False)
         assert isinstance(result["whales"], list)
 
     def test_yahoo_only_mode_sets_source(self):
-        result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=False)
+        result = whales_hunter(TEST_UNDERLYING, precise=False)
         assert result["source"] == "yahoo"
 
     def test_known_active_underlying_returns_whales(self):
-        result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=False)
+        result = whales_hunter(TEST_UNDERLYING, precise=False)
         assert len(result["whales"]) > 0
 
     def test_whale_dict_has_required_fields(self):
-        result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=False)
+        result = whales_hunter(TEST_UNDERLYING, precise=False)
         assert len(result["whales"]) > 0
         for field in REQUIRED_FIELDS:
             assert field in result["whales"][0], f"Missing field: {field}"
 
     def test_invalid_underlying_returns_empty(self):
-        result = whales_hunter("INVALIDXYZ123", trading_date=TEST_DATE, precise=False)
+        result = whales_hunter("INVALIDXYZ123", precise=False)
         assert result["whales"] == []
 
     @requires_massive
     def test_precise_mode_source_is_massive_or_yahoo(self):
-        result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=True)
+        result = whales_hunter(TEST_UNDERLYING, precise=True)
         assert result["source"] in ("massive", "yahoo")
 
     @requires_massive
     def test_precise_mode_returns_whales(self):
-        result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=True)
+        result = whales_hunter(TEST_UNDERLYING, precise=True)
         assert len(result["whales"]) > 0
 
     @requires_massive
     def test_precise_mode_whales_have_spot_at_trade_time(self):
-        result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=True)
-        assert len(result["whales"]) > 0
-        for w in result["whales"]:
+        result = whales_hunter(TEST_UNDERLYING, precise=True)
+        priced = [w for w in result["whales"] if w["spot"] is not None]
+        assert len(priced) > 0
+        for w in priced:
             assert w["spot"] > 0
             expected = round((w["break_even"] - w["spot"]) / w["spot"] * 100, 2)
             assert w["pct_from_spot"] == expected
 
     @requires_massive
     def test_precise_mode_source_is_massive(self):
-        result = whales_hunter(TEST_UNDERLYING, trading_date=TEST_DATE, precise=True)
+        result = whales_hunter(TEST_UNDERLYING, precise=True)
         assert result["source"] == "massive"

@@ -1,4 +1,4 @@
-# massive — Polygon.io API Integration
+# massive — Massive (Polygon.io) API Integration
 
 Functions backed by the [Massive.com](https://massive.com/) (formerly known as [Polygon.io](https://polygon.io)) API via the `massive` Python client.
 
@@ -12,26 +12,33 @@ MASSIVE_API_KEY=your_polygon_api_key
 
 ## Functions
 
-### `option_whales(option_ticker, trading_date=None, sigma=6)`
+### `option_whales(option_ticker, trading_date=None, sigma_z=3.5, return_all=False)`
 
-Detects whale activity in a specific option contract using second-level (per-second) aggregation.
+Detects whale activity in one option contract from its 1-second bars on a single date.
 
-Fetches all 1-second bars for the contract on the given date, computes
-`investment = volume × vwap` per bar, then returns bars where investment
-exceeds `mean + sigma × std` of the population.
+- `invested = vwap × volume × 100` per bar.
+- A bar is a whale when its Modified Z-Score (MAD-based) exceeds `sigma_z`, or it averages ≥ $1M per transaction.
+- Flagged bars averaging ≤ $50k per transaction are dropped as retail noise.
+- Thin contracts (fewer than 10 traded bars) skip the Z-Score: any bar averaging > $50k per transaction is a whale.
 
-**Args:**
-- `option_ticker` — option contract ticker (e.g. `"O:NVDA260320P00170000"`)
-- `trading_date` — date to analyze (`date`, `datetime`, or `"YYYY-MM-DD"` string); defaults to latest NYSE trading day
-- `sigma` — outlier threshold in standard deviations (default `6`)
+**Returns:** `pd.DataFrame` sorted by timestamp ascending with columns
+`timestamp`, `ticker`, `type`, `strike`, `expiry`, `close` (bar VWAP), `volume`, `transactions`, `invested`, `break_even`.
+With `return_all=True`, returns `(outliers, all_bars)`.
 
-**Returns:** `pd.DataFrame` sorted by `investment` descending with columns:
-`timestamp`, `volume`, `vwap`, `investment`, `open`, `high`, `low`, `close`, `transactions`
-
-**Example:**
 ```python
 from trading_skills.massive import option_whales
 
-whales = option_whales("O:NVDA260320P00170000", trading_date="2026-03-13", sigma=6)
-print(whales[["timestamp", "volume", "vwap", "investment"]].to_string())
+whales = option_whales("O:NVDA260320P00170000", trading_date="2026-03-13")
+print(whales[["timestamp", "volume", "close", "invested"]].to_string())
 ```
+
+### `whales_hunter(underlying, max_months=2, precise=True, sigma_z=3.5)`
+
+Scans an underlying over the latest and previous trading sessions:
+
+1. Yahoo Finance chain screen selects candidate contracts (Modified Z-Score on daily invested, or volume > open interest).
+2. If `precise` and `MASSIVE_API_KEY` is set, each candidate is drilled with `option_whales` on both sessions, and the underlying spot at trade time is attached.
+
+Falls back to the Yahoo candidates (`source: "yahoo"`) when the key is missing or the drill-down finds no whales.
+
+**Returns:** dict with `whales` (list of records, missing values as `None`), `source`, `trading_date`, `window_dates`.

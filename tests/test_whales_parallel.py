@@ -14,13 +14,15 @@ from trading_skills.massive.whales import (
     _fetch_whales_parallel,
 )
 
+DAY = date(2026, 4, 7)
+PREV_DAY = date(2026, 4, 6)
+
 
 def _make_candidates(*symbols, open_interest=123, reason="z_score"):
     return pd.DataFrame(
         [
             {
                 "contractSymbol": s,
-                "tradeDate": date(2026, 4, 7),
                 "open_interest": open_interest,
                 "reason": reason,
             }
@@ -40,10 +42,29 @@ class TestFetchWhalesParallel:
         candidates = _make_candidates("HTZ260515C00007500", "NVDA260320P00170000")
         side_effects = [_whale_df("HTZ260515C00007500"), _whale_df("NVDA260320P00170000")]
         with patch("trading_skills.massive.whales.option_whales", side_effect=side_effects):
-            result = _fetch_whales_parallel(candidates, sigma_z=3.5)
+            result, failed = _fetch_whales_parallel(candidates, sigma_z=3.5, window_dates=[DAY])
         assert len(result) == 2
 
-    def test_exception_in_one_candidate_does_not_abort_others(self):
+    def test_fetches_every_window_date_for_each_candidate(self):
+        """A contract that traded today still gets its previous-session blocks fetched."""
+        symbols = ("A260515C00007500", "B260515C00007500")
+        candidates = _make_candidates(*symbols)
+        calls = []
+
+        def side_effect(ticker, trading_date, **kwargs):
+            calls.append((ticker, trading_date))
+            return _whale_df(ticker)
+
+        with patch("trading_skills.massive.whales.option_whales", side_effect=side_effect):
+            result, failed = _fetch_whales_parallel(
+                candidates, sigma_z=3.5, window_dates=[PREV_DAY, DAY]
+            )
+        expected = [(f"O:{s}", d) for s in symbols for d in (PREV_DAY, DAY)]
+        assert sorted(calls) == sorted(expected)
+        assert len(result) == 4
+        assert failed == 0
+
+    def test_exception_in_one_candidate_does_not_abort_others(self, capsys):
         candidates = _make_candidates("BAD", "GOOD260515C00007500")
         good_df = _whale_df("GOOD260515C00007500")
 
@@ -53,9 +74,13 @@ class TestFetchWhalesParallel:
             return good_df
 
         with patch("trading_skills.massive.whales.option_whales", side_effect=side_effect):
-            result = _fetch_whales_parallel(candidates, sigma_z=3.5)
+            result, failed = _fetch_whales_parallel(candidates, sigma_z=3.5, window_dates=[DAY])
         assert len(result) == 1
         assert result[0]["ticker"].iloc[0] == "GOOD260515C00007500"
+        assert failed == 1
+        assert capsys.readouterr().err == (
+            "Whale fetch failed: BAD 2026-04-07: RuntimeError: API error\n"
+        )
 
     def test_skips_empty_dataframes(self):
         candidates = _make_candidates("EMPTY", "FULL260515C00007500")
@@ -63,14 +88,14 @@ class TestFetchWhalesParallel:
         full_df = _whale_df("FULL260515C00007500")
 
         with patch("trading_skills.massive.whales.option_whales", side_effect=[empty_df, full_df]):
-            result = _fetch_whales_parallel(candidates, sigma_z=3.5)
+            result, failed = _fetch_whales_parallel(candidates, sigma_z=3.5, window_dates=[DAY])
         assert len(result) == 1
 
     def test_all_empty_returns_empty_list(self):
         candidates = _make_candidates("A", "B")
         empty_df = pd.DataFrame(columns=_WHALE_COLS)
         with patch("trading_skills.massive.whales.option_whales", return_value=empty_df):
-            result = _fetch_whales_parallel(candidates, sigma_z=3.5)
+            result, failed = _fetch_whales_parallel(candidates, sigma_z=3.5, window_dates=[DAY])
         assert result == []
 
     def test_missing_key_raises_whale_data_error(self):
@@ -82,7 +107,7 @@ class TestFetchWhalesParallel:
 
         with patch("trading_skills.massive.whales.option_whales", side_effect=side_effect):
             with pytest.raises(WhaleDataError):
-                _fetch_whales_parallel(candidates, sigma_z=3.5)
+                _fetch_whales_parallel(candidates, sigma_z=3.5, window_dates=[DAY])
 
     def test_auth_error_raises_whale_data_error(self):
         """AuthError (empty/invalid key) is fatal."""
@@ -93,7 +118,7 @@ class TestFetchWhalesParallel:
 
         with patch("trading_skills.massive.whales.option_whales", side_effect=side_effect):
             with pytest.raises(WhaleDataError):
-                _fetch_whales_parallel(candidates, sigma_z=3.5)
+                _fetch_whales_parallel(candidates, sigma_z=3.5, window_dates=[DAY])
 
     def test_not_authorized_response_raises_whale_data_error(self):
         """A BadResponse naming an entitlement problem is fatal (the real-world bug)."""
@@ -106,9 +131,9 @@ class TestFetchWhalesParallel:
 
         with patch("trading_skills.massive.whales.option_whales", side_effect=side_effect):
             with pytest.raises(WhaleDataError):
-                _fetch_whales_parallel(candidates, sigma_z=3.5)
+                _fetch_whales_parallel(candidates, sigma_z=3.5, window_dates=[DAY])
 
-    def test_generic_bad_response_is_not_fatal(self):
+    def test_generic_bad_response_is_not_fatal(self, capsys):
         """A plain non-auth BadResponse (e.g. 404 for one contract) stays swallowed."""
         candidates = _make_candidates("BAD260515C00007500", "GOOD260515C00007500")
         good_df = _whale_df("GOOD260515C00007500")
@@ -119,16 +144,20 @@ class TestFetchWhalesParallel:
             return good_df
 
         with patch("trading_skills.massive.whales.option_whales", side_effect=side_effect):
-            result = _fetch_whales_parallel(candidates, sigma_z=3.5)
+            result, failed = _fetch_whales_parallel(candidates, sigma_z=3.5, window_dates=[DAY])
         assert len(result) == 1
         assert result[0]["ticker"].iloc[0] == "GOOD260515C00007500"
+        assert failed == 1
+        assert "Whale fetch failed: BAD260515C00007500 2026-04-07: BadResponse" in (
+            capsys.readouterr().err
+        )
 
     def test_open_interest_and_reason_propagated_from_candidate(self):
         """open_interest and reason from the crude step carry through to precise output."""
         candidates = _make_candidates("HTZ260515C00007500", open_interest=14000, reason="both")
         whale_df = _whale_df("HTZ260515C00007500")
         with patch("trading_skills.massive.whales.option_whales", return_value=whale_df):
-            result = _fetch_whales_parallel(candidates, sigma_z=3.5)
+            result, failed = _fetch_whales_parallel(candidates, sigma_z=3.5, window_dates=[DAY])
         assert len(result) == 1
         assert result[0]["open_interest"].iloc[0] == 14000
         assert result[0]["reason"].iloc[0] == "both"
