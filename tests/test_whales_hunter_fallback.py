@@ -32,13 +32,20 @@ class TestYahooFallback:
         result = whales_hunter(TEST_UNDERLYING, precise=True)
         assert result["source"] == "yahoo"
         assert len(result["whales"]) > 0
+        assert result["failed_fetches"] == 0
 
     def test_no_massive_results_falls_back_to_yahoo(self, monkeypatch):
         monkeypatch.setenv("MASSIVE_API_KEY", "present")
-        with patch("trading_skills.massive.whales._fetch_whales_parallel", return_value=[]):
+        with patch("trading_skills.massive.whales._fetch_whales_parallel", return_value=([], 0)):
             result = whales_hunter(TEST_UNDERLYING, precise=True)
         assert result["source"] == "yahoo"
         assert len(result["whales"]) > 0
+
+    def test_failed_fetches_are_reported(self, monkeypatch):
+        monkeypatch.setenv("MASSIVE_API_KEY", "present")
+        with patch("trading_skills.massive.whales._fetch_whales_parallel", return_value=([], 3)):
+            result = whales_hunter(TEST_UNDERLYING, precise=True)
+        assert result["failed_fetches"] == 3
 
 
 class TestWindowDates:

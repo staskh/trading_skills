@@ -75,6 +75,7 @@ def main():
         "window_dates": [str(d) for d in result["window_dates"]],
         "source": result["source"],
         "total_whales": len(whales),
+        "failed_fetches": result["failed_fetches"],
         "total_call_invested": round(call_invested, 2),
         "total_put_invested": round(put_invested, 2),
         "call_put_ratio": round(call_put_ratio, 4) if call_put_ratio is not None else None,

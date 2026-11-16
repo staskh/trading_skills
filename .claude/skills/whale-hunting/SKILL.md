@@ -35,6 +35,7 @@ Returns JSON with:
 - `window_dates` — `[previous session, latest session]`; all totals cover both
 - `source` — `"massive"` (per-second data) or `"yahoo"` (daily chain data fallback)
 - `total_whales` — Total whale events found
+- `failed_fetches` — Per-second drill-down requests (one per contract per session) that errored; each is logged to stderr
 - `total_call_invested` — Sum of invested dollars in call whale events
 - `total_put_invested` — Sum of invested dollars in put whale events
 - `call_put_ratio` — Call invested / put invested (null if no puts)
@@ -85,6 +86,7 @@ Sort by `total_invested` descending. For multi-event rows use the time range of 
 - Low directional C/P ratio (< 0.5) — Bearish institutional positioning
 - High directional C/P ratio (> 2.0) — Bullish institutional positioning
 - `transactions: 1` — Single block trade; strongest whale signal
+- `failed_fetches > 0` — Totals may be understated; mention the count alongside the header line
 
 ## Requirements
 

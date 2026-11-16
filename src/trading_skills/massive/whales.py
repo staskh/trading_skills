@@ -2,6 +2,7 @@
 # ABOUTME: Identifies seconds with anomalous dollar invested across the last two trading sessions.
 
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from zoneinfo import ZoneInfo
@@ -219,14 +220,16 @@ def _fetch_whales_parallel(
     candidates: pd.DataFrame,
     sigma_z: float,
     window_dates: list[date],
-) -> list[pd.DataFrame]:
+) -> tuple[list[pd.DataFrame], int]:
     """Fetch per-second whale data for each candidate on every window date concurrently.
 
-    Returns a list of non-empty DataFrames, one per (candidate, date) with whale activity.
-    Recoverable per-candidate errors are swallowed so others still complete, but a
-    fatal auth/entitlement failure (see _is_fatal_api_error) is re-raised as a
-    WhaleDataError so it cannot be silently turned into an empty result.
+    Returns (frames, failed): non-empty DataFrames, one per (candidate, date) with
+    whale activity, and the number of (candidate, date) fetches that errored.
+    Recoverable per-candidate errors are logged to stderr and counted so others
+    still complete, but a fatal auth/entitlement failure (see _is_fatal_api_error)
+    is re-raised as a WhaleDataError so it cannot be silently turned into an empty result.
     """
+    fetch_error = object()
 
     def fetch_one(row, trading_date):
         poly_ticker = "O:" + row["contractSymbol"]
@@ -244,7 +247,12 @@ def _fetch_whales_parallel(
                     "plan lacks the 1-second aggregate entitlement required for whale "
                     f"detection. Upgrade the plan or fix MASSIVE_API_KEY. Detail: {exc}"
                 ) from exc
-            return None
+            print(
+                f"Whale fetch failed: {row['contractSymbol']} {trading_date}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            return fetch_error
 
     jobs = [(row, d) for _, row in candidates.iterrows() for d in window_dates]
     with ThreadPoolExecutor() as executor:
@@ -253,7 +261,8 @@ def _fetch_whales_parallel(
         for f in as_completed(futures):
             results.append(f.result())  # re-raises WhaleDataError from fetch_one
 
-    return [r for r in results if r is not None]
+    frames = [r for r in results if r is not None and r is not fetch_error]
+    return frames, sum(r is fetch_error for r in results)
 
 
 _WHALE_COLS = [
@@ -438,18 +447,21 @@ def whales_hunter(
           "source": "massive" if the precise step found whales, else "yahoo".
           "trading_date": latest trading session.
           "window_dates": [previous session, latest session].
+          "failed_fetches": (candidate, date) drill-down fetches that errored;
+                    when non-zero, totals may be understated.
     """
     trading_date = latest_trading_date()
     prev_trading_date = previous_trading_date(trading_date)
     window_dates = [prev_trading_date, trading_date]
     expiry_max = trading_date + relativedelta(months=max_months)
 
-    def _result(whales: list[dict], source: str) -> dict:
+    def _result(whales: list[dict], source: str, failed_fetches: int = 0) -> dict:
         return {
             "whales": whales,
             "source": source,
             "trading_date": trading_date,
             "window_dates": window_dates,
+            "failed_fetches": failed_fetches,
         }
 
     _empty = _result([], "yahoo")
@@ -506,9 +518,11 @@ def whales_hunter(
     if not precise or not os.getenv("MASSIVE_API_KEY"):
         return crude_result
 
-    whale_dfs = _fetch_whales_parallel(candidates, sigma_z=sigma_z, window_dates=window_dates)
+    whale_dfs, failed_fetches = _fetch_whales_parallel(
+        candidates, sigma_z=sigma_z, window_dates=window_dates
+    )
     if not whale_dfs:
-        return crude_result
+        return {**crude_result, "failed_fetches": failed_fetches}
 
     precise_df = pd.concat(whale_dfs, ignore_index=True).sort_values("timestamp", kind="stable")
     # Candidates may trade on the previous trading day, so fetch spot for every trade date
@@ -517,4 +531,4 @@ def whales_hunter(
         [underlying_spot_bars(underlying, d) for d in trade_dates], ignore_index=True
     )
     precise_df = attach_spot(precise_df, spot_bars)
-    return _result(_to_records(precise_df), "massive")
+    return _result(_to_records(precise_df), "massive", failed_fetches)
