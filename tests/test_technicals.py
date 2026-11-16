@@ -8,6 +8,7 @@ import pandas_ta as ta
 import pytest
 
 from trading_skills.technicals import (
+    _fill_from_info,
     adx_columns,
     compute_indicators,
     compute_multi_symbol,
@@ -606,3 +607,37 @@ class TestTrendIndicators:
             assert raw[key] is None
         assert raw["lower_highs"] is not None
         assert raw["return_3m_pct"] is not None
+
+
+class TestFillFromInfo:
+    """Tests for filling missing indicator values from Yahoo info."""
+
+    FIELDS = {"sma50": "fiftyDayAverage", "sma200": "twoHundredDayAverage"}
+
+    def test_empty_info_leaves_values_unchanged(self):
+        values, filled = _fill_from_info({"sma50": None, "sma200": None}, {}, self.FIELDS)
+        assert values == {"sma50": None, "sma200": None}
+        assert filled is False
+
+    def test_partial_info_fills_only_missing_values(self):
+        values, filled = _fill_from_info(
+            {"sma50": None, "sma200": None}, {"twoHundredDayAverage": 200.0}, self.FIELDS
+        )
+        assert values == {"sma50": None, "sma200": 200.0}
+        assert filled is True
+
+    def test_bar_value_is_kept(self):
+        values, filled = _fill_from_info(
+            {"sma50": 150.0, "sma200": None},
+            {"fiftyDayAverage": 999.0, "twoHundredDayAverage": 200.0},
+            self.FIELDS,
+        )
+        assert values == {"sma50": 150.0, "sma200": 200.0}
+        assert filled is True
+
+    def test_nothing_missing_is_not_filled(self):
+        values, filled = _fill_from_info(
+            {"sma50": 150.0, "sma200": 190.0}, {"fiftyDayAverage": 999.0}, self.FIELDS
+        )
+        assert values == {"sma50": 150.0, "sma200": 190.0}
+        assert filled is False

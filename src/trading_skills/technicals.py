@@ -288,6 +288,21 @@ def _ticker_info(ticker: yf.Ticker) -> dict:
         return {}
 
 
+def _fill_from_info(values: dict, info: dict, fields: dict[str, str]) -> tuple[dict, bool]:
+    """Fill the None entries of `values` from `info`; `fields` maps value key to info key.
+
+    Values already present are kept. Returns the filled values and whether any
+    value actually came from `info`.
+    """
+    filled = dict(values)
+    from_info = False
+    for key, info_key in fields.items():
+        if filled[key] is None and info.get(info_key) is not None:
+            filled[key] = info[info_key]
+            from_info = True
+    return filled, from_info
+
+
 def _round_or_none(value: float | None, digits: int = 2) -> float | None:
     return None if value is None else round(value, digits)
 
@@ -428,41 +443,44 @@ def compute_indicators(
                 }
             )
 
-    # SMA50/SMA200 trend; falls back to Yahoo's precomputed averages when bars are too short
+    # SMA50/SMA200 trend. `source` is "info" when at least one value in the group
+    # came from Yahoo's precomputed averages because the bars were too short.
     if "sma200" in indicators:
-        sma200 = raw["sma200"]
-        sma50 = raw["sma50"]
-        source = "bars"
-        if sma200 is None:
-            info = _ticker_info(ticker)
-            sma50 = info.get("fiftyDayAverage", sma50)
-            sma200 = info.get("twoHundredDayAverage")
-            source = "info"
+        values = {"sma50": raw["sma50"], "sma200": raw["sma200"]}
+        from_info = False
+        if None in values.values():
+            values, from_info = _fill_from_info(
+                values,
+                _ticker_info(ticker),
+                {"sma50": "fiftyDayAverage", "sma200": "twoHundredDayAverage"},
+            )
         result["indicators"]["sma200"] = {
-            "sma50": _round_or_none(sma50),
-            "sma200": _round_or_none(sma200),
+            "sma50": _round_or_none(values["sma50"]),
+            "sma200": _round_or_none(values["sma200"]),
             "cross": raw["sma_cross"],
-            "source": source,
+            "source": "info" if from_info else "bars",
         }
 
-    # 52-week range; falls back to Yahoo's 52-week high/low when bars are too short
+    # 52-week range. `source` is "info" when at least one value in the group
+    # came from Yahoo's 52-week high/low because the bars were too short.
     if "range52w" in indicators:
-        high_52w, low_52w = raw["high_52w"], raw["low_52w"]
-        source = "bars"
-        if high_52w is None:
-            info = _ticker_info(ticker)
-            high_52w = info.get("fiftyTwoWeekHigh")
-            low_52w = info.get("fiftyTwoWeekLow")
-            source = "info"
+        values = {"high_52w": raw["high_52w"], "low_52w": raw["low_52w"]}
+        from_info = False
+        if None in values.values():
+            values, from_info = _fill_from_info(
+                values,
+                _ticker_info(ticker),
+                {"high_52w": "fiftyTwoWeekHigh", "low_52w": "fiftyTwoWeekLow"},
+            )
         pct_from_high = None
-        if high_52w is not None:
-            pct_from_high = round((result["price"]["current"] / high_52w - 1) * 100, 2)
+        if values["high_52w"] is not None:
+            pct_from_high = round((result["price"]["current"] / values["high_52w"] - 1) * 100, 2)
         result["indicators"]["range52w"] = {
-            "high_52w": _round_or_none(high_52w),
-            "low_52w": _round_or_none(low_52w),
+            "high_52w": _round_or_none(values["high_52w"]),
+            "low_52w": _round_or_none(values["low_52w"]),
             "low_52w_prior": _round_or_none(raw["low_52w_prior"]),
             "pct_from_high": pct_from_high,
-            "source": source,
+            "source": "info" if from_info else "bars",
         }
 
     # Swing structure over the recent sessions
