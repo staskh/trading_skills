@@ -56,7 +56,11 @@ def get_next_earnings_date(symbol: str) -> str | None:
 
 
 def _last_reported(earnings_dates, now) -> dict:
-    """Most recent past row with a reported EPS: date, actual, estimate, surprise %."""
+    """Most recent past row with a reported EPS: date, actual, estimate, surprise %.
+
+    When Yahoo lists the same timestamp more than once, the last of those rows
+    in source order wins.
+    """
     last = {
         "last_earnings_date": None,
         "last_eps_actual": None,
@@ -72,8 +76,9 @@ def _last_reported(earnings_dates, now) -> dict:
     if reported.empty:
         return last
 
-    when = reported.index.max()
-    row = reported.loc[when]
+    reported = reported.sort_index(kind="stable")
+    when = reported.index[-1]
+    row = reported.iloc[-1]
     actual = float(row["Reported EPS"])
     estimate = row.get("EPS Estimate")
     estimate = float(estimate) if pd.notna(estimate) else None
