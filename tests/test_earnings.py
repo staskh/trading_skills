@@ -359,3 +359,21 @@ def test_last_reported_survives_duplicate_timestamps():
     assert result["last_eps_actual"] == 1.0
     assert result["last_eps_estimate"] == 1.25
     assert result["last_eps_surprise_pct"] == -20.0
+
+
+def test_last_reported_duplicate_timestamps_last_source_row_wins():
+    stamp = _et_stamp(_PAST, 16)
+    older = _et_stamp(_PAST - timedelta(days=90), 16)
+    df = pd.DataFrame(
+        {
+            "EPS Estimate": [1.0, 1.25, 1.5, 0.9],
+            "Reported EPS": [1.0, 1.1, 1.6, 0.95],
+            "Surprise(%)": [None, None, None, None],
+        },
+        index=pd.DatetimeIndex([older, stamp, stamp, older]),
+    )
+
+    result = _last_reported(df, pd.Timestamp.now(tz="America/New_York"))
+    assert result["last_earnings_date"] == str(_PAST)
+    assert result["last_eps_actual"] == 1.6
+    assert result["last_eps_estimate"] == 1.5
