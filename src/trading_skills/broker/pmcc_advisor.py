@@ -492,7 +492,7 @@ async def _fetch_yf_spot_prices(symbols: list[str]) -> dict[str, float]:
     return {sym: float(p) for sym, p in pairs if p and float(p) > 0}
 
 
-async def _fetch_yf_option_quote(
+async def fetch_yf_option_quote(
     symbol: str, expiry_ibkr: str, strike: float, right: str
 ) -> dict | None:
     """Fetch a single option quote from Yahoo Finance (stale, outside hours)."""
@@ -531,7 +531,7 @@ async def _fetch_yf_option_quote(
     return await asyncio.to_thread(_sync)
 
 
-async def _fetch_yf_option_chain_batch(symbol: str, expiry_ibkr: str, spot: float) -> list[dict]:
+async def fetch_yf_option_chain(symbol: str, expiry_ibkr: str, spot: float) -> list[dict]:
     """Fetch call option quotes from Yahoo Finance for a given expiry, filtered by spot ±25%."""
 
     def _sync() -> list[dict]:
@@ -875,13 +875,13 @@ async def get_pmcc_data(
                 phase1 = await asyncio.gather(
                     _fetch_yf_spot_prices(unique_symbols),
                     *[
-                        _fetch_yf_option_quote(
+                        fetch_yf_option_quote(
                             s["symbol"], s["short"]["expiry"], s["short"]["strike"], "C"
                         )
                         for s in spreads
                     ],
                     *[
-                        _fetch_yf_option_quote(
+                        fetch_yf_option_quote(
                             s["symbol"], s["long"]["expiry"], s["long"]["strike"], "C"
                         )
                         for s in spreads
@@ -942,7 +942,7 @@ async def get_pmcc_data(
                     )
                 else:
                     chain_results = await asyncio.gather(
-                        *[_fetch_yf_option_chain_batch(sym, exp, spot) for exp in roll_exps]
+                        *[fetch_yf_option_chain(sym, exp, spot) for exp in roll_exps]
                     )
                 for exp, quotes in zip(roll_exps, chain_results):
                     if quotes:

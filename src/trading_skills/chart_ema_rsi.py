@@ -18,6 +18,7 @@ from trading_skills.utils import generated_at_str  # noqa: E402
 PERIOD_DAYS = {"1mo": 31, "3mo": 92, "6mo": 183, "1y": 365, "2y": 730}
 # Extra calendar days downloaded before the plotted window so EMAs and RSI are settled.
 WARMUP_DAYS = 120
+SMA_COLORS = ("tab:green", "tab:red", "tab:brown", "tab:gray")
 RSI_OVERBOUGHT = 70
 RSI_OVERSOLD = 30
 # The yahoo style asks for a semibold title, which DejaVu Sans lacks (matplotlib logs a warning).
@@ -64,10 +65,15 @@ def render_chart(
     slow: int = 20,
     rsi_length: int = 14,
     output: str | Path | None = None,
+    sma: tuple[int, ...] = (),
+    levels: dict[str, float] | None = None,
 ) -> dict:
     """Plot daily candles with EMA(fast)/EMA(slow), crossover markers and RSI to a JPG.
 
-    `output` defaults to `sandbox/<SYMBOL>_ema_rsi_YYYY-MM-DD_HHmm.jpg`.
+    `output` defaults to `sandbox/<SYMBOL>_ema_rsi_YYYY-MM-DD_HHmm.jpg`. `sma` adds simple moving
+    averages (extra history is fetched so they are defined across the whole window; one that can't
+    be computed is skipped) and `levels` adds labelled horizontal lines, e.g. pivot supports.
+    The result's `sma` and `levels` list what was drawn.
     """
     if fast >= slow:
         raise ValueError(f"fast EMA ({fast}) must be shorter than slow EMA ({slow})")
@@ -75,7 +81,10 @@ def render_chart(
         raise ValueError(f"period must be one of {sorted(PERIOD_DAYS)}")
 
     symbol = symbol.upper()
-    start = datetime.now() - timedelta(days=PERIOD_DAYS[period] + WARMUP_DAYS)
+    levels = dict(levels or {})
+    # ~1.5 calendar days per trading bar, plus slack for holidays.
+    sma_days = int(max(sma) * 1.5) + 10 if sma else 0
+    start = datetime.now() - timedelta(days=PERIOD_DAYS[period] + max(WARMUP_DAYS, sma_days))
     history = yf.Ticker(symbol).history(start=start.strftime("%Y-%m-%d"), interval="1d")
     if history.empty or len(history) <= slow:
         return {"symbol": symbol, "error": "No price history"}
@@ -91,6 +100,8 @@ def render_chart(
     bars = history.loc[in_window, ["Open", "High", "Low", "Close", "Volume"]]
     ema_fast, ema_slow, rsi = ema_fast[in_window], ema_slow[in_window], rsi[in_window]
     crosses = ema_crossovers(ema_fast, ema_slow)
+    sma_lines = {n: ta.sma(close, length=n)[in_window] for n in sma}
+    sma_lines = {n: line for n, line in sma_lines.items() if line.notna().any()}
 
     if output is None:
         stamp = generated_at_str().replace(" ET", "").replace(":", "").replace(" ", "_")
@@ -114,12 +125,18 @@ def render_chart(
                 mpf.make_addplot(marks, type="scatter", marker=marker, markersize=120, color=color)
             )
 
+    for n, color in zip(sma_lines, SMA_COLORS):
+        plots.append(mpf.make_addplot(sma_lines[n], color=color, width=1.2, linestyle="--"))
+
     last_close = round(float(bars["Close"].iloc[-1]), 2)
     last_rsi = round(float(rsi.iloc[-1]), 2)
+    sma_legend = "".join(f"  SMA{n} ({c[4:]})" for n, c in zip(sma_lines, SMA_COLORS))
     title = (
-        f"{symbol} daily  close {last_close}  EMA{fast} (blue) / EMA{slow} (orange)  RSI {last_rsi}"
+        f"{symbol} daily  close {last_close}  EMA{fast} (blue) / EMA{slow} (orange)"
+        f"{sma_legend}  RSI {last_rsi}"
     )
-    mpf.plot(
+    hlines = dict(hlines=list(levels.values()), colors="gray", linestyle=":", linewidths=0.9)
+    fig, axes = mpf.plot(
         bars,
         type="candle",
         style=CHART_STYLE,
@@ -129,8 +146,28 @@ def render_chart(
         title=title,
         figsize=(14, 8),
         tight_layout=True,
-        savefig=dict(fname=str(output), dpi=120, pil_kwargs={"quality": 90}),
+        returnfig=True,
+        **(dict(hlines=hlines) if levels else {}),
     )
+    price_ax = axes[0]
+    low, high = price_ax.get_ylim()
+    if levels:
+        pad = (max(high, *levels.values()) - min(low, *levels.values())) * 0.03
+        low, high = min(low, *levels.values()) - pad, max(high, *levels.values()) + pad
+        price_ax.set_ylim(low, high)
+    for label, value in levels.items():
+        price_ax.annotate(
+            f"{label} {value:g}",
+            xy=(0.995, value),
+            xycoords=("axes fraction", "data"),
+            fontsize=9,
+            color="black",
+            ha="right",
+            va="bottom",
+            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", alpha=0.9),
+        )
+    fig.savefig(str(output), dpi=120, pil_kwargs={"quality": 90})
+    matplotlib.pyplot.close(fig)
 
     return {
         "symbol": symbol,
@@ -144,6 +181,9 @@ def render_chart(
         "ema_slow": round(float(ema_slow.iloc[-1]), 2),
         "trend": "bullish" if ema_fast.iloc[-1] > ema_slow.iloc[-1] else "bearish",
         "rsi": last_rsi,
+        "sma": list(sma_lines),
+        "levels": levels,
+        "price_ylim": [round(float(low), 2), round(float(high), 2)],
         "crossovers": crosses,
         "generated_at": generated_at_str(),
         "data_delay": "15min",
