@@ -1,5 +1,5 @@
 # ABOUTME: Unit tests for the crude filter used in whale detection.
-# ABOUTME: Validates MAD-based z-score detects high-volume cheap options missed by std.
+# ABOUTME: Validates MAD-based z-score detects high-volume cheap options in skewed data.
 
 import numpy as np
 import pandas as pd
@@ -27,14 +27,6 @@ class TestCrudeFilter:
         """Whale ($140k) must be flagged despite high-dollar contracts inflating spread."""
         mask = _modified_z_score(skewed_invested, sigma_z=3.5)
         assert mask.iloc[-1], "HTZ-like whale should be detected by MAD-based z-score"
-
-    def test_std_based_would_miss_whale(self, skewed_invested):
-        """Documents the bug: median + 3*std threshold exceeds $140k when std is inflated."""
-        median = skewed_invested.median()
-        threshold = median + 3.0 * skewed_invested.std()
-        assert not (skewed_invested.iloc[-1] > threshold), (
-            "Regression check: std-based approach should miss this whale (proving the bug exists)"
-        )
 
     def test_mad_zero_falls_back_to_above_median(self):
         """All-equal series: everything at median has z=0; only values above median pass."""
