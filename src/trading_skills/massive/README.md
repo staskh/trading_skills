@@ -41,4 +41,8 @@ Scans an underlying over the latest and previous trading sessions:
 
 Falls back to the Yahoo candidates (`source: "yahoo"`) when the key is missing or the drill-down finds no whales.
 
-**Returns:** dict with `whales` (list of records, missing values as `None`), `source`, `trading_date`, `window_dates`.
+**Returns:** dict with `whales` (list of records, missing values as `None`), `source`, `trading_date`, `window_dates`, `failed_fetches`, and `open_interest` — `open_interest_walls()` over every fetched chain.
+
+### `open_interest_walls(rows)` / `whale_totals(whales)`
+
+Pure aggregations. `open_interest_walls` takes chain rows (`type`, `strike`, `openInterest`) and returns `call_oi`, `put_oi`, `put_call_oi_ratio` and `call_wall` / `put_wall` (`{strike, open_interest}`, the strike with the most OI summed across expiries). `whale_totals` takes whale records and returns `call_invested`, `put_invested`, `put_call_ratio` and `call_wall` / `put_wall` (`{strike, invested}`). Ratios are `None` when the call side is empty; walls are `None` for an empty side; ties go to the lowest strike.

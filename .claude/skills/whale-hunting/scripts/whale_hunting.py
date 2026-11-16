@@ -8,7 +8,12 @@ import sys
 
 import pandas as pd
 
-from trading_skills.massive.whales import WhaleDataError, directional_flow, whales_hunter
+from trading_skills.massive.whales import (
+    WhaleDataError,
+    directional_flow,
+    whale_totals,
+    whales_hunter,
+)
 from trading_skills.utils import generated_at_str
 
 
@@ -60,13 +65,8 @@ def main():
     whales = result["whales"]
     trading_date = result["trading_date"]
 
-    # Aggregate call/put invested totals
-    call_invested = sum(
-        w["invested"] for w in whales if w.get("type") == "call" and w.get("invested")
-    )
-    put_invested = sum(
-        w["invested"] for w in whales if w.get("type") == "put" and w.get("invested")
-    )
+    totals = whale_totals(whales)
+    call_invested, put_invested = totals["call_invested"], totals["put_invested"]
     call_put_ratio = (call_invested / put_invested) if put_invested > 0 else None
 
     output = {
@@ -79,6 +79,10 @@ def main():
         "total_call_invested": round(call_invested, 2),
         "total_put_invested": round(put_invested, 2),
         "call_put_ratio": round(call_put_ratio, 4) if call_put_ratio is not None else None,
+        "put_call_ratio": totals["put_call_ratio"],
+        "whale_call_wall": totals["call_wall"],
+        "whale_put_wall": totals["put_wall"],
+        "open_interest": result["open_interest"],
         **directional_flow(whales),
         "whales": [
             {**w, "timestamp": str(w["timestamp"]), "expiry": str(w["expiry"])} for w in whales
