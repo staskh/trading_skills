@@ -104,7 +104,7 @@ def detect_crossover(fast: pd.Series, slow: pd.Series) -> dict | None:
     is found. "up" means fast crossed above slow (bullish).
     "days_ago" is trading bars since the crossover bar.
     """
-    diff = (fast - ema_slow).dropna()
+    diff = (fast - slow).dropna()
     if len(diff) < 2:
         return None
 
