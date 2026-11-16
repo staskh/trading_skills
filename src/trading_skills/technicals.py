@@ -1,12 +1,18 @@
 # ABOUTME: Computes technical indicators using pandas-ta.
 # ABOUTME: Supports multi-symbol analysis and earnings data.
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import pandas_ta as ta
 import yfinance as yf
 
 from trading_skills.earnings import get_next_earnings_date
-from trading_skills.utils import annualized_volatility
+from trading_skills.pivots import pivot_status
+from trading_skills.utils import annualized_volatility, is_trading_now
+
+NY = ZoneInfo("America/New_York")
 
 
 def get_earnings_data(symbol: str) -> dict:
@@ -274,6 +280,18 @@ def compute_raw_indicators(df: pd.DataFrame) -> dict:
     return result
 
 
+def _ticker_info(ticker: yf.Ticker) -> dict:
+    """Return ticker.info, or an empty dict when Yahoo does not provide it."""
+    try:
+        return ticker.info or {}
+    except Exception:
+        return {}
+
+
+def _round_or_none(value: float | None, digits: int = 2) -> float | None:
+    return None if value is None else round(value, digits)
+
+
 def compute_indicators(
     symbol: str,
     period: str = "3mo",
@@ -409,6 +427,67 @@ def compute_indicators(
                     "value": round(raw["adx"], 2),
                 }
             )
+
+    # SMA50/SMA200 trend; falls back to Yahoo's precomputed averages when bars are too short
+    if "sma200" in indicators:
+        sma200 = raw["sma200"]
+        sma50 = raw["sma50"]
+        source = "bars"
+        if sma200 is None:
+            info = _ticker_info(ticker)
+            sma50 = info.get("fiftyDayAverage", sma50)
+            sma200 = info.get("twoHundredDayAverage")
+            source = "info"
+        result["indicators"]["sma200"] = {
+            "sma50": _round_or_none(sma50),
+            "sma200": _round_or_none(sma200),
+            "cross": raw["sma_cross"],
+            "source": source,
+        }
+
+    # 52-week range; falls back to Yahoo's 52-week high/low when bars are too short
+    if "range52w" in indicators:
+        high_52w, low_52w = raw["high_52w"], raw["low_52w"]
+        source = "bars"
+        if high_52w is None:
+            info = _ticker_info(ticker)
+            high_52w = info.get("fiftyTwoWeekHigh")
+            low_52w = info.get("fiftyTwoWeekLow")
+            source = "info"
+        pct_from_high = None
+        if high_52w is not None:
+            pct_from_high = round((result["price"]["current"] / high_52w - 1) * 100, 2)
+        result["indicators"]["range52w"] = {
+            "high_52w": _round_or_none(high_52w),
+            "low_52w": _round_or_none(low_52w),
+            "low_52w_prior": _round_or_none(raw["low_52w_prior"]),
+            "pct_from_high": pct_from_high,
+            "source": source,
+        }
+
+    # Swing structure over the recent sessions
+    if "structure" in indicators:
+        result["indicators"]["structure"] = {
+            "closes_below_sma50": raw["closes_below_sma50"],
+            "lower_highs": raw["lower_highs"],
+            "lower_lows": raw["lower_lows"],
+            "rsi_recent": raw["rsi_recent"],
+            "recent_bars": raw["recent_bars"],
+            "return_3m_pct": _round_or_none(raw["return_3m_pct"]),
+            "macd_hist": raw["macd_hist"],
+            "prev_macd_hist": raw["prev_macd_hist"],
+        }
+
+    # Pivot levels and entry status
+    if "pivots" in indicators:
+        pivots = None
+        if len(df) >= 2:
+            today = datetime.now(NY).date()
+            partial = is_trading_now() and df.index[-1].date() == today
+            if partial and len(df) < 3:
+                partial = False
+            pivots = pivot_status(df, drop_today_partial=partial)
+        result["indicators"]["pivots"] = pivots
 
     # Volatility and Sharpe Ratio
     returns, daily_vol, annual_vol = annualized_volatility(df["Close"])

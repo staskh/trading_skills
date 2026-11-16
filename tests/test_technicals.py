@@ -95,6 +95,43 @@ class TestComputeIndicators:
         result = compute_indicators("AAPL", period="3mo")
         assert isinstance(result["signals"], list)
 
+    def test_new_groups_present_when_requested(self):
+        result = compute_indicators(
+            "AAPL", period="2y", indicators=["sma200", "range52w", "structure", "pivots"]
+        )
+        groups = result["indicators"]
+        assert set(groups) == {"sma200", "range52w", "structure", "pivots"}
+        assert groups["sma200"]["source"] == "bars"
+        assert groups["sma200"]["sma200"] is not None
+        assert groups["range52w"]["source"] == "bars"
+        assert groups["range52w"]["low_52w_prior"] is not None
+        assert groups["range52w"]["pct_from_high"] <= 0
+        assert len(groups["structure"]["recent_bars"]) == 5
+        assert "current_levels" in groups["pivots"]
+
+    def test_info_fallback_marks_source(self):
+        result = compute_indicators("AAPL", period="3mo", indicators=["sma200", "range52w"])
+        sma = result["indicators"]["sma200"]
+        rng = result["indicators"]["range52w"]
+        assert sma["sma200"] is not None
+        assert sma["source"] == "info"
+        assert sma["cross"] is None
+        assert rng["high_52w"] is not None
+        assert rng["source"] == "info"
+        assert rng["low_52w_prior"] is None
+
+    def test_default_groups_unchanged(self):
+        result = compute_indicators("AAPL", period="3mo")
+        assert set(result["indicators"]) == {
+            "rsi",
+            "macd",
+            "bollinger",
+            "sma",
+            "ema",
+            "atr",
+            "adx",
+        }
+
     def test_invalid_symbol(self):
         result = compute_indicators("INVALIDXYZ123")
         assert "error" in result
