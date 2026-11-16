@@ -194,6 +194,7 @@ def render_chart(
         "ema_slow": round(float(ema_slow.iloc[-1]), 2),
         "trend": "bullish" if ema_fast.iloc[-1] > ema_slow.iloc[-1] else "bearish",
         "rsi": last_rsi,
+        "bars_fetched": len(history),
         "sma": list(sma_by_length),
         "levels": levels,
         "price_ylim": [round(float(low), 2), round(float(high), 2)],

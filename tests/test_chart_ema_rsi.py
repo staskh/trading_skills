@@ -102,4 +102,4 @@ def test_render_chart_live_sma_longer_than_history(tmp_path):
     out = tmp_path / "spcx.jpg"
     result = render_chart("SPCX", sma=(50, 200), output=out)
     assert out.read_bytes()[:3] == b"\xff\xd8\xff"
-    assert set(result["sma"]) <= {50, 200}
+    assert result["sma"] == [n for n in (50, 200) if n <= result["bars_fetched"]]
