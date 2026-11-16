@@ -1,24 +1,16 @@
-# ABOUTME: Tests for the markdown-to-PDF skill script.
-# ABOUTME: Loads the script directly; no src module dependency.
+# ABOUTME: Tests for markdown-to-PDF conversion.
+# ABOUTME: Covers the library module trading_skills.markdown_pdf and the skill CLI wrapper.
 
-import importlib.util
 import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from trading_skills import markdown_pdf as _mod
+
 SCRIPT = Path(__file__).parent.parent / ".claude/skills/markdown-to-pdf/scripts/markdown_to_pdf.py"
 
-
-def _load_script():
-    spec = importlib.util.spec_from_file_location("markdown_to_pdf", SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-_mod = _load_script()
 convert = _mod.convert
 default_output_path = _mod.default_output_path
 _sanitize = _mod._sanitize
@@ -298,8 +290,6 @@ class TestBug47Fixes:
 
     def test_sentinels_do_not_appear_in_final_output(self):
         # Full pipeline: sanitize → escape_xml → apply_markup_subs
-        from tests.test_markdown_to_pdf import _mod
-
         _escape_xml = _mod._escape_xml
         text = "🔴 status 🟢 ok 📈 up 📉 down"
         sanitized = _sanitize(text, unicode_font=True)
