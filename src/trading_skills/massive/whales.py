@@ -435,12 +435,15 @@ def whale_totals(whales: list[dict]) -> dict:
     the most whale money) from whale prints.
     """
     t = _side_totals(whales, "invested", "invested")
+    walls = {
+        side: t[side] and {**t[side], "invested": round(t[side]["invested"], 2)}
+        for side in ("call_wall", "put_wall")
+    }
     return {
         "call_invested": round(t["call"], 2),
         "put_invested": round(t["put"], 2),
         "put_call_ratio": t["ratio"],
-        "call_wall": t["call_wall"],
-        "put_wall": t["put_wall"],
+        **walls,
     }
 
 

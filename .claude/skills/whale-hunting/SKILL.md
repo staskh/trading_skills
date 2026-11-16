@@ -77,6 +77,8 @@ After running the script, present the results as follows.
 > Directional (≥1.5% B/E from spot) — Calls: ${directional_call_invested:,.0f} | Puts: ${directional_put_invested:,.0f} | C/P ratio: {directional_call_put_ratio:.2f}
 > Open interest — P/C ratio: {open_interest.put_call_oi_ratio:.2f} | Call wall: {open_interest.call_wall.strike} | Put wall: {open_interest.put_wall.strike}
 
+Print `—` for any null ratio or wall.
+
 **When `--summary` was requested**, render the `summary` array as a table:
 
 | Time (ET) | Ticker | Type | Strike | Expiry | # Events | Total Invested | Break Even |

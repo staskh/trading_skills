@@ -76,6 +76,11 @@ class TestWhaleTotals:
         assert result["call_invested"] == 10.0
         assert result["call_wall"] == {"strike": 105.0, "invested": 10.0}
 
+    def test_wall_invested_is_rounded_like_totals(self):
+        whales = [_whale("call", 100.0, v) for v in (1_500_000.1, 0.2, 123.37)]
+        result = whale_totals(whales)
+        assert result["call_wall"]["invested"] == result["call_invested"] == 1_500_123.67
+
     def test_no_calls_means_no_ratio(self):
         result = whale_totals([_whale("put", 80.0, 10.0)])
         assert result["put_call_ratio"] is None
