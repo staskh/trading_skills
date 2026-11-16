@@ -1160,3 +1160,13 @@ def test_data_delay_stalled_overrides_extended_when_quote_stale():
         _data_delay_label(live=False, extended_prices={"NVDA": 210.0}, quote_stale=True)
         == "stalled - using last price"
     )
+
+
+def test_option_quote_helpers_are_public():
+    from trading_skills.broker.pmcc_advisor import (
+        fetch_yf_option_chain,
+        fetch_yf_option_quote,
+    )
+
+    assert asyncio.iscoroutinefunction(fetch_yf_option_quote)
+    assert asyncio.iscoroutinefunction(fetch_yf_option_chain)
