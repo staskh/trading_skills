@@ -1,12 +1,18 @@
 # ABOUTME: Computes technical indicators using pandas-ta.
 # ABOUTME: Supports multi-symbol analysis and earnings data.
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import pandas_ta as ta
 import yfinance as yf
 
 from trading_skills.earnings import get_next_earnings_date
-from trading_skills.utils import annualized_volatility
+from trading_skills.pivots import pivot_status
+from trading_skills.utils import annualized_volatility, is_trading_now
+
+NY = ZoneInfo("America/New_York")
 
 
 def get_earnings_data(symbol: str) -> dict:
@@ -97,14 +103,14 @@ def detect_macd_crossover(macd_df: pd.DataFrame) -> dict | None:
     return None
 
 
-def detect_ema_crossover(ema_fast: pd.Series, ema_slow: pd.Series) -> dict | None:
-    """Find the most recent crossover between two EMA series (e.g. EMA9 vs EMA21).
+def detect_crossover(fast: pd.Series, slow: pd.Series) -> dict | None:
+    """Find the most recent crossover between two series (e.g. EMA9 vs EMA21, SMA50 vs SMA200).
 
     Returns {"direction": "up"|"down", "days_ago": int} or None if no crossover
-    is found. "up" means ema_fast crossed above ema_slow (bullish).
+    is found. "up" means fast crossed above slow (bullish).
     "days_ago" is trading bars since the crossover bar.
     """
-    diff = (ema_fast - ema_slow).dropna()
+    diff = (fast - slow).dropna()
     if len(diff) < 2:
         return None
 
@@ -141,6 +147,17 @@ def compute_raw_indicators(df: pd.DataFrame) -> dict:
         "adx": None,
         "dmp": None,
         "dmn": None,
+        "sma200": None,
+        "sma_cross": None,
+        "high_52w": None,
+        "low_52w": None,
+        "low_52w_prior": None,
+        "closes_below_sma50": None,
+        "lower_highs": None,
+        "lower_lows": None,
+        "rsi_recent": None,
+        "recent_bars": None,
+        "return_3m_pct": None,
     }
 
     if df.empty or "Close" not in df.columns:
@@ -180,7 +197,7 @@ def compute_raw_indicators(df: pd.DataFrame) -> dict:
         if pd.notna(val):
             result["ema21"] = float(val)
     if ema9_series is not None and ema21_series is not None:
-        result["ema_crossover"] = detect_ema_crossover(ema9_series, ema21_series)
+        result["ema_crossover"] = detect_crossover(ema9_series, ema21_series)
 
     # MACD
     macd = ta.macd(close)
@@ -216,7 +233,78 @@ def compute_raw_indicators(df: pd.DataFrame) -> dict:
             if pd.notna(dmn_val):
                 result["dmn"] = float(dmn_val)
 
+    # Trend structure
+    n = len(close)
+    if n >= 200:
+        sma200_series = ta.sma(close, length=200)
+        result["sma200"] = float(sma200_series.iloc[-1])
+        result["sma_cross"] = detect_crossover(ta.sma(close, length=50), sma200_series)
+
+    if n >= 64:
+        result["return_3m_pct"] = float((close.iloc[-1] / close.iloc[-64] - 1) * 100)
+
+    if n >= 50:
+        below = close.iloc[-5:] < ta.sma(close, length=50).iloc[-5:]
+        result["closes_below_sma50"] = int(below.sum())
+
+    if rsi is not None and len(rsi.dropna()) >= 5:
+        result["rsi_recent"] = [float(v) for v in rsi.iloc[-5:]]
+
+    if all(c in df.columns for c in ("Open", "High", "Low")) and n >= 5:
+        result["recent_bars"] = [
+            {
+                "date": pd.Timestamp(idx).strftime("%Y-%m-%d"),
+                "open": float(row["Open"]),
+                "high": float(row["High"]),
+                "low": float(row["Low"]),
+                "close": float(row["Close"]),
+            }
+            for idx, row in df.iloc[-5:].iterrows()
+        ]
+
+    if "High" in df.columns and "Low" in df.columns:
+        high, low = df["High"], df["Low"]
+        if n >= 60:
+            old, mid, new = (slice(-60, -40), slice(-40, -20), slice(-20, None))
+            result["lower_highs"] = bool(
+                high.iloc[old].max() > high.iloc[mid].max() > high.iloc[new].max()
+            )
+            result["lower_lows"] = bool(
+                low.iloc[old].min() > low.iloc[mid].min() > low.iloc[new].min()
+            )
+        if n >= 252:
+            result["high_52w"] = float(high.iloc[-252:].max())
+            result["low_52w"] = float(low.iloc[-252:].min())
+            result["low_52w_prior"] = float(low.iloc[-254:-2].min())
+
     return result
+
+
+def _ticker_info(ticker: yf.Ticker) -> dict:
+    """Return ticker.info, or an empty dict when Yahoo does not provide it."""
+    try:
+        return ticker.info or {}
+    except Exception:
+        return {}
+
+
+def _fill_from_info(values: dict, info: dict, fields: dict[str, str]) -> tuple[dict, bool]:
+    """Fill the None entries of `values` from `info`; `fields` maps value key to info key.
+
+    Values already present are kept. Returns the filled values and whether any
+    value actually came from `info`.
+    """
+    filled = dict(values)
+    from_info = False
+    for key, info_key in fields.items():
+        if filled[key] is None and info.get(info_key) is not None:
+            filled[key] = info[info_key]
+            from_info = True
+    return filled, from_info
+
+
+def _round_or_none(value: float | None, digits: int = 2) -> float | None:
+    return None if value is None else round(value, digits)
 
 
 def compute_indicators(
@@ -354,6 +442,70 @@ def compute_indicators(
                     "value": round(raw["adx"], 2),
                 }
             )
+
+    # SMA50/SMA200 trend. `source` is "info" when at least one value in the group
+    # came from Yahoo's precomputed averages because the bars were too short.
+    if "sma200" in indicators:
+        values = {"sma50": raw["sma50"], "sma200": raw["sma200"]}
+        from_info = False
+        if None in values.values():
+            values, from_info = _fill_from_info(
+                values,
+                _ticker_info(ticker),
+                {"sma50": "fiftyDayAverage", "sma200": "twoHundredDayAverage"},
+            )
+        result["indicators"]["sma200"] = {
+            "sma50": _round_or_none(values["sma50"]),
+            "sma200": _round_or_none(values["sma200"]),
+            "cross": raw["sma_cross"],
+            "source": "info" if from_info else "bars",
+        }
+
+    # 52-week range. `source` is "info" when at least one value in the group
+    # came from Yahoo's 52-week high/low because the bars were too short.
+    if "range52w" in indicators:
+        values = {"high_52w": raw["high_52w"], "low_52w": raw["low_52w"]}
+        from_info = False
+        if None in values.values():
+            values, from_info = _fill_from_info(
+                values,
+                _ticker_info(ticker),
+                {"high_52w": "fiftyTwoWeekHigh", "low_52w": "fiftyTwoWeekLow"},
+            )
+        pct_from_high = None
+        if values["high_52w"] is not None:
+            pct_from_high = round((result["price"]["current"] / values["high_52w"] - 1) * 100, 2)
+        result["indicators"]["range52w"] = {
+            "high_52w": _round_or_none(values["high_52w"]),
+            "low_52w": _round_or_none(values["low_52w"]),
+            "low_52w_prior": _round_or_none(raw["low_52w_prior"]),
+            "pct_from_high": pct_from_high,
+            "source": "info" if from_info else "bars",
+        }
+
+    # Swing structure over the recent sessions
+    if "structure" in indicators:
+        result["indicators"]["structure"] = {
+            "closes_below_sma50": raw["closes_below_sma50"],
+            "lower_highs": raw["lower_highs"],
+            "lower_lows": raw["lower_lows"],
+            "rsi_recent": raw["rsi_recent"],
+            "recent_bars": raw["recent_bars"],
+            "return_3m_pct": _round_or_none(raw["return_3m_pct"]),
+            "macd_hist": raw["macd_hist"],
+            "prev_macd_hist": raw["prev_macd_hist"],
+        }
+
+    # Pivot levels and entry status
+    if "pivots" in indicators:
+        pivots = None
+        if len(df) >= 2:
+            today = datetime.now(NY).date()
+            partial = is_trading_now() and df.index[-1].date() == today
+            if partial and len(df) < 3:
+                partial = False
+            pivots = pivot_status(df, drop_today_partial=partial)
+        result["indicators"]["pivots"] = pivots
 
     # Volatility and Sharpe Ratio
     returns, daily_vol, annual_vol = annualized_volatility(df["Close"])

@@ -8,11 +8,12 @@ import pandas_ta as ta
 import pytest
 
 from trading_skills.technicals import (
+    _fill_from_info,
     adx_columns,
     compute_indicators,
     compute_multi_symbol,
     compute_raw_indicators,
-    detect_ema_crossover,
+    detect_crossover,
     detect_macd_crossover,
     get_earnings_data,
 )
@@ -94,6 +95,43 @@ class TestComputeIndicators:
     def test_signals_is_list(self):
         result = compute_indicators("AAPL", period="3mo")
         assert isinstance(result["signals"], list)
+
+    def test_new_groups_present_when_requested(self):
+        result = compute_indicators(
+            "AAPL", period="2y", indicators=["sma200", "range52w", "structure", "pivots"]
+        )
+        groups = result["indicators"]
+        assert set(groups) == {"sma200", "range52w", "structure", "pivots"}
+        assert groups["sma200"]["source"] == "bars"
+        assert groups["sma200"]["sma200"] is not None
+        assert groups["range52w"]["source"] == "bars"
+        assert groups["range52w"]["low_52w_prior"] is not None
+        assert groups["range52w"]["pct_from_high"] <= 0
+        assert len(groups["structure"]["recent_bars"]) == 5
+        assert "current_levels" in groups["pivots"]
+
+    def test_info_fallback_marks_source(self):
+        result = compute_indicators("AAPL", period="3mo", indicators=["sma200", "range52w"])
+        sma = result["indicators"]["sma200"]
+        rng = result["indicators"]["range52w"]
+        assert sma["sma200"] is not None
+        assert sma["source"] == "info"
+        assert sma["cross"] is None
+        assert rng["high_52w"] is not None
+        assert rng["source"] == "info"
+        assert rng["low_52w_prior"] is None
+
+    def test_default_groups_unchanged(self):
+        result = compute_indicators("AAPL", period="3mo")
+        assert set(result["indicators"]) == {
+            "rsi",
+            "macd",
+            "bollinger",
+            "sma",
+            "ema",
+            "atr",
+            "adx",
+        }
 
     def test_invalid_symbol(self):
         result = compute_indicators("INVALIDXYZ123")
@@ -311,7 +349,7 @@ class TestDetectEmaCrossover:
         # ema9 crosses above ema21: diff goes negative to positive
         ema9 = self._make_series([8.0, 9.0, 11.0, 12.0])
         ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is not None
         assert result["direction"] == "up"
         assert result["days_ago"] == 1
@@ -320,7 +358,7 @@ class TestDetectEmaCrossover:
         # ema9 crosses below ema21
         ema9 = self._make_series([12.0, 11.0, 9.0, 8.0])
         ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is not None
         assert result["direction"] == "down"
         assert result["days_ago"] == 1
@@ -328,7 +366,7 @@ class TestDetectEmaCrossover:
     def test_crossover_at_current_bar(self):
         ema9 = self._make_series([9.0, 11.0])
         ema21 = self._make_series([10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is not None
         assert result["direction"] == "up"
         assert result["days_ago"] == 0
@@ -337,7 +375,7 @@ class TestDetectEmaCrossover:
         # Two crossovers: down at index 2, up at index 3
         ema9 = self._make_series([9.0, 11.0, 9.0, 11.0])
         ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is not None
         assert result["direction"] == "up"
         assert result["days_ago"] == 0
@@ -345,19 +383,19 @@ class TestDetectEmaCrossover:
     def test_no_crossover_ema9_always_above(self):
         ema9 = self._make_series([11.0, 12.0, 13.0, 14.0])
         ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is None
 
     def test_no_crossover_ema9_always_below(self):
         ema9 = self._make_series([9.0, 8.0, 7.0, 6.0])
         ema21 = self._make_series([10.0, 10.0, 10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is None
 
     def test_handles_leading_nans(self):
         ema9 = self._make_series([float("nan"), float("nan"), 9.0, 11.0])
         ema21 = self._make_series([float("nan"), float("nan"), 10.0, 10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is not None
         assert result["direction"] == "up"
         assert result["days_ago"] == 0
@@ -365,11 +403,11 @@ class TestDetectEmaCrossover:
     def test_too_short_returns_none(self):
         ema9 = self._make_series([11.0])
         ema21 = self._make_series([10.0])
-        result = detect_ema_crossover(ema9, ema21)
+        result = detect_crossover(ema9, ema21)
         assert result is None
 
     def test_empty_returns_none(self):
-        result = detect_ema_crossover(self._make_series([]), self._make_series([]))
+        result = detect_crossover(self._make_series([]), self._make_series([]))
         assert result is None
 
 
@@ -493,3 +531,113 @@ class TestComputeRawIndicators:
         raw = compute_raw_indicators(df)
         assert isinstance(raw, dict)
         assert raw["rsi"] is None
+
+
+def _ohlcv(close, high=None, low=None):
+    close = np.asarray(close, dtype=float)
+    n = len(close)
+    return pd.DataFrame(
+        {
+            "Open": close,
+            "High": close + 1 if high is None else np.asarray(high, dtype=float),
+            "Low": close - 1 if low is None else np.asarray(low, dtype=float),
+            "Close": close,
+            "Volume": np.full(n, 1_000_000),
+        },
+        index=pd.bdate_range("2024-01-01", periods=n),
+    )
+
+
+class TestTrendIndicators:
+    """Raw trend indicators on constructed frames with known answers."""
+
+    def test_sma_cross_dated(self):
+        close = np.full(300, 100.0)
+        close[287:] = 50.0
+        raw = compute_raw_indicators(_ohlcv(close))
+        assert raw["sma_cross"] == {"direction": "down", "days_ago": 12}
+        assert raw["sma200"] == pytest.approx(close[-200:].mean())
+
+    def test_closes_below_sma50_counts_last_five(self):
+        close = np.full(100, 100.0)
+        close[-5:] = [105, 95, 105, 95, 95]
+        raw = compute_raw_indicators(_ohlcv(close))
+        assert raw["closes_below_sma50"] == 3
+
+    def test_lower_highs_and_lows(self):
+        down = compute_raw_indicators(_ohlcv(np.linspace(200, 100, 100)))
+        assert down["lower_highs"] is True
+        assert down["lower_lows"] is True
+        up = compute_raw_indicators(_ohlcv(np.linspace(100, 200, 100)))
+        assert up["lower_highs"] is False
+        assert up["lower_lows"] is False
+
+    def test_52w_range_and_prior_low(self):
+        n = 300
+        close = np.full(n, 100.0)
+        high = np.full(n, 110.0)
+        low = np.full(n, 90.0)
+        low[0] = 10.0  # older than 252 bars: ignored
+        high[-100] = 150.0
+        low[-10] = 50.0
+        low[-1] = 40.0  # last bar: excluded from the prior low
+        raw = compute_raw_indicators(_ohlcv(close, high, low))
+        assert raw["high_52w"] == 150.0
+        assert raw["low_52w"] == 40.0
+        assert raw["low_52w_prior"] == 50.0
+
+    def test_rsi_recent_and_recent_bars_length_five(self):
+        raw = compute_raw_indicators(_ohlcv(np.linspace(100, 200, 100)))
+        assert len(raw["rsi_recent"]) == 5
+        assert raw["rsi_recent"][-1] == pytest.approx(raw["rsi"])
+        bars = raw["recent_bars"]
+        assert len(bars) == 5
+        assert set(bars[-1]) == {"date", "open", "high", "low", "close"}
+        assert bars[-1]["close"] == 200.0
+        assert bars[-1]["date"] == str(pd.bdate_range("2024-01-01", periods=100)[-1].date())
+
+    def test_return_3m_pct(self):
+        close = np.arange(100.0, 400.0)
+        raw = compute_raw_indicators(_ohlcv(close))
+        assert raw["return_3m_pct"] == pytest.approx((close[-1] / close[-64] - 1) * 100)
+
+    def test_short_history_gives_none(self):
+        raw = compute_raw_indicators(_ohlcv(np.linspace(100, 200, 100)))
+        for key in ("sma200", "sma_cross", "high_52w", "low_52w", "low_52w_prior"):
+            assert raw[key] is None
+        assert raw["lower_highs"] is not None
+        assert raw["return_3m_pct"] is not None
+
+
+class TestFillFromInfo:
+    """Tests for filling missing indicator values from Yahoo info."""
+
+    FIELDS = {"sma50": "fiftyDayAverage", "sma200": "twoHundredDayAverage"}
+
+    def test_empty_info_leaves_values_unchanged(self):
+        values, filled = _fill_from_info({"sma50": None, "sma200": None}, {}, self.FIELDS)
+        assert values == {"sma50": None, "sma200": None}
+        assert filled is False
+
+    def test_partial_info_fills_only_missing_values(self):
+        values, filled = _fill_from_info(
+            {"sma50": None, "sma200": None}, {"twoHundredDayAverage": 200.0}, self.FIELDS
+        )
+        assert values == {"sma50": None, "sma200": 200.0}
+        assert filled is True
+
+    def test_bar_value_is_kept(self):
+        values, filled = _fill_from_info(
+            {"sma50": 150.0, "sma200": None},
+            {"fiftyDayAverage": 999.0, "twoHundredDayAverage": 200.0},
+            self.FIELDS,
+        )
+        assert values == {"sma50": 150.0, "sma200": 200.0}
+        assert filled is True
+
+    def test_nothing_missing_is_not_filled(self):
+        values, filled = _fill_from_info(
+            {"sma50": 150.0, "sma200": 190.0}, {"fiftyDayAverage": 999.0}, self.FIELDS
+        )
+        assert values == {"sma50": 150.0, "sma200": 190.0}
+        assert filled is False

@@ -17,6 +17,14 @@ _SOON = _TODAY + timedelta(days=60)
 _LATER = _TODAY + timedelta(days=150)
 
 
+LAST_REPORTED_KEYS = [
+    "last_earnings_date",
+    "last_eps_actual",
+    "last_eps_estimate",
+    "last_eps_surprise_pct",
+]
+
+
 def _et_stamp(day, hour):
     return pd.Timestamp(datetime(day.year, day.month, day.day, hour), tz="America/New_York")
 
@@ -46,6 +54,17 @@ class TestGetEarningsInfo:
         result = get_earnings_info("AAPL")
         eps = result["eps_estimate"]
         assert eps is None or isinstance(eps, (int, float))
+
+    def test_earnings_info_last_reported(self):
+        result = get_earnings_info("AAPL")
+        assert result["last_earnings_date"] < str(_TODAY)
+        assert isinstance(result["last_eps_actual"], float)
+
+    def test_earnings_info_etf_has_none(self):
+        result = get_earnings_info("QQQ")
+        for key in LAST_REPORTED_KEYS:
+            assert key in result
+            assert result[key] is None
 
     def test_invalid_symbol(self):
         result = get_earnings_info("INVALIDXYZ123")
@@ -257,3 +276,63 @@ class TestGetEarningsInfoEdgeCases:
         result = get_earnings_info("AAPL")
         assert result["eps_estimate"] is None
         assert result["timing"] == "AMC"  # 16:00 = after market close
+
+    @patch(f"{MODULE}.yf.Ticker")
+    def test_last_reported_skips_future_and_unreported_rows(self, mock_ticker):
+        mock_instance = MagicMock()
+        mock_instance.info = {"regularMarketPrice": 150.0}
+        df = pd.DataFrame(
+            {
+                "EPS Estimate": [2.0, 1.5, 1.25, 1.0],
+                "Reported EPS": [None, None, 1.0, 1.1],
+                "Surprise(%)": [None, None, None, 10.0],
+            },
+            index=pd.DatetimeIndex(
+                [
+                    _et_stamp(_LATER, 16),
+                    _et_stamp(_SOON, 16),
+                    _et_stamp(_PAST, 16),
+                    _et_stamp(_PAST - timedelta(days=90), 16),
+                ]
+            ),
+        )
+        mock_instance.earnings_dates = df
+        mock_ticker.return_value = mock_instance
+
+        result = get_earnings_info("AAPL")
+        assert result["last_earnings_date"] == str(_PAST)
+        assert result["last_eps_actual"] == 1.0
+        assert result["last_eps_estimate"] == 1.25
+        assert result["last_eps_surprise_pct"] == -20.0
+
+    @patch(f"{MODULE}.yf.Ticker")
+    def test_last_reported_uses_yahoo_surprise_when_present(self, mock_ticker):
+        mock_instance = MagicMock()
+        mock_instance.info = {"regularMarketPrice": 150.0}
+        df = pd.DataFrame(
+            {"EPS Estimate": [1.5], "Reported EPS": [1.6], "Surprise(%)": [6.67]},
+            index=pd.DatetimeIndex([_et_stamp(_PAST, 16)]),
+        )
+        mock_instance.earnings_dates = df
+        mock_ticker.return_value = mock_instance
+
+        assert get_earnings_info("AAPL")["last_eps_surprise_pct"] == 6.67
+
+    @patch(f"{MODULE}.yf.Ticker")
+    def test_last_reported_keys_present_without_earnings_dates(self, mock_ticker):
+        mock_instance = MagicMock()
+        mock_instance.info = {"regularMarketPrice": 150.0}
+        mock_instance.earnings_dates = None
+        mock_ticker.return_value = mock_instance
+
+        result = get_earnings_info("AAPL")
+        assert all(result[key] is None for key in LAST_REPORTED_KEYS)
+
+    @patch(f"{MODULE}.yf.Ticker")
+    def test_last_reported_keys_present_for_invalid_symbol(self, mock_ticker):
+        mock_instance = MagicMock()
+        mock_instance.info = {}
+        mock_ticker.return_value = mock_instance
+
+        result = get_earnings_info("ZZZZ")
+        assert all(result[key] is None for key in LAST_REPORTED_KEYS)

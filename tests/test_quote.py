@@ -20,6 +20,12 @@ class TestGetQuote:
         assert isinstance(result["price"], (int, float))
         assert result["price"] > 0
 
+    def test_quote_has_sma_fields(self):
+        result = get_quote("AAPL")
+        for key in ("sma50", "sma200"):
+            assert isinstance(result[key], float)
+            assert result[key] > 0
+
     def test_expected_fields(self):
         result = get_quote("MSFT")
         expected = [
