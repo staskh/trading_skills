@@ -44,6 +44,20 @@ def ema_crossovers(fast: pd.Series, slow: pd.Series) -> list[dict]:
     ]
 
 
+def sma_lines(close: pd.Series, lengths, in_window) -> dict[int, pd.Series]:
+    """SMA series (restricted to `in_window`) per length; uncomputable lengths are left out.
+
+    pandas_ta returns None when the series is shorter than the length, and a line that is NaN
+    across the whole window has nothing to draw.
+    """
+    lines = {}
+    for n in lengths:
+        line = ta.sma(close, length=n)
+        if line is not None and line[in_window].notna().any():
+            lines[n] = line[in_window]
+    return lines
+
+
 def _markers(bars: pd.DataFrame, crosses: list[dict], kind: str) -> pd.Series:
     """Marker y-values for one crossover type: under the low (golden), over the high (death)."""
     marks = pd.Series(float("nan"), index=bars.index)
@@ -100,8 +114,7 @@ def render_chart(
     bars = history.loc[in_window, ["Open", "High", "Low", "Close", "Volume"]]
     ema_fast, ema_slow, rsi = ema_fast[in_window], ema_slow[in_window], rsi[in_window]
     crosses = ema_crossovers(ema_fast, ema_slow)
-    sma_lines = {n: ta.sma(close, length=n)[in_window] for n in sma}
-    sma_lines = {n: line for n, line in sma_lines.items() if line.notna().any()}
+    sma_by_length = sma_lines(close, sma, in_window)
 
     if output is None:
         stamp = generated_at_str().replace(" ET", "").replace(":", "").replace(" ", "_")
@@ -125,12 +138,12 @@ def render_chart(
                 mpf.make_addplot(marks, type="scatter", marker=marker, markersize=120, color=color)
             )
 
-    for n, color in zip(sma_lines, SMA_COLORS):
-        plots.append(mpf.make_addplot(sma_lines[n], color=color, width=1.2, linestyle="--"))
+    for n, color in zip(sma_by_length, SMA_COLORS):
+        plots.append(mpf.make_addplot(sma_by_length[n], color=color, width=1.2, linestyle="--"))
 
     last_close = round(float(bars["Close"].iloc[-1]), 2)
     last_rsi = round(float(rsi.iloc[-1]), 2)
-    sma_legend = "".join(f"  SMA{n} ({c[4:]})" for n, c in zip(sma_lines, SMA_COLORS))
+    sma_legend = "".join(f"  SMA{n} ({c[4:]})" for n, c in zip(sma_by_length, SMA_COLORS))
     title = (
         f"{symbol} daily  close {last_close}  EMA{fast} (blue) / EMA{slow} (orange)"
         f"{sma_legend}  RSI {last_rsi}"
@@ -181,7 +194,7 @@ def render_chart(
         "ema_slow": round(float(ema_slow.iloc[-1]), 2),
         "trend": "bullish" if ema_fast.iloc[-1] > ema_slow.iloc[-1] else "bearish",
         "rsi": last_rsi,
-        "sma": list(sma_lines),
+        "sma": list(sma_by_length),
         "levels": levels,
         "price_ylim": [round(float(low), 2), round(float(high), 2)],
         "crossovers": crosses,
