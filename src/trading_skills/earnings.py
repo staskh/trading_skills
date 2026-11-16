@@ -72,8 +72,9 @@ def _last_reported(earnings_dates, now) -> dict:
     if reported.empty:
         return last
 
-    when = reported.index.max()
-    row = reported.loc[when]
+    reported = reported.sort_index()
+    when = reported.index[-1]
+    row = reported.iloc[-1]
     actual = float(row["Reported EPS"])
     estimate = row.get("EPS Estimate")
     estimate = float(estimate) if pd.notna(estimate) else None

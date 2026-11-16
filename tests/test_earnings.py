@@ -7,7 +7,12 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from trading_skills.earnings import get_earnings_info, get_multiple_earnings, get_next_earnings_date
+from trading_skills.earnings import (
+    _last_reported,
+    get_earnings_info,
+    get_multiple_earnings,
+    get_next_earnings_date,
+)
 
 MODULE = "trading_skills.earnings"
 
@@ -336,3 +341,21 @@ class TestGetEarningsInfoEdgeCases:
 
         result = get_earnings_info("ZZZZ")
         assert all(result[key] is None for key in LAST_REPORTED_KEYS)
+
+
+def test_last_reported_survives_duplicate_timestamps():
+    stamp = _et_stamp(_PAST, 16)
+    df = pd.DataFrame(
+        {
+            "EPS Estimate": [1.25, 1.25, 1.0],
+            "Reported EPS": [1.0, 1.0, 1.1],
+            "Surprise(%)": [None, None, 10.0],
+        },
+        index=pd.DatetimeIndex([stamp, stamp, _et_stamp(_PAST - timedelta(days=90), 16)]),
+    )
+
+    result = _last_reported(df, pd.Timestamp.now(tz="America/New_York"))
+    assert result["last_earnings_date"] == str(_PAST)
+    assert result["last_eps_actual"] == 1.0
+    assert result["last_eps_estimate"] == 1.25
+    assert result["last_eps_surprise_pct"] == -20.0
