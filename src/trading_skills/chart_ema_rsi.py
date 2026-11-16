@@ -18,6 +18,7 @@ from trading_skills.utils import generated_at_str  # noqa: E402
 PERIOD_DAYS = {"1mo": 31, "3mo": 92, "6mo": 183, "1y": 365, "2y": 730}
 # Extra calendar days downloaded before the plotted window so EMAs and RSI are settled.
 WARMUP_DAYS = 120
+SMA_COLORS = ("tab:green", "tab:red", "tab:brown", "tab:gray")
 RSI_OVERBOUGHT = 70
 RSI_OVERSOLD = 30
 # The yahoo style asks for a semibold title, which DejaVu Sans lacks (matplotlib logs a warning).
@@ -124,13 +125,15 @@ def render_chart(
                 mpf.make_addplot(marks, type="scatter", marker=marker, markersize=120, color=color)
             )
 
-    for n, color in zip(sma_lines, ("tab:green", "tab:red", "tab:brown", "tab:gray")):
+    for n, color in zip(sma_lines, SMA_COLORS):
         plots.append(mpf.make_addplot(sma_lines[n], color=color, width=1.2, linestyle="--"))
 
     last_close = round(float(bars["Close"].iloc[-1]), 2)
     last_rsi = round(float(rsi.iloc[-1]), 2)
+    sma_legend = "".join(f"  SMA{n} ({c[4:]})" for n, c in zip(sma_lines, SMA_COLORS))
     title = (
-        f"{symbol} daily  close {last_close}  EMA{fast} (blue) / EMA{slow} (orange)  RSI {last_rsi}"
+        f"{symbol} daily  close {last_close}  EMA{fast} (blue) / EMA{slow} (orange)"
+        f"{sma_legend}  RSI {last_rsi}"
     )
     hlines = dict(hlines=list(levels.values()), colors="gray", linestyle=":", linewidths=0.9)
     fig, axes = mpf.plot(
@@ -146,14 +149,22 @@ def render_chart(
         returnfig=True,
         **(dict(hlines=hlines) if levels else {}),
     )
+    price_ax = axes[0]
+    low, high = price_ax.get_ylim()
+    if levels:
+        pad = (max(high, *levels.values()) - min(low, *levels.values())) * 0.03
+        low, high = min(low, *levels.values()) - pad, max(high, *levels.values()) + pad
+        price_ax.set_ylim(low, high)
     for label, value in levels.items():
-        axes[0].annotate(
+        price_ax.annotate(
             f"{label} {value:g}",
-            xy=(0.01, value),
+            xy=(0.995, value),
             xycoords=("axes fraction", "data"),
-            fontsize=8,
-            color="dimgray",
+            fontsize=9,
+            color="black",
+            ha="right",
             va="bottom",
+            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", alpha=0.9),
         )
     fig.savefig(str(output), dpi=120, pil_kwargs={"quality": 90})
     matplotlib.pyplot.close(fig)
@@ -172,6 +183,7 @@ def render_chart(
         "rsi": last_rsi,
         "sma": list(sma_lines),
         "levels": levels,
+        "price_ylim": [round(float(low), 2), round(float(high), 2)],
         "crossovers": crosses,
         "generated_at": generated_at_str(),
         "data_delay": "15min",

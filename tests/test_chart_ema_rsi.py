@@ -80,3 +80,10 @@ def test_render_chart_defaults_draw_no_sma_or_levels(tmp_path):
     result = render_chart("AAPL", output=tmp_path / "aapl_plain.jpg")
     assert result["sma"] == []
     assert result["levels"] == {}
+
+
+def test_render_chart_extends_price_axis_to_show_far_levels(tmp_path):
+    result = render_chart("AAPL", levels={"S1": 1.0, "R1": 10000.0}, output=tmp_path / "far.jpg")
+    low, high = result["price_ylim"]
+    assert low <= 1.0 and high >= 10000.0
+    assert result["levels"] == {"S1": 1.0, "R1": 10000.0}
