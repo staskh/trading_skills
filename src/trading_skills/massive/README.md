@@ -19,6 +19,7 @@ Detects whale activity in one option contract from its 1-second bars on a single
 - `invested = vwap × volume × 100` per bar.
 - A bar is a whale when its Modified Z-Score (MAD-based) exceeds `sigma_z`, or it averages ≥ $1M per transaction.
 - Flagged bars averaging ≤ $50k per transaction are dropped as retail noise.
+- Thin contracts (fewer than 10 traded bars) skip the Z-Score: any bar averaging > $50k per transaction is a whale.
 
 **Returns:** `pd.DataFrame` sorted by timestamp ascending with columns
 `timestamp`, `ticker`, `type`, `strike`, `expiry`, `close` (bar VWAP), `volume`, `transactions`, `invested`, `break_even`.

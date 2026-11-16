@@ -8,7 +8,7 @@ dependencies: ["trading-skills"]
 
 Scans option chains for a given underlying to identify institutional-sized trades using a two-step approach:
 1. **Crude scan** (Yahoo Finance) — finds contracts with anomalous daily investment vs the rest of the chain.
-2. **Precise drill-down** (Massive API) — fetches per-second bars for each candidate and flags seconds with outlier dollar invested.
+2. **Precise drill-down** (Massive API) — fetches per-second bars for each candidate and flags seconds with outlier dollar invested. Minimum whale order is $50k per transaction; in thin contracts (fewer than 10 traded seconds in the day) any second averaging more than $50k per transaction is a whale.
 
 The scan always covers a two-session window: the latest trading session plus the one before it. During market hours that means today so far plus the full previous day. Past dates are not supported because Yahoo option chains are a live snapshot.
 

@@ -90,6 +90,37 @@ def _modified_z_score(invested: pd.Series, sigma_z: float) -> pd.Series:
     return z_scores > sigma_z
 
 
+# Smallest average order size (dollars per transaction) that counts as a whale.
+MIN_WHALE_ORDER = 50_000
+
+# Below this many traded bars in a day, the Modified Z-Score cannot single out
+# a block, so any bar averaging more than MIN_WHALE_ORDER counts as a whale.
+THIN_CONTRACT_BARS = 10
+
+
+def _whale_mask(bars: pd.DataFrame, sigma_z: float) -> pd.Series:
+    """Boolean mask of whale bars among bars with positive invested.
+
+    bars needs invested and transactions columns.
+    """
+    known_tx = bars["transactions"].notna() & (bars["transactions"] > 0)
+    per_order = (bars["invested"] / bars["transactions"]).where(known_tx, bars["invested"])
+
+    if len(bars) < THIN_CONTRACT_BARS:
+        mask = per_order > MIN_WHALE_ORDER
+    else:
+        # Per-transaction rule: any bar averaging >= $1M per trade is a whale
+        # regardless of the statistical threshold — these are institutional block trades.
+        tx_mask = known_tx & (per_order >= 1_000_000)
+        mask = _modified_z_score(bars["invested"], sigma_z) | tx_mask
+
+    # Drop outliers averaging <= $50k per transaction — statistical detection
+    # may flag high-invested seconds driven by many small retail trades, not
+    # institutional block activity.
+    low_tx = known_tx & (per_order <= MIN_WHALE_ORDER)
+    return mask & ~low_tx
+
+
 def option_whales(
     option_ticker: str,
     trading_date=None,
@@ -104,6 +135,8 @@ def option_whales(
     Detection uses Modified Z-Score (MAD-based) for all sample sizes:
         Mzi = 0.6745 × (xi − median) / MAD
     A bar is a whale when Mzi > sigma_z OR it averages >= $1M per transaction.
+    In thin contracts (fewer than THIN_CONTRACT_BARS traded bars) any bar
+    averaging more than MIN_WHALE_ORDER per transaction is a whale.
 
     Args:
         option_ticker: Option contract ticker (e.g. "O:NVDA260320P00170000").
@@ -177,29 +210,8 @@ def option_whales(
     if df.empty:
         return (_empty, all_bars) if return_all else _empty
 
-    # Per-transaction rule: any bar averaging >= $1M per trade is a whale
-    # regardless of the statistical threshold — these are institutional block trades.
-    tx_mask = (
-        df["transactions"].notna()
-        & (df["transactions"] > 0)
-        & (df["invested"] / df["transactions"] >= 1_000_000)
-    )
-
-    mask = _modified_z_score(df["invested"], sigma_z) | tx_mask
-
-    # Drop outliers averaging <= $50k per transaction — statistical detection
-    # may flag high-invested seconds driven by many small retail trades, not
-    # institutional block activity.
-    low_tx = (
-        mask
-        & df["transactions"].notna()
-        & (df["transactions"] > 0)
-        & (df["invested"] / df["transactions"] <= 50_000)
-    )
-
-    outliers = (df[mask & ~low_tx].sort_values("timestamp", ascending=True).reset_index(drop=True))[
-        _cols
-    ]
+    whales = df[_whale_mask(df, sigma_z)]
+    outliers = whales.sort_values("timestamp", ascending=True).reset_index(drop=True)[_cols]
 
     return (outliers, all_bars) if return_all else outliers
 
