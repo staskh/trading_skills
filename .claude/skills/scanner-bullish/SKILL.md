@@ -100,7 +100,7 @@ uv run python scripts/scan.py AAPL,MSFT,GOOGL --period 6mo
 ## Dependencies
 
 - `pandas`
-- `pandas-ta`
+- `fin-primitives`
 - `yfinance`
 
 

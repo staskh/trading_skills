@@ -89,8 +89,8 @@ uv run python scripts/report.py --account U790497
 
 ## Dependencies
 
+- `fin-primitives`
 - `ib-async`
-- `pandas-ta`
 - `yfinance`
 
 

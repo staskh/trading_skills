@@ -1,12 +1,12 @@
-# ABOUTME: Computes technical indicators using pandas-ta.
+# ABOUTME: Computes technical indicators (via trading_skills.ta, backed by fin-primitives).
 # ABOUTME: Supports multi-symbol analysis and earnings data.
 
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import pandas_ta as ta
 import yfinance as yf
 
+from trading_skills import ta
 from trading_skills.earnings import get_next_earnings_date
 from trading_skills.pivots import completed_bars, is_partial_session, pivot_status
 from trading_skills.utils import annualized_volatility
@@ -52,10 +52,10 @@ def get_earnings_data(symbol: str) -> dict:
 
 
 def macd_columns(macd_df: pd.DataFrame) -> tuple[str, str, str]:
-    """Return the (line, histogram, signal) column labels of a pandas-ta macd() frame.
+    """Return the (line, histogram, signal) column labels of a ta.macd() frame.
 
-    pandas-ta names them MACD_, MACDh_, MACDs_ and orders them (line, histogram,
-    signal). Selecting by name prefix avoids depending on positional order.
+    The columns are named MACD_, MACDh_, MACDs_ (the pandas-ta layout) and ordered
+    (line, histogram, signal). Selecting by name prefix avoids depending on positional order.
     """
     line = next(c for c in macd_df.columns if c.startswith("MACD_"))
     hist = next(c for c in macd_df.columns if c.startswith("MACDh_"))
@@ -64,9 +64,9 @@ def macd_columns(macd_df: pd.DataFrame) -> tuple[str, str, str]:
 
 
 def adx_columns(adx_df: pd.DataFrame) -> tuple[str, str, str]:
-    """Return the (adx, +di, -di) column labels of a pandas-ta adx() frame.
+    """Return the (adx, +di, -di) column labels of an adx() frame.
 
-    pandas-ta names them ADX_, ADXR_, DMP_, DMN_ and places ADXR between the
+    ta.adx() names them ADX_, DMP_, DMN_; pandas-ta also adds ADXR_ between the
     ADX and DMP columns. Selecting by name avoids depending on positional
     order, and the ADXR_ guard keeps the ADX_ prefix match from claiming it.
     """
@@ -77,7 +77,7 @@ def adx_columns(adx_df: pd.DataFrame) -> tuple[str, str, str]:
 
 
 def detect_macd_crossover(macd_df: pd.DataFrame) -> dict | None:
-    """Find the most recent MACD crossover in a pandas-ta macd() DataFrame.
+    """Find the most recent MACD crossover in a ta.macd() DataFrame.
 
     Scans the histogram column (MACD line minus signal) for sign changes.
     Returns {"direction": "up"|"down", "days_ago": int} or None if no
