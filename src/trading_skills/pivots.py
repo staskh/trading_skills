@@ -1,7 +1,7 @@
 # ABOUTME: Daily floor-trader pivot levels (P, R1/R2, S1/S2) over recent sessions.
 # ABOUTME: Classifies each symbol as near support, chasing a breakout, or neutral.
 
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -141,6 +141,17 @@ def pivot_status(
     }
 
 
+def is_partial_session(
+    bars: pd.DataFrame, trading_now: bool | None = None, today: date | None = None
+) -> bool:
+    """True when the last bar is today's session still in progress."""
+    if trading_now is None:
+        trading_now = is_trading_now()
+    if today is None:
+        today = datetime.now(NY).date()
+    return trading_now and bars.index[-1].date() == today
+
+
 def get_pivot_levels(symbols: list[str], sessions: int = 5, tolerance_pct: float = 1.5) -> dict:
     """Pivot levels for the last `sessions` completed sessions and an entry status per symbol.
 
@@ -149,9 +160,6 @@ def get_pivot_levels(symbols: list[str], sessions: int = 5, tolerance_pct: float
     """
     symbols = [s.upper() for s in symbols]
     data = yf.download(symbols, period="3mo", group_by="ticker", auto_adjust=False, progress=False)
-    today = datetime.now(NY).date()
-    live = is_trading_now()
-
     results = []
     for symbol in symbols:
         try:
@@ -166,7 +174,7 @@ def get_pivot_levels(symbols: list[str], sessions: int = 5, tolerance_pct: float
             bars,
             sessions,
             tolerance_pct,
-            drop_today_partial=live and bars.index[-1].date() == today,
+            drop_today_partial=is_partial_session(bars),
         )
         results.append({"symbol": symbol, **status})
 

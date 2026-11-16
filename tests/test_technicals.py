@@ -7,6 +7,7 @@ import pandas as pd
 import pandas_ta as ta
 import pytest
 
+from trading_skills.pivots import is_partial_session
 from trading_skills.technicals import (
     _fill_from_info,
     adx_columns,
@@ -641,3 +642,35 @@ class TestFillFromInfo:
         )
         assert values == {"sma50": 150.0, "sma200": 190.0}
         assert filled is False
+
+
+class TestIsPartialSession:
+    TODAY = pd.Timestamp("2026-11-16").date()
+
+    def bars(self, last: str) -> pd.DataFrame:
+        return pd.DataFrame({"Close": [1.0, 2.0]}, index=pd.to_datetime(["2026-11-12", last]))
+
+    def test_last_bar_today_while_trading_is_partial(self):
+        assert is_partial_session(self.bars("2026-11-16"), True, self.TODAY) is True
+
+    def test_not_trading_keeps_bar(self):
+        assert is_partial_session(self.bars("2026-11-16"), False, self.TODAY) is False
+
+    def test_last_bar_not_today_keeps_bar(self):
+        assert is_partial_session(self.bars("2026-11-13"), True, self.TODAY) is False
+
+
+class TestCompletedSessions:
+    def test_as_of_matches_last_structure_bar(self):
+        r = compute_indicators(
+            "AAPL", period="2y", indicators=["sma200", "structure"], completed_sessions=True
+        )
+        assert r["as_of"] <= pd.Timestamp.now().strftime("%Y-%m-%d")
+        assert r["indicators"]["structure"]["recent_bars"][-1]["date"] == r["as_of"]
+
+    def test_default_has_no_as_of(self):
+        assert "as_of" not in compute_indicators("AAPL", indicators=["rsi"])
+
+    def test_multi_symbol_passes_through(self):
+        r = compute_multi_symbol(["AAPL"], indicators=["rsi"], completed_sessions=True)
+        assert "as_of" in r["results"][0]
