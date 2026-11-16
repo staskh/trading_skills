@@ -141,6 +141,17 @@ def compute_raw_indicators(df: pd.DataFrame) -> dict:
         "adx": None,
         "dmp": None,
         "dmn": None,
+        "sma200": None,
+        "sma_cross": None,
+        "high_52w": None,
+        "low_52w": None,
+        "low_52w_prior": None,
+        "closes_below_sma50": None,
+        "lower_highs": None,
+        "lower_lows": None,
+        "rsi_recent": None,
+        "recent_bars": None,
+        "return_3m_pct": None,
     }
 
     if df.empty or "Close" not in df.columns:
@@ -215,6 +226,50 @@ def compute_raw_indicators(df: pd.DataFrame) -> dict:
                 result["dmp"] = float(dmp_val)
             if pd.notna(dmn_val):
                 result["dmn"] = float(dmn_val)
+
+    # Trend structure
+    n = len(close)
+    if n >= 200:
+        sma200_series = ta.sma(close, length=200)
+        result["sma200"] = float(sma200_series.iloc[-1])
+        result["sma_cross"] = detect_crossover(ta.sma(close, length=50), sma200_series)
+
+    if n >= 64:
+        result["return_3m_pct"] = float((close.iloc[-1] / close.iloc[-64] - 1) * 100)
+
+    if n >= 50:
+        below = close.iloc[-5:] < ta.sma(close, length=50).iloc[-5:]
+        result["closes_below_sma50"] = int(below.sum())
+
+    if rsi is not None and len(rsi.dropna()) >= 5:
+        result["rsi_recent"] = [float(v) for v in rsi.iloc[-5:]]
+
+    if all(c in df.columns for c in ("Open", "High", "Low")) and n >= 5:
+        result["recent_bars"] = [
+            {
+                "date": pd.Timestamp(idx).strftime("%Y-%m-%d"),
+                "open": float(row["Open"]),
+                "high": float(row["High"]),
+                "low": float(row["Low"]),
+                "close": float(row["Close"]),
+            }
+            for idx, row in df.iloc[-5:].iterrows()
+        ]
+
+    if "High" in df.columns and "Low" in df.columns:
+        high, low = df["High"], df["Low"]
+        if n >= 60:
+            old, mid, new = (slice(-60, -40), slice(-40, -20), slice(-20, None))
+            result["lower_highs"] = bool(
+                high.iloc[old].max() > high.iloc[mid].max() > high.iloc[new].max()
+            )
+            result["lower_lows"] = bool(
+                low.iloc[old].min() > low.iloc[mid].min() > low.iloc[new].min()
+            )
+        if n >= 252:
+            result["high_52w"] = float(high.iloc[-252:].max())
+            result["low_52w"] = float(low.iloc[-252:].min())
+            result["low_52w_prior"] = float(low.iloc[-254:-2].min())
 
     return result
 
