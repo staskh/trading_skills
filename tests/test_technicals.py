@@ -4,9 +4,9 @@
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
 import pytest
 
+from trading_skills import ta
 from trading_skills.pivots import completed_bars, is_partial_session
 from trading_skills.technicals import (
     _fill_from_info,

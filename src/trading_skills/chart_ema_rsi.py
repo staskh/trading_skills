@@ -10,9 +10,9 @@ matplotlib.use("Agg")
 
 import mplfinance as mpf  # noqa: E402
 import pandas as pd  # noqa: E402
-import pandas_ta as ta  # noqa: E402
 import yfinance as yf  # noqa: E402
 
+from trading_skills import ta  # noqa: E402
 from trading_skills.utils import generated_at_str  # noqa: E402
 
 PERIOD_DAYS = {"1mo": 31, "3mo": 92, "6mo": 183, "1y": 365, "2y": 730}

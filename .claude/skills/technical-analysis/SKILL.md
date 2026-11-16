@@ -6,7 +6,7 @@ dependencies: ["trading-skills"]
 
 # Technical Analysis
 
-Compute technical indicators using pandas-ta. Supports multi-symbol analysis and earnings data.
+Compute technical indicators (fin-primitives, TA-Lib-compatible values). Supports multi-symbol analysis and earnings data.
 
 ## Instructions
 
@@ -117,7 +117,7 @@ uv run python scripts/correlation.py SPY,GLD,TLT
 
 - `numpy`
 - `pandas`
-- `pandas-ta`
+- `fin-primitives`
 - `yfinance`
 
 
