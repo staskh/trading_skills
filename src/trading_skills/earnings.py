@@ -55,9 +55,46 @@ def get_next_earnings_date(symbol: str) -> str | None:
     return None
 
 
+def _last_reported(earnings_dates, now) -> dict:
+    """Most recent past row with a reported EPS: date, actual, estimate, surprise %."""
+    last = {
+        "last_earnings_date": None,
+        "last_eps_actual": None,
+        "last_eps_estimate": None,
+        "last_eps_surprise_pct": None,
+    }
+    if earnings_dates is None or earnings_dates.empty or "Reported EPS" not in earnings_dates:
+        return last
+
+    reported = earnings_dates[
+        (earnings_dates.index <= now) & earnings_dates["Reported EPS"].notna()
+    ]
+    if reported.empty:
+        return last
+
+    when = reported.index.max()
+    row = reported.loc[when]
+    actual = float(row["Reported EPS"])
+    estimate = row.get("EPS Estimate")
+    estimate = float(estimate) if pd.notna(estimate) else None
+    surprise = row.get("Surprise(%)")
+    if pd.notna(surprise):
+        surprise = float(surprise)
+    elif estimate:
+        surprise = (actual / estimate - 1) * 100
+    else:
+        surprise = None
+
+    last["last_earnings_date"] = str(when.tz_convert("America/New_York").date())
+    last["last_eps_actual"] = actual
+    last["last_eps_estimate"] = estimate
+    last["last_eps_surprise_pct"] = round(surprise, 2) if surprise is not None else None
+    return last
+
+
 def get_earnings_info(symbol: str) -> dict:
     """Get upcoming earnings info for a single symbol."""
-    result = {"symbol": symbol.upper()}
+    result = {"symbol": symbol.upper(), **_last_reported(None, None)}
 
     try:
         ticker = yf.Ticker(symbol)
@@ -73,6 +110,8 @@ def get_earnings_info(symbol: str) -> dict:
 
         # Get earnings dates (includes future and past)
         earnings_dates = ticker.earnings_dates
+        now = pd.Timestamp.now(tz="America/New_York")
+        result.update(_last_reported(earnings_dates, now))
         if earnings_dates is None or earnings_dates.empty:
             result["earnings_date"] = None
             result["timing"] = None
@@ -80,7 +119,6 @@ def get_earnings_info(symbol: str) -> dict:
             return result
 
         # Find next upcoming earnings (first date in the future or most recent)
-        now = pd.Timestamp.now(tz="America/New_York")
 
         # earnings_dates index is datetime, filter for future dates
         future_dates = earnings_dates[earnings_dates.index >= now]

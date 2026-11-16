@@ -65,4 +65,6 @@ def get_quote(symbol: str) -> dict:
         "forward_pe": info.get("forwardPE"),
         "dividend_yield": info.get("dividendYield"),
         "beta": info.get("beta"),
+        "sma50": info.get("fiftyDayAverage"),
+        "sma200": info.get("twoHundredDayAverage"),
     }
