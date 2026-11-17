@@ -59,7 +59,7 @@ All generated notebooks, datasets, and reports **must** be saved to `sandbox/`. 
 
 **Required fields in all script JSON output:**
 - `generated_at` — NY timezone timestamp, format: `"YYYY-MM-DD HH:MM ET"`
-- `data_delay` — `"real-time"`, `"15min"` (or similar X min delay), or `"stalled - using yesterday's data"`
+- `data_delay` — `"real-time"`, `"15min"` (or similar X min delay), `"stalled - using yesterday's data"`, or `"n/a"` when the script reads no market data (e.g. the markdown-to-PDF converter)
 
 **Naming Convention**: All generated reports must include a timestamp in the filename:
 ```

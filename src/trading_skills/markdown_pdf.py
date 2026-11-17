@@ -710,5 +710,5 @@ def convert(input_path: str, output_path: str | None = None) -> dict:
         "input": str(input_file.resolve()),
         "output": str(Path(out).resolve()),
         "generated_at": _generated_at(),
-        "data_delay": "real-time",
+        "data_delay": "n/a",
     }
