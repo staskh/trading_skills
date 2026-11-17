@@ -44,7 +44,7 @@ The script returns JSON with:
 - `output` — resolved absolute path of the generated PDF
 - `error` — error message if `success` is `false`
 - `generated_at` — NY timezone timestamp
-- `data_delay` — always `"real-time"`
+- `data_delay` — always `"n/a"` (the converter reads no market data; the report states its own delay)
 
 After conversion, tell the user the output PDF path.
 

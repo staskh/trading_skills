@@ -71,7 +71,7 @@ class TestConvert:
         md.write_text("# Test")
         result = convert(str(md))
         assert "generated_at" in result
-        assert result["data_delay"] == "real-time"
+        assert result["data_delay"] == "n/a"
 
     def test_markdown_table_renders(self, tmp_path):
         md = tmp_path / "table.md"
