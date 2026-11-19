@@ -17,6 +17,8 @@ from trading_skills.technicals import (
     detect_crossover,
     detect_macd_crossover,
     get_earnings_data,
+    interval_minutes,
+    intraday_bar_warnings,
 )
 
 
@@ -698,3 +700,45 @@ class TestCompletedBars:
     def test_fewer_than_three_bars_unchanged(self):
         df = self.bars("2026-11-13", "2026-11-16")
         assert len(completed_bars(df, True, self.TODAY)) == 2
+
+
+class TestIntradayBarWarnings:
+    """Tests for intraday_bar_warnings — the same-day/next-day monitoring gate.
+
+    intraday_technicals.py surfaces these instead of a bare null-check, since
+    compute_raw_indicators returns a number even from too few bars.
+    """
+
+    def test_too_few_for_rsi(self):
+        warnings = intraday_bar_warnings(5)
+        assert len(warnings) == 1
+        assert "RSI/ADX" in warnings[0]
+
+    def test_enough_for_rsi_not_macd(self):
+        warnings = intraday_bar_warnings(20)
+        assert len(warnings) == 1
+        assert "MACD" in warnings[0]
+
+    def test_enough_for_everything(self):
+        assert intraday_bar_warnings(50) == []
+
+    def test_boundaries(self):
+        assert intraday_bar_warnings(14) != []
+        assert intraday_bar_warnings(15) != []
+        assert intraday_bar_warnings(34) != []
+        assert intraday_bar_warnings(35) == []
+
+
+class TestIntervalMinutes:
+    def test_minute_intervals(self):
+        assert interval_minutes("1m") == 1
+        assert interval_minutes("5m") == 5
+        assert interval_minutes("60m") == 60
+
+    def test_hour_interval(self):
+        assert interval_minutes("1h") == 60
+
+    def test_daily_and_unknown_return_none(self):
+        assert interval_minutes("1d") is None
+        assert interval_minutes("1wk") is None
+        assert interval_minutes("abc") is None
